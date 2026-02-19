@@ -18,6 +18,26 @@ type UseChatTurnsOptions = {
 };
 
 export function useChatTurns(options: UseChatTurnsOptions) {
+  function summarizeAssistantToolHistory(
+    toolHistory: ChatMessage["toolCall"],
+  ): { count: number; lastToolName: string } {
+    if (!Array.isArray(toolHistory) || toolHistory.length === 0) {
+      return { count: 0, lastToolName: "" };
+    }
+    let count = 0;
+    let lastToolName = "";
+    for (const event of toolHistory) {
+      if (!event || event.role !== "assistant" || !Array.isArray(event.tool_calls)) continue;
+      for (const call of event.tool_calls) {
+        const name = String(call?.function?.name || "").trim();
+        if (!name) continue;
+        count += 1;
+        lastToolName = name;
+      }
+    }
+    return { count, lastToolName };
+  }
+
   const allTurns = computed<ChatTurn[]>(() => {
     const startedAt = options.perfNow();
     const msgs = options.allMessages.value;
@@ -31,13 +51,18 @@ export function useChatTurns(options: UseChatTurnsOptions) {
         let assistantText = "";
         let assistantReasoningStandard = "";
         let assistantReasoningInline = "";
+        let assistantToolCallCount = 0;
+        let assistantLastToolName = "";
         if (i + 1 < msgs.length && msgs[i + 1].role === "assistant") {
           const assistantMsg = msgs[i + 1];
           const parsed = parseAssistantStoredText(renderMessage(assistantMsg));
           const providerMeta = assistantMsg.providerMeta || {};
+          const toolSummary = summarizeAssistantToolHistory(assistantMsg.toolCall);
           assistantText = parsed.assistantText;
           assistantReasoningStandard = parsed.reasoningStandard || String(providerMeta.reasoningStandard || "");
           assistantReasoningInline = parsed.reasoningInline || String(providerMeta.reasoningInline || "");
+          assistantToolCallCount = toolSummary.count;
+          assistantLastToolName = toolSummary.lastToolName;
           i++;
         }
         if (
@@ -56,6 +81,8 @@ export function useChatTurns(options: UseChatTurnsOptions) {
             assistantText,
             assistantReasoningStandard,
             assistantReasoningInline,
+            assistantToolCallCount,
+            assistantLastToolName,
           });
         }
       }

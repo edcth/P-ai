@@ -58,7 +58,17 @@ export function useChatFlow(options: UseChatFlowOptions) {
   let streamPendingText = "";
   let streamDrainDeadline = 0;
   let streamFlushTimer: ReturnType<typeof setInterval> | null = null;
+  let streamToolCallCount = 0;
+  let streamLastToolName = "";
   const reasoningStartedAtMs = ref(0);
+
+  function summarizeToolCallsText(): string {
+    if (streamToolCallCount <= 0) return "";
+    const extraCount = Math.max(0, streamToolCallCount - 1);
+    return extraCount > 0
+      ? `调用 ${streamLastToolName || "-"} (+${extraCount})`
+      : `调用 ${streamLastToolName || "-"}`;
+  }
 
   function readDeltaMessage(message: unknown): string {
     if (typeof message === "string") return message;
@@ -133,6 +143,8 @@ export function useChatFlow(options: UseChatFlowOptions) {
     options.toolStatusText.value = "";
     options.toolStatusState.value = "";
     options.chatErrorText.value = "";
+    streamToolCallCount = 0;
+    streamLastToolName = "";
 
     const sentImages = [...options.clipboardImages.value];
     options.chatInput.value = "";
@@ -147,6 +159,11 @@ export function useChatFlow(options: UseChatFlowOptions) {
       if (gen !== chatGeneration) return;
       const parsed = readAssistantEvent(event);
       if (parsed.kind === "tool_status") {
+        const toolName = String(parsed.toolName || "").trim();
+        if (parsed.toolStatus === "running" && toolName) {
+          streamToolCallCount += 1;
+          streamLastToolName = toolName;
+        }
         options.toolStatusText.value = parsed.message || "";
         options.toolStatusState.value = parsed.toolStatus === "running" || parsed.toolStatus === "done" || parsed.toolStatus === "failed"
           ? parsed.toolStatus
@@ -191,7 +208,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
       options.chatErrorText.value = "";
       if ((options.toolStatusState.value as string) === "running") {
         options.toolStatusState.value = "done";
-        options.toolStatusText.value = options.t("status.toolCallDone");
+        options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallDone");
       }
       const currentSession = options.getSession();
       const sameSession = !!currentSession
@@ -209,7 +226,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
       options.chatErrorText.value = options.formatRequestFailed(error);
       if (!options.toolStatusText.value) {
         options.toolStatusState.value = "failed";
-        options.toolStatusText.value = options.t("status.toolCallFailed");
+        options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallFailed");
       }
       const currentSession = options.getSession();
       const sameSession = !!currentSession
@@ -239,7 +256,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
     reasoningStartedAtMs.value = 0;
     if (options.toolStatusState.value === "running") {
       options.toolStatusState.value = "failed";
-      options.toolStatusText.value = options.t("status.interrupted");
+      options.toolStatusText.value = summarizeToolCallsText() || options.t("status.interrupted");
     } else {
       options.toolStatusState.value = "";
       options.toolStatusText.value = "";

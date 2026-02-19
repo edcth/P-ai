@@ -135,6 +135,10 @@
                 <RotateCcw class="h-3.5 w-3.5" />
               </button>
             </div>
+            <div v-if="turn.assistantToolCallCount > 0" class="mt-1 text-[11px] opacity-80 flex items-center gap-1">
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-success"></span>
+              <span>{{ toolSummaryText(turn.assistantLastToolName, turn.assistantToolCallCount) }}</span>
+            </div>
           </div>
         </div>
       </template>
@@ -433,6 +437,13 @@ const renderedAssistantHtml = computed(() => renderMarkdown(latestAssistantParts
 
 function resolvedTurnInlineReasoning(turn: ChatTurn): string {
   return splitThinkText(turn.assistantText).inline || turn.assistantReasoningInline || "";
+}
+
+function toolSummaryText(lastToolName: string, count: number): string {
+  const extraCount = Math.max(0, Number(count || 0) - 1);
+  return extraCount > 0
+    ? `调用 ${String(lastToolName || "-")} (+${extraCount})`
+    : `调用 ${String(lastToolName || "-")}`;
 }
 
 async function copyAssistantTurn(turn: ChatTurn) {
