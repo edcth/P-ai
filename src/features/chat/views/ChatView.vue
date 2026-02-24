@@ -86,7 +86,7 @@
               class="collapse bg-base-200 min-w-0 max-w-[min(90vw,40rem)]"
             >
               <summary class="collapse-title py-2 px-3 min-h-0 text-xs italic flex items-center">
-                <span class="block min-w-0 flex-1 whitespace-normal break-words">
+                <span class="block min-w-0 flex-1 whitespace-normal wrap-break-word">
                   {{ firstLinePreview(turn.assistantReasoningStandard) || "..." }}
                 </span>
               </summary>
@@ -101,11 +101,11 @@
               class="collapse border border-base-content/10 bg-base-200/50 mb-2"
             >
               <summary class="collapse-title py-1.5 px-2.5 min-h-0 text-[11px] italic flex items-center text-base-content/60 cursor-pointer">
-                <span class="block min-w-0 flex-1 whitespace-normal break-words">
+                <span class="block min-w-0 flex-1 whitespace-normal wrap-break-word">
                   {{ firstLinePreview(resolvedTurnInlineReasoning(turn)) || "..." }}
                 </span>
               </summary>
-              <div class="collapse-content max-w-full px-2.5 pb-1.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-base-content/60" style="overflow-wrap: anywhere;">
+              <div class="collapse-content max-w-full px-2.5 pb-1.5 whitespace-pre-wrap wrap-break-word text-[11px] leading-relaxed text-base-content/60" style="overflow-wrap: anywhere;">
                 {{ resolvedTurnInlineReasoning(turn) }}
               </div>
             </details>
@@ -186,7 +186,7 @@
               class="collapse bg-base-200 min-w-0 max-w-[min(90vw,40rem)]"
             >
               <summary class="collapse-title py-2 px-3 min-h-0 text-xs italic flex items-center gap-1">
-                <span class="block min-w-0 flex-1 whitespace-normal break-words">{{ firstLinePreview(latestReasoningStandardText) || "..." }}</span>
+                <span class="block min-w-0 flex-1 whitespace-normal wrap-break-word">{{ firstLinePreview(latestReasoningStandardText) || "..." }}</span>
                 <span class="loading loading-dots loading-xs opacity-60"></span>
               </summary>
               <div class="collapse-content px-3 pb-2 whitespace-pre-wrap text-xs leading-relaxed text-base-content/80">
@@ -200,17 +200,17 @@
               class="collapse border border-base-content/10 bg-base-200/50 mb-2"
             >
               <summary class="collapse-title py-1.5 px-2.5 min-h-0 text-[11px] italic flex items-center gap-1 text-base-content/60 cursor-pointer">
-                <span class="block min-w-0 flex-1 whitespace-normal break-words">{{ firstLinePreview(latestInlineReasoningText) || "..." }}</span>
+                <span class="block min-w-0 flex-1 whitespace-normal wrap-break-word">{{ firstLinePreview(latestInlineReasoningText) || "..." }}</span>
                 <span class="loading loading-dots loading-xs opacity-60"></span>
               </summary>
-              <div class="collapse-content max-w-full px-2.5 pb-1.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-base-content/60" style="overflow-wrap: anywhere;">
+              <div class="collapse-content max-w-full px-2.5 pb-1.5 whitespace-pre-wrap wrap-break-word text-[11px] leading-relaxed text-base-content/60" style="overflow-wrap: anywhere;">
                 {{ latestInlineReasoningText }}
               </div>
             </details>
             <div v-if="latestAssistantText" v-html="renderedAssistantHtml" @click="handleAssistantLinkClick"></div>
             <div class="mt-1">
               <span v-if="!latestAssistantText" class="loading loading-dots loading-sm"></span>
-              <span v-else class="loading loading-spinner loading-xs opacity-60"></span>
+              <span v-else-if="chatting" class="inline-block w-1.5 h-4 bg-base-content animate-pulse"></span>
             </div>
             <div v-if="toolStatusText" class="mt-1 text-[11px] opacity-80 flex items-center gap-1">
               <span v-if="toolStatusState === 'running'" class="loading loading-spinner loading-xs"></span>
@@ -298,33 +298,34 @@
         <span>语音转写中...</span>
       </div>
       <div class="flex flex-row items-center gap-2">
-        <button
-          class="btn btn-xs btn-circle shrink-0"
-          :class="recording ? 'btn-error' : 'bg-base-100'"
-          :disabled="!canRecord || chatting || frozen"
-          :title="recording ? t('chat.recording', { seconds: Math.max(1, Math.round(recordingMs / 1000)) }) : t('chat.holdRecord', { hotkey: recordHotkey })"
-          @mousedown.prevent="$emit('startRecording')"
-          @mouseup.prevent="$emit('stopRecording')"
-          @mouseleave.prevent="recording && $emit('stopRecording')"
-          @touchstart.prevent="$emit('startRecording')"
-          @touchend.prevent="$emit('stopRecording')"
-        >
-          <Mic class="h-3.5 w-3.5" />
-        </button>
         <textarea
           ref="chatInputRef"
           v-model="localChatInput"
-          class="flex-1 textarea textarea-xs resize-none overflow-y-hidden chat-input-no-focus min-h-[50px]"
+          class="flex-1 textarea textarea-xs resize-none overflow-y-hidden chat-input-no-focus min-h-12.5"
           rows="1"
           :disabled="frozen"
           :placeholder="chatInputPlaceholder"
           @input="scheduleResizeChatInput"
           @keydown.enter.exact.prevent="!frozen && $emit('sendChat')"
         ></textarea>
-        <button class="btn btn-xs btn-circle shrink-0" :class="{ 'btn-error': chatting, 'btn-primary': !chatting }" :disabled="frozen" @click="chatting ? $emit('stopChat') : $emit('sendChat')">
-          <Square v-if="chatting" class="h-3 w-3 fill-current" />
-          <ArrowUp v-else class="h-3.5 w-3.5" />
-        </button>
+        <div class="flex flex-col gap-2 mt-auto">
+          <button
+            class="btn btn-xs btn-circle shrink-0"
+            :class="recording ? 'btn-error' : 'bg-base-100'"
+            :disabled="!canRecord || chatting || frozen"
+            :title="recording ? t('chat.recording', { seconds: Math.max(1, Math.round(recordingMs / 1000)) }) : t('chat.holdRecord', { hotkey: recordHotkey })"
+            @mousedown.prevent="$emit('startRecording')"
+            @mouseup.prevent="$emit('stopRecording')"
+            @mouseleave.prevent="recording && $emit('stopRecording')"
+            @touchstart.prevent="$emit('startRecording')"
+            @touchend.prevent="$emit('stopRecording')"
+          >
+            <Mic class="h-3.5 w-3.5" />
+          </button>
+          <button class="btn btn-xs btn-circle shrink-0" :class="{ 'btn-error': chatting, 'btn-primary': !chatting }" :disabled="frozen" @click="chatting ? $emit('stopChat') : $emit('sendChat')">
+                    <Square v-if="chatting" class="h-3 w-3 fill-current" />
+                    <Send v-else class="h-3.5 w-3.5" />
+                  </button>        </div>
       </div>
     </div>
   </div>
@@ -333,7 +334,7 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ArrowDown, ArrowUp, Copy, FileText, Image as ImageIcon, Lock, LockOpen, Mic, Pause, Play, RotateCcw, Square, Undo2, X } from "lucide-vue-next";
+import { ArrowDown, ArrowUp, Copy, FileText, Image as ImageIcon, Lock, LockOpen, Mic, Pause, Play, RotateCcw, Send, Square, Undo2, X } from "lucide-vue-next";
 import MarkdownIt from "markdown-it";
 import DOMPurify from "dompurify";
 import twemoji from "twemoji";
@@ -745,7 +746,7 @@ watch(
 .assistant-markdown :deep(p) {
   margin: 0;
   overflow-wrap: anywhere;
-  word-break: break-word;
+  word-break: wrap-break-word;
 }
 
 .assistant-markdown :deep(ul),
@@ -759,7 +760,7 @@ watch(
 .assistant-markdown :deep(li),
 .assistant-markdown :deep(a) {
   overflow-wrap: anywhere;
-  word-break: break-word;
+  word-break: wrap-break-word;
 }
 
 .assistant-markdown :deep(code) {
@@ -810,4 +811,3 @@ watch(
 }
 
 </style>
-

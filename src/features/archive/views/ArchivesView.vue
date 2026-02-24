@@ -74,19 +74,19 @@
           class="border border-primary/20 rounded p-3 bg-primary/5"
         >
           <div class="text-xs opacity-70 mb-1">{{ t("archives.summary") }}</div>
-          <div class="whitespace-pre-wrap break-words text-sm">{{ archiveSummaryText }}</div>
+          <div class="whitespace-pre-wrap wrap-break-word text-sm">{{ archiveSummaryText }}</div>
         </div>
         <div v-for="m in visibleMessages" :key="m.id" class="border border-base-300 rounded p-3 bg-base-100">
           <div class="flex items-center justify-between mb-1">
             <div class="badge badge-primary badge-sm">{{ roleLabel(m.role) }}</div>
             <div class="opacity-60 text-xs">{{ formatDate(m.createdAt) }}</div>
           </div>
-          <div v-if="messageText(m)" class="whitespace-pre-wrap break-words">{{ messageText(m) }}</div>
+          <div v-if="messageText(m)" class="whitespace-pre-wrap wrap-break-word">{{ messageText(m) }}</div>
           <div v-if="toolSummaries(m).length > 0" class="mt-2 space-y-1">
             <details v-for="(tool, idx) in toolSummaries(m)" :key="`${m.id}-tool-${idx}`" class="collapse collapse-arrow border border-base-300 bg-base-200">
               <summary class="collapse-title py-2 px-3 min-h-0 text-sm font-medium">{{ t("archives.toolCall", { name: tool.name }) }}</summary>
               <div class="collapse-content px-3 pb-2">
-                <div class="whitespace-pre-wrap break-words text-sm opacity-80">{{ tool.content }}</div>
+                <div class="whitespace-pre-wrap wrap-break-word text-sm opacity-80">{{ tool.content }}</div>
               </div>
             </details>
           </div>
