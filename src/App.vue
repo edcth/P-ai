@@ -112,7 +112,6 @@
       :set-prompt-preview-dialog-ref="setPromptPreviewDialogRef"
       :update-config-tab="(value) => { configTab = value; }"
       :set-ui-language="setUiLanguage"
-      :set-ui-font="setUiFont"
       :update-persona-editor-id="(value) => { personaEditorId = value; }"
       :update-selected-persona-id="(value) => { selectedPersonaId = value; }"
       :update-selected-response-style-id="(value) => { selectedResponseStyleId = value; }"
