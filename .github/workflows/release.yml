@@ -10,7 +10,7 @@ on:
       target_os:
         description: "构建目标平台"
         required: true
-        default: "all"
+        default: "linux"
         type: choice
         options:
           - all
