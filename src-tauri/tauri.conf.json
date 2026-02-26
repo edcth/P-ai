@@ -58,6 +58,9 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "infoPlist": "Info.plist"
+    },
     "targets": "all"
   }
 }

@@ -5,19 +5,19 @@ fn is_shortcut_match(shortcut: &Shortcut, raw_hotkey: &str) -> bool {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 static RECORD_HOTKEY_PROBE_STARTED: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
     std::sync::OnceLock::new();
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 static RECORD_BACKGROUND_WAKE_ENABLED: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
     std::sync::OnceLock::new();
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 static RECORD_HOTKEY_PROBE_EVENT_SEQ: std::sync::OnceLock<std::sync::atomic::AtomicU64> =
     std::sync::OnceLock::new();
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 static CHAT_WINDOW_ACTIVE: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
     std::sync::OnceLock::new();
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 static RECORD_HOTKEY_PROBE_STATE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<RecordHotkeyProbeState>>> =
     std::sync::OnceLock::new();
 
@@ -32,14 +32,14 @@ fn handle_global_shortcut_probe(app: &AppHandle, shortcut: &Shortcut, state: Sho
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone)]
 struct ParsedRecordHotkey {
     modifiers: std::collections::HashSet<String>,
     main: String,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Default)]
 struct RecordHotkeyProbeState {
     ctrl: bool,
@@ -49,7 +49,7 @@ struct RecordHotkeyProbeState {
     active: bool,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn normalize_record_hotkey_text(raw: &str) -> String {
     let mut text = raw.trim().to_string();
     if text.is_empty() {
@@ -59,12 +59,16 @@ fn normalize_record_hotkey_text(raw: &str) -> String {
     text
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn parse_record_hotkey(raw: &str) -> Option<ParsedRecordHotkey> {
     let text = normalize_record_hotkey_text(raw);
     let tokens: Vec<String> = text
         .split('+')
-        .map(|token| token.trim().to_uppercase())
+        .map(|token| match token.trim().to_uppercase().as_str() {
+            "OPTION" => "ALT".to_string(),
+            "COMMAND" => "META".to_string(),
+            other => other.to_string(),
+        })
         .filter(|token| !token.is_empty())
         .collect();
     if tokens.is_empty() {
@@ -88,7 +92,7 @@ fn parse_record_hotkey(raw: &str) -> Option<ParsedRecordHotkey> {
     })
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn modifier_token_from_key(key: rdev::Key) -> Option<&'static str> {
     match key {
         rdev::Key::ControlLeft | rdev::Key::ControlRight => Some("CTRL"),
@@ -99,7 +103,7 @@ fn modifier_token_from_key(key: rdev::Key) -> Option<&'static str> {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn token_from_key(key: rdev::Key) -> Option<String> {
     if let Some(token) = modifier_token_from_key(key) {
         return Some(token.to_string());
@@ -172,7 +176,7 @@ fn token_from_key(key: rdev::Key) -> Option<String> {
     Some(token.to_string())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn modifiers_exact(
     state: &RecordHotkeyProbeState,
     required: &std::collections::HashSet<String>,
@@ -183,7 +187,7 @@ fn modifiers_exact(
         && state.meta == required.contains("META")
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn set_modifier_state(state: &mut RecordHotkeyProbeState, token: &str, value: bool) {
     if token == "CTRL" {
         state.ctrl = value;
@@ -196,19 +200,19 @@ fn set_modifier_state(state: &mut RecordHotkeyProbeState, token: &str, value: bo
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn should_stop_on_release(parsed: &ParsedRecordHotkey, released_token: &str) -> bool {
     released_token == parsed.main || parsed.modifiers.contains(released_token)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 #[derive(Serialize, Clone)]
 struct RecordHotkeyProbeEventPayload {
     state: &'static str,
     seq: u64,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn emit_record_hotkey_probe_event(app: &AppHandle, state: &'static str) {
     let seq_counter = RECORD_HOTKEY_PROBE_EVENT_SEQ
         .get_or_init(|| std::sync::atomic::AtomicU64::new(0));
@@ -217,14 +221,14 @@ fn emit_record_hotkey_probe_event(app: &AppHandle, state: &'static str) {
     let _ = app.emit("easy-call:record-hotkey-probe", payload);
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn set_record_hotkey_probe_background_wake_enabled(enabled: bool) {
     let flag = RECORD_BACKGROUND_WAKE_ENABLED
         .get_or_init(|| std::sync::atomic::AtomicBool::new(enabled));
     flag.store(enabled, std::sync::atomic::Ordering::Release);
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn is_record_hotkey_probe_background_wake_enabled() -> bool {
     RECORD_BACKGROUND_WAKE_ENABLED
         .get()
@@ -232,7 +236,7 @@ fn is_record_hotkey_probe_background_wake_enabled() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn reset_record_hotkey_probe_state() {
     if let Some(state_arc) = RECORD_HOTKEY_PROBE_STATE.get() {
         if let Ok(mut state) = state_arc.lock() {
@@ -245,7 +249,7 @@ fn reset_record_hotkey_probe_state() {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn set_record_hotkey_probe_chat_window_active(active: bool) {
     let flag = CHAT_WINDOW_ACTIVE.get_or_init(|| std::sync::atomic::AtomicBool::new(false));
     let previous = flag.swap(active, std::sync::atomic::Ordering::AcqRel);
@@ -254,7 +258,7 @@ fn set_record_hotkey_probe_chat_window_active(active: bool) {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn is_record_hotkey_probe_chat_window_active() -> bool {
     CHAT_WINDOW_ACTIVE
         .get()
@@ -262,7 +266,7 @@ fn is_record_hotkey_probe_chat_window_active() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn start_record_hotkey_probe(app: AppHandle, config_path: std::path::PathBuf) -> Result<(), String> {
     let started = RECORD_HOTKEY_PROBE_STARTED
         .get_or_init(|| std::sync::atomic::AtomicBool::new(false));
@@ -353,13 +357,13 @@ fn start_record_hotkey_probe(app: AppHandle, config_path: std::path::PathBuf) ->
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn start_record_hotkey_probe(_app: AppHandle, _config_path: std::path::PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn set_record_hotkey_probe_background_wake_enabled(_enabled: bool) {}
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn set_record_hotkey_probe_chat_window_active(_active: bool) {}
