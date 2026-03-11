@@ -98,7 +98,7 @@
         </div>
         <div v-for="m in visibleMessages" :key="m.id" class="border border-base-300 rounded p-3 bg-base-100">
           <div class="flex items-center justify-between mb-1">
-            <div class="badge badge-primary badge-sm">{{ roleLabel(m.role) }}</div>
+            <div class="badge badge-primary badge-sm">{{ speakerLabel(m) }}</div>
             <div class="opacity-60 text-sm">{{ formatDate(m.createdAt) }}</div>
           </div>
           <div v-if="messageText(m)" class="whitespace-pre-wrap wrap-break-word">{{ messageText(m) }}</div>
@@ -127,7 +127,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ArchiveSummary, ChatMessage, ChatRole, DelegateConversationSummary, MessagePart, UnarchivedConversationSummary } from "../../../types/app";
+import type { ArchiveSummary, ChatMessage, DelegateConversationSummary, MessagePart, UnarchivedConversationSummary } from "../../../types/app";
 
 const props = defineProps<{
   archives: ArchiveSummary[];
@@ -140,6 +140,7 @@ const props = defineProps<{
   delegateConversations: DelegateConversationSummary[];
   selectedDelegateConversationId: string;
   delegateMessages: ChatMessage[];
+  personaNameMap?: Record<string, string>;
 }>();
 const { t, locale } = useI18n();
 
@@ -206,11 +207,13 @@ function messageText(msg: ChatMessage): string {
     .trim();
 }
 
-function roleLabel(role: ChatRole): string {
-  if (role === "user") return t("archives.roleUser");
-  if (role === "assistant") return t("archives.roleAssistant");
-  if (role === "tool") return t("archives.roleTool");
-  return role;
+function speakerLabel(msg: ChatMessage): string {
+  const speakerId = String(msg.speakerAgentId || "").trim();
+  if (speakerId) {
+    return props.personaNameMap?.[speakerId] || speakerId;
+  }
+  if (msg.role === "tool") return t("archives.roleTool");
+  return String(msg.role || "").trim() || "-";
 }
 
 function formatDate(value?: string): string {

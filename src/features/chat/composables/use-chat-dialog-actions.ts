@@ -1,17 +1,16 @@
+import { invokeTauri } from "../../../services/tauri-api";
 import type { Ref } from "vue";
 
 type UseChatDialogActionsOptions = {
   activeChatApiConfigId: Ref<string>;
   assistantDepartmentAgentId: Ref<string>;
-  openCurrentHistoryDialog: (apiConfigId: string, agentId: string) => Promise<void>;
   openPromptPreviewDialog: (apiConfigId: string, agentId: string) => Promise<void>;
   openSystemPromptPreviewDialog: (apiConfigId: string, agentId: string) => Promise<void>;
 };
 
 export function useChatDialogActions(options: UseChatDialogActionsOptions) {
   async function openCurrentHistory() {
-    if (!options.activeChatApiConfigId.value || !options.assistantDepartmentAgentId.value) return;
-    await options.openCurrentHistoryDialog(options.activeChatApiConfigId.value, options.assistantDepartmentAgentId.value);
+    await invokeTauri("show_archives_window");
   }
 
   async function openPromptPreview() {

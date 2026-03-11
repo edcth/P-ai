@@ -224,6 +224,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             show_main_window,
             show_chat_window,
+            show_archives_window,
             set_chat_window_active,
             check_github_update,
             load_config,

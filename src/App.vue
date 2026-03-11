@@ -98,7 +98,6 @@
       :delegate-conversations="delegateConversations"
       :selected-delegate-conversation-id="selectedDelegateConversationId"
       :delegate-messages="delegateMessages"
-      :current-history="currentHistory"
       :message-text="messageText"
       :extract-message-images="extractMessageImages"
       :memory-list="memoryList"
@@ -111,7 +110,6 @@
       :prompt-preview-latest-user-text="promptPreviewLatestUserText"
       :prompt-preview-latest-images="promptPreviewLatestImages"
       :prompt-preview-latest-audios="promptPreviewLatestAudios"
-      :set-history-dialog-ref="setHistoryDialogRef"
       :set-memory-dialog-ref="setMemoryDialogRef"
       :set-prompt-preview-dialog-ref="setPromptPreviewDialogRef"
       :update-config-tab="(value) => { configTab = value; }"
@@ -161,7 +159,6 @@
       :import-archive-file="prepareArchiveImport"
       :delete-archive="deleteArchive"
       :delete-unarchived-conversation="deleteUnarchivedConversation"
-      :close-history="closeHistory"
       :close-memory-viewer="closeMemoryViewer"
       :prev-memory-page="() => { memoryPage--; }"
       :next-memory-page="() => { memoryPage++; }"
@@ -306,7 +303,6 @@ import { useChatDialogActions } from "./features/chat/composables/use-chat-dialo
 import { useChatRuntime } from "./features/chat/composables/use-chat-runtime";
 import { useChatMessageBlocks } from "./features/chat/composables/use-chat-turns";
 import { useChatMedia } from "./features/chat/composables/use-chat-media";
-import { useHistoryViewer } from "./features/chat/composables/use-history-viewer";
 import { usePromptPreview } from "./features/chat/composables/use-prompt-preview";
 import { useMemoryViewer } from "./features/memory/composables/use-memory-viewer";
 import { useAppWatchers } from "./features/shell/composables/use-app-watchers";
@@ -430,15 +426,6 @@ const { perfNow, perfLog, setStatus, setStatusError, localeOptions, applyUiLangu
   locale,
   status,
   perfDebug: PERF_DEBUG,
-});
-
-const {
-  historyDialog,
-  currentHistory,
-  openCurrentHistory: openCurrentHistoryDialog,
-  closeHistory,
-} = useHistoryViewer({
-  setStatusError,
 });
 
 const {
@@ -1567,14 +1554,9 @@ function handleToolsChanged() {
 const { openCurrentHistory, openPromptPreview, openSystemPromptPreview } = useChatDialogActions({
   activeChatApiConfigId: assistantDepartmentApiConfigId,
   assistantDepartmentAgentId: activeAssistantAgentId,
-  openCurrentHistoryDialog,
   openPromptPreviewDialog,
   openSystemPromptPreviewDialog,
 });
-
-function setHistoryDialogRef(el: Element | null) {
-  historyDialog.value = (el as HTMLDialogElement | null) ?? null;
-}
 
 function setMemoryDialogRef(el: Element | null) {
   memoryDialog.value = (el as HTMLDialogElement | null) ?? null;

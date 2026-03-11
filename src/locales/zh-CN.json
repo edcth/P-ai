@@ -236,7 +236,7 @@
       "noVision": "不配置",
       "assistantPersona": "助理部门主人格",
       "responseStyle": "对话风格",
-      "openCurrentHistory": "未归档记录",
+      "openCurrentHistory": "归档管理",
       "previewRequest": "预览请求体",
       "previewSystemPrompt": "系统提示词",
       "imageCacheTitle": "图片转文缓存",

@@ -9,6 +9,11 @@ fn show_chat_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn show_archives_window(app: AppHandle) -> Result<(), String> {
+    show_window(&app, "archives")
+}
+
+#[tauri::command]
 fn set_chat_window_active(active: bool) {
     eprintln!("[系统] 聊天窗口激活状态变更，active={active}");
     set_record_hotkey_probe_chat_window_active(active);

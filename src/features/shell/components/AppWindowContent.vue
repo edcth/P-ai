@@ -146,6 +146,7 @@
       :delegate-conversations="delegateConversations"
       :selected-delegate-conversation-id="selectedDelegateConversationId"
       :delegate-messages="delegateMessages"
+      :persona-name-map="chatPersonaNameMap"
       @load-archives="loadArchives"
       @select-archive="selectArchive"
       @select-unarchived-conversation="selectUnarchivedConversation"
@@ -155,16 +156,6 @@
       @delete-archive="deleteArchive"
       @delete-unarchived-conversation="deleteUnarchivedConversation"
     />
-    <dialog :ref="historyDialogVNodeRef" class="modal">
-      <HistoryDialog
-        :title="t('chat.currentHistoryTitle')"
-        :close-text="t('common.close')"
-        :messages="currentHistory"
-        :message-text="messageText"
-        :extract-images="extractMessageImages"
-        @close="closeHistory"
-      />
-    </dialog>
     <dialog :ref="memoryDialogVNodeRef" class="modal">
       <MemoryDialog
         :title="t('memory.title')"
@@ -211,7 +202,6 @@
 import ConfigView from "../../config/views/ConfigView.vue";
 import ChatView from "../../chat/views/ChatView.vue";
 import ArchivesView from "../../archive/views/ArchivesView.vue";
-import HistoryDialog from "../../chat/components/dialogs/HistoryDialog.vue";
 import MemoryDialog from "../../memory/components/dialogs/MemoryDialog.vue";
 import PromptPreviewDialog from "../../chat/components/dialogs/PromptPreviewDialog.vue";
 import type { VNodeRef } from "vue";
@@ -316,7 +306,6 @@ const props = defineProps<{
   delegateConversations: DelegateConversationSummary[];
   selectedDelegateConversationId: string;
   delegateMessages: ChatMessage[];
-  currentHistory: ChatMessage[];
   messageText: (message: ChatMessage) => string;
   extractMessageImages: (message?: ChatMessage) => Array<{ mime: string; bytesBase64: string }>;
   memoryList: MemoryItem[];
@@ -329,7 +318,6 @@ const props = defineProps<{
   promptPreviewLatestUserText: string;
   promptPreviewLatestImages: number;
   promptPreviewLatestAudios: number;
-  setHistoryDialogRef: (el: Element | null) => void;
   setMemoryDialogRef: (el: Element | null) => void;
   setPromptPreviewDialogRef: (el: Element | null) => void;
   updateConfigTab: (value: "hotkey" | "api" | "tools" | "mcp" | "skill" | "persona" | "department" | "chatSettings" | "memory" | "task" | "logs" | "appearance" | "about") => void;
@@ -379,7 +367,6 @@ const props = defineProps<{
   importArchiveFile: (file: File) => void;
   deleteArchive: (id: string) => void;
   deleteUnarchivedConversation: (id: string) => void;
-  closeHistory: () => void;
   closeMemoryViewer: () => void;
   prevMemoryPage: () => void;
   nextMemoryPage: () => void;
@@ -390,10 +377,6 @@ const props = defineProps<{
   checkUpdate: () => void;
   openGithub: () => void;
 }>();
-
-const historyDialogVNodeRef: VNodeRef = (el) => {
-  props.setHistoryDialogRef((el as Element | null) ?? null);
-};
 
 const memoryDialogVNodeRef: VNodeRef = (el) => {
   props.setMemoryDialogRef((el as Element | null) ?? null);
