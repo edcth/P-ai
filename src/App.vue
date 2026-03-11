@@ -359,7 +359,7 @@ const config = reactive<AppConfig>({
 const recordHotkeyProbeLastSeq = ref(0);
 const recordHotkeyProbeDown = ref(false);
 const chatWindowActiveSynced = ref<boolean | null>(null);
-const configTab = ref<"welcome" | "hotkey" | "api" | "tools" | "mcp" | "skill" | "persona" | "department" | "chatSettings" | "memory" | "task" | "logs" | "appearance" | "about">("welcome");
+const configTab = ref<"hotkey" | "api" | "tools" | "mcp" | "skill" | "persona" | "department" | "chatSettings" | "memory" | "task" | "logs" | "appearance" | "about">("hotkey");
 const personas = ref<PersonaProfile[]>([]);
 const assistantDepartmentAgentId = ref("default-agent");
 const personaEditorId = ref("default-agent");
@@ -897,7 +897,9 @@ const {
   personasAutosaveReady,
   chatSettingsAutosaveReady,
   saveConfig,
-  savePersonas,
+  savePersonas: async () => {
+    await savePersonas();
+  },
   saveChatPreferences,
 });
 
@@ -1489,6 +1491,21 @@ const chatFlow = useChatFlow({
       },
     }),
   onReloadMessages: () => loadAllMessages(),
+  onHistoryFlushed: async ({ conversationId: _conversationId, messageCount, pendingMessages }) => {
+    // 优先合并前端本地批次：history_flushed 到达后先把前端已确认批次并入当前视图，
+    // 避免流式开始前还阻塞等待后端全量历史。
+    {
+      const current = allMessages.value;
+      const mergedMap = new Map<string, ChatMessage>();
+      for (const message of current) mergedMap.set(message.id, message);
+      for (const message of pendingMessages || []) mergedMap.set(message.id, message);
+      const merged = [...current];
+      for (const message of pendingMessages || []) {
+        if (!merged.some((item) => item.id === message.id)) merged.push(message);
+      }
+      allMessages.value = merged.map((item) => mergedMap.get(item.id) as ChatMessage);
+    }
+  },
 });
 
 function clearStreamBuffer() {
@@ -1501,11 +1518,27 @@ type RewindConversationResult = {
   recalledUserMessage?: ChatMessage;
 };
 
+function resetVisibleBlocksAfterRewind(nextMessages: ChatMessage[]) {
+  const assistantIndices: number[] = [];
+  for (let i = 0; i < nextMessages.length; i += 1) {
+    if (nextMessages[i]?.role === "assistant") assistantIndices.push(i);
+  }
+  if (assistantIndices.length < 2) {
+    visibleMessageBlockCount.value = Math.max(1, nextMessages.length || 1);
+    return;
+  }
+  const startIndex = assistantIndices[assistantIndices.length - 2];
+  visibleMessageBlockCount.value = Math.max(1, nextMessages.length - startIndex);
+}
+
 async function rewindConversationFromTurn(turnId: string): Promise<ChatMessage | null> {
   const apiConfigId = String(assistantDepartmentApiConfigId.value || "").trim();
   const agentId = String(activeAssistantAgentId.value || "").trim();
   const messageId = String(turnId || "").trim();
   if (!apiConfigId || !agentId || !messageId) return null;
+  const currentMessages = [...allMessages.value];
+  const removeFrom = currentMessages.findIndex((item) => item.id === messageId && item.role === "user");
+  if (removeFrom < 0) return null;
   try {
     const result = await invokeTauri<RewindConversationResult>("rewind_conversation_from_message", {
       input: {
@@ -1516,9 +1549,10 @@ async function rewindConversationFromTurn(turnId: string): Promise<ChatMessage |
         messageId,
       },
     });
-    await loadAllMessages();
-    visibleMessageBlockCount.value = 1;
-    return result.recalledUserMessage ?? null;
+    const nextMessages = currentMessages.slice(0, removeFrom);
+    allMessages.value = nextMessages;
+    resetVisibleBlocksAfterRewind(nextMessages);
+    return result.recalledUserMessage ?? currentMessages[removeFrom] ?? null;
   } catch (error) {
     setStatusError("status.rewindConversationFailed", error);
     return null;
@@ -1628,4 +1662,3 @@ useAppWatchers({
   },
 });
 </script>
-

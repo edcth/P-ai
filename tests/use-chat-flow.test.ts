@@ -35,6 +35,15 @@ function textMessage(id: string, role: "user" | "assistant", text: string): Chat
   };
 }
 
+async function flushAsyncSteps(times = 4) {
+  // history_flushed 处理链路里包含一个 fire-and-forget async IIFE，
+  // 内部还会 await onReloadMessages()，因此这里主动多冲几轮微任务，
+  // 让测试在断言前稳定等到“刷新历史 -> 切换 chatting”这条链走完。
+  for (let idx = 0; idx < times; idx += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("useChatFlow stream isolation", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -142,9 +151,10 @@ describe("useChatFlow stream isolation", () => {
     expect(latestAssistantText.value).toBe("");
 
     expect(capturedChannel).not.toBeNull();
-    capturedChannel!.emit({ kind: "history_flushed", message: "conversation-1" });
-    await Promise.resolve();
+    capturedChannel!.emit({ kind: "history_flushed", message: "{\"conversationId\":\"conversation-1\",\"messageCount\":1}" });
+    await flushAsyncSteps();
     expect(chatting.value).toBe(true);
+    expect(visibleTurnCount.value).toBe(1);
 
     capturedChannel!.emit({ delta: "N" });
     await vi.advanceTimersByTimeAsync(34);
@@ -221,9 +231,10 @@ describe("useChatFlow stream isolation", () => {
     expect(chatting.value).toBe(false);
 
     expect(capturedChannel).not.toBeNull();
-    capturedChannel!.emit({ kind: "history_flushed", message: "conversation-1" });
-    await Promise.resolve();
+    capturedChannel!.emit({ kind: "history_flushed", message: "{\"conversationId\":\"conversation-1\",\"messageCount\":1}" });
+    await flushAsyncSteps();
     expect(chatting.value).toBe(true);
+    expect(visibleTurnCount.value).toBe(1);
     capturedChannel!.emit({ delta: "ABC" });
     capturedChannel!.emit({ kind: "reasoning_inline", delta: "R1" });
 
@@ -302,9 +313,10 @@ describe("useChatFlow stream isolation", () => {
     expect(chatting.value).toBe(false);
     expect(capturedChannels).toHaveLength(1);
 
-    capturedChannels[0].emit({ kind: "history_flushed", message: "conversation-1" });
-    await Promise.resolve();
+    capturedChannels[0].emit({ kind: "history_flushed", message: "{\"conversationId\":\"conversation-1\",\"messageCount\":1}" });
+    await flushAsyncSteps();
     expect(chatting.value).toBe(true);
+    expect(visibleTurnCount.value).toBe(1);
 
     capturedChannels[0].emit({ delta: "FIRST" });
     await vi.advanceTimersByTimeAsync(250);
@@ -323,11 +335,12 @@ describe("useChatFlow stream isolation", () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(latestAssistantText.value).toBe("FIRST");
 
-    capturedChannels[1].emit({ kind: "history_flushed", message: "conversation-1" });
-    await Promise.resolve();
+    capturedChannels[1].emit({ kind: "history_flushed", message: "{\"conversationId\":\"conversation-1\",\"messageCount\":2}" });
+    await flushAsyncSteps();
     expect(onReloadMessages).toHaveBeenCalledTimes(2);
     expect(latestAssistantText.value).toBe("");
     expect(chatting.value).toBe(true);
+    expect(visibleTurnCount.value).toBe(2);
 
     capturedChannels[1].emit({ delta: "SECOND-AFTER-FLUSH" });
     await vi.advanceTimersByTimeAsync(1200);
@@ -356,6 +369,7 @@ describe("useChatFlow stream isolation", () => {
     await secondSend;
 
     expect(latestAssistantText.value).toBe("SECOND-DONE");
+    expect(visibleTurnCount.value).toBe(3);
     expect(chatting.value).toBe(false);
   });
 

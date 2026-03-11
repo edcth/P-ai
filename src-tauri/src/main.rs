@@ -154,10 +154,21 @@ fn main() {
                 .state_lock
                 .lock()
                 .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-            let mut data = read_app_data(&app_state.data_path).unwrap_or_default();
+            let mut data = match state_read_app_data_cached(&app_state) {
+                Ok(data) => data,
+                Err(err) => {
+                    eprintln!("[启动] 读取应用数据失败(main::setup): {err}");
+                    AppData::default()
+                }
+            };
             let changed = ensure_default_agent(&mut data);
             if changed {
-                let _ = write_app_data(&app_state.data_path, &data);
+                if let Err(err) = state_write_app_data_cached(&app_state, &data) {
+                    eprintln!(
+                        "[启动] 写入应用数据失败(main::setup): changed={}, error={}",
+                        changed, err
+                    );
+                }
             }
             if let Err(err) = memory_store_open(&app_state.data_path) {
                 eprintln!("[BOOT] initialize memory store failed: {err}");
@@ -335,4 +346,3 @@ fn main() {
 mod tests {
     include!("features/tests.rs");
 }
-

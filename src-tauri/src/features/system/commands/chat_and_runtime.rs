@@ -71,6 +71,16 @@ async fn send_chat_message_inner(
     state: &AppState,
     on_delta: &tauri::ipc::Channel<AssistantDeltaEvent>,
 ) -> Result<SendChatResult, String> {
+    let chat_started_at = std::time::Instant::now();
+    let log_chat_stage = |stage: &str| {
+        eprintln!(
+            "[聊天耗时] stage={}, elapsed_ms={}",
+            stage,
+            chat_started_at.elapsed().as_millis()
+        );
+    };
+    log_chat_stage("send_chat_message_inner.start");
+
     let trigger_only = input.trigger_only;
     let requested_api_id = input
         .session
@@ -97,11 +107,11 @@ async fn send_chat_message_inner(
             .state_lock
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-        let mut app_config = read_config(&state.config_path)?;
-        let mut data = read_app_data(&state.data_path)?;
+        let mut app_config = state_read_config_cached(state)?;
+        let mut data = state_read_app_data_cached(state)?;
         let changed = ensure_default_agent(&mut data);
         if changed {
-            write_app_data(&state.data_path, &data)?;
+            state_write_app_data_cached(state, &data)?;
         }
         let mut runtime_data = data.clone();
         merge_private_organization_into_runtime_data(&state.data_path, &mut app_config, &mut runtime_data)?;
@@ -165,6 +175,7 @@ async fn send_chat_message_inner(
             candidate_api_ids,
         )
     };
+    log_chat_stage("runtime_and_session_ready");
 
     let chat_key = inflight_chat_key(&selected_api.id, &effective_agent_id);
     let (abort_handle, abort_registration) = AbortHandle::new_pair();
@@ -183,6 +194,15 @@ async fn send_chat_message_inner(
     let state_for_run = state.clone();
     let run = async move {
     let state = state_for_run;
+    let run_started_at = std::time::Instant::now();
+    let log_run_stage = |stage: &str| {
+        eprintln!(
+            "[聊天耗时] stage={}, elapsed_ms={}",
+            stage,
+            run_started_at.elapsed().as_millis()
+        );
+    };
+    log_run_stage("run.begin");
     if !resolved_api.request_format.is_chat_text() {
         return Err(format!(
             "Request format '{}' is not implemented in chat router yet.",
@@ -218,7 +238,7 @@ async fn send_chat_message_inner(
                             .state_lock
                             .lock()
                             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-                        let data = read_app_data(&state.data_path)?;
+                        let data = state_read_app_data_cached(&state)?;
                         drop(guard);
                         find_image_text_cache(&data, &hash, &vision_api.id)
                     };
@@ -241,14 +261,14 @@ async fn send_chat_message_inner(
                         .state_lock
                         .lock()
                         .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-                    let mut data = read_app_data(&state.data_path)?;
+                    let mut data = state_read_app_data_cached(&state)?;
                     let mapped = if let Some(existing) =
                         find_image_text_cache(&data, &hash, &vision_api.id)
                     {
                         format!("[图片{}]\n{}", idx + 1, existing)
                     } else {
                         upsert_image_text_cache(&mut data, &hash, &vision_api.id, &converted);
-                        write_app_data(&state.data_path, &data)?;
+                        state_write_app_data_cached(&state, &data)?;
                         format!("[图片{}]\n{}", idx + 1, converted)
                     };
                     drop(guard);
@@ -275,6 +295,7 @@ async fn send_chat_message_inner(
             }
         }
     }
+    log_run_stage("attachments_processed");
 
     let effective_user_parts = if trigger_only {
         Vec::new()
@@ -326,9 +347,9 @@ async fn send_chat_message_inner(
             .state_lock
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-        let mut data = read_app_data(&state.data_path)?;
+        let mut data = state_read_app_data_cached(&state)?;
         let changed = ensure_default_agent(&mut data);
-        let mut config = read_config(&state.config_path)?;
+        let mut config = state_read_config_cached(&state)?;
         let mut runtime_agents = data.agents.clone();
         merge_private_organization_into_runtime(&state.data_path, &mut config, &mut runtime_agents)?;
         let _agent = runtime_agents
@@ -358,7 +379,7 @@ async fn send_chat_message_inner(
             }
         }
         let _ = changed;
-        write_app_data(&state.data_path, &data)?;
+        state_write_app_data_cached(&state, &data)?;
         drop(guard);
     }
 
@@ -419,6 +440,7 @@ async fn send_chat_message_inner(
             }
         }
     }
+    log_run_stage("pre_send_archive_checked");
 
     let (
         _primary_model_name,
@@ -433,7 +455,7 @@ async fn send_chat_message_inner(
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
 
-        let mut data = read_app_data(&state.data_path)?;
+        let mut data = state_read_app_data_cached(&state)?;
         ensure_default_agent(&mut data);
         let agent = data
             .agents
@@ -620,7 +642,7 @@ async fn send_chat_message_inner(
         let estimated_prompt_tokens = u64::from(estimate_conversation_tokens(&conversation));
 
         if !trigger_only {
-            write_app_data(&state.data_path, &data)?;
+            state_write_app_data_cached(&state, &data)?;
         }
         drop(guard);
 
@@ -633,12 +655,19 @@ async fn send_chat_message_inner(
             estimated_prompt_tokens,
         )
     };
+    log_run_stage("prompt_ready");
 
     let mut model_reply: Option<ModelReply> = None;
     let mut active_selected_api = selected_api.clone();
     let mut active_resolved_api = resolved_api.clone();
     let mut fallback_errors = Vec::<String>::new();
     for (candidate_index, candidate_api_id) in candidate_api_ids.iter().enumerate() {
+        eprintln!(
+            "[聊天耗时] stage=model_candidate.start, elapsed_ms={}, candidate_index={}, candidate_api_id={}",
+            run_started_at.elapsed().as_millis(),
+            candidate_index,
+            candidate_api_id
+        );
         let candidate_selected_api = if candidate_api_id == &selected_api.id {
             selected_api.clone()
         } else {
@@ -666,6 +695,12 @@ async fn send_chat_message_inner(
         let max_failure_retries = candidate_selected_api.failure_retry_count as usize;
         let mut candidate_final_error: Option<String> = None;
         for attempt in 0..=max_failure_retries {
+            eprintln!(
+                "[聊天耗时] stage=model_request.start, elapsed_ms={}, candidate_api_id={}, attempt={}",
+                run_started_at.elapsed().as_millis(),
+                candidate_selected_api.id,
+                attempt + 1
+            );
             let reply_result = call_model_openai_style(
                 &candidate_resolved_api,
                 &app_config,
@@ -679,6 +714,12 @@ async fn send_chat_message_inner(
                 &chat_session_key,
             )
             .await;
+            eprintln!(
+                "[聊天耗时] stage=model_request.finish, elapsed_ms={}, candidate_api_id={}, attempt={}",
+                run_started_at.elapsed().as_millis(),
+                candidate_selected_api.id,
+                attempt + 1
+            );
 
             let (reason_text, final_error_text) = match reply_result {
                 Ok(reply) => {
@@ -791,15 +832,17 @@ async fn send_chat_message_inner(
             }))
         }
     };
+    log_run_stage("model_reply_ready");
 
     let mut post_reply_forced_archive_source: Option<Conversation> = None;
+    let mut persisted_assistant_message: Option<ChatMessage> = None;
     {
         let guard = state
             .state_lock
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
 
-        let mut data = read_app_data(&state.data_path)?;
+        let mut data = state_read_app_data_cached(&state)?;
         if let Some(conversation) = data
             .conversations
             .iter_mut()
@@ -807,7 +850,7 @@ async fn send_chat_message_inner(
         {
             let now = now_iso();
             if !suppress_assistant_message {
-                conversation.messages.push(ChatMessage {
+                let assistant_message = ChatMessage {
                     id: Uuid::new_v4().to_string(),
                     role: "assistant".to_string(),
                     created_at: now.clone(),
@@ -823,7 +866,9 @@ async fn send_chat_message_inner(
                         Some(tool_history_events.clone())
                     },
                     mcp_call: None,
-                });
+                };
+                conversation.messages.push(assistant_message.clone());
+                persisted_assistant_message = Some(assistant_message);
                 conversation.updated_at = now.clone();
                 conversation.last_assistant_at = Some(now);
             }
@@ -833,10 +878,11 @@ async fn send_chat_message_inner(
             if !suppress_assistant_message && conversation.last_context_usage_ratio >= 0.82 {
                 post_reply_forced_archive_source = Some(conversation.clone());
             }
-            write_app_data(&state.data_path, &data)?;
+            state_write_app_data_cached(&state, &data)?;
         }
         drop(guard);
     }
+    log_run_stage("assistant_message_persisted");
 
     if let Some(source) = post_reply_forced_archive_source {
         let _ = on_delta.send(AssistantDeltaEvent {
@@ -883,6 +929,7 @@ async fn send_chat_message_inner(
             }
         }
     }
+    log_run_stage("post_reply_archive_checked");
 
     Ok(SendChatResult {
         conversation_id,
@@ -891,10 +938,12 @@ async fn send_chat_message_inner(
         reasoning_standard,
         reasoning_inline,
         archived_before_send,
+        assistant_message: persisted_assistant_message,
     })
     };
 
     let result = futures_util::future::Abortable::new(run, abort_registration).await;
+    log_chat_stage("send_chat_message_inner.finish");
     {
         let mut inflight = state
             .inflight_chat_abort_handles
@@ -952,7 +1001,7 @@ async fn send_chat_message(
     let conversation_id = {
         let guard = state.state_lock.lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-        let mut data = read_app_data(&state.data_path)?;
+        let mut data = state_read_app_data_cached(&state)?;
 
         let conversation_id = if let Some(cid) = session.conversation_id.as_deref().filter(|s| !s.is_empty()) {
             cid.to_string()
@@ -963,7 +1012,7 @@ async fn send_chat_message(
                 .get(idx)
                 .map(|item| item.id.clone())
                 .ok_or_else(|| "活动会话索引超出范围".to_string())?;
-            write_app_data(&state.data_path, &data)?;
+            state_write_app_data_cached(&state, &data)?;
             id
         };
 
@@ -1111,14 +1160,14 @@ async fn stop_chat_message(
         .state_lock
         .lock()
         .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-    let app_config = read_config(&state.config_path)?;
+    let app_config = state_read_config_cached(&state)?;
     let selected_api = app_config
         .api_configs
         .iter()
         .find(|api| api.id == api_config_id)
         .cloned()
         .ok_or_else(|| format!("Selected API config '{api_config_id}' not found."))?;
-    let mut data = read_app_data(&state.data_path)?;
+    let mut data = state_read_app_data_cached(&state)?;
     ensure_default_agent(&mut data);
 
     let idx = latest_active_conversation_index(&data, &api_config_id, &agent_id);
@@ -1648,9 +1697,9 @@ fn check_tools_status(
         .state_lock
         .lock()
         .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-    let mut config = read_config(&state.config_path)?;
+    let mut config = state_read_config_cached(&state)?;
     normalize_api_tools(&mut config);
-    let mut data = read_app_data(&state.data_path)?;
+    let mut data = state_read_app_data_cached(&state)?;
     ensure_default_agent(&mut data);
     merge_private_organization_into_runtime_data(&state.data_path, &mut config, &mut data)?;
     drop(guard);
@@ -1812,7 +1861,7 @@ fn get_image_text_cache_stats(state: State<'_, AppState>) -> Result<ImageTextCac
         .state_lock
         .lock()
         .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-    let data = read_app_data(&state.data_path)?;
+    let data = state_read_app_data_cached(&state)?;
     drop(guard);
 
     let entries = data.image_text_cache.len();
@@ -1840,9 +1889,9 @@ fn clear_image_text_cache(state: State<'_, AppState>) -> Result<ImageTextCacheSt
         .state_lock
         .lock()
         .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-    let mut data = read_app_data(&state.data_path)?;
+    let mut data = state_read_app_data_cached(&state)?;
     data.image_text_cache.clear();
-    write_app_data(&state.data_path, &data)?;
+    state_write_app_data_cached(&state, &data)?;
     drop(guard);
 
     Ok(ImageTextCacheStats {
@@ -1851,5 +1900,3 @@ fn clear_image_text_cache(state: State<'_, AppState>) -> Result<ImageTextCacheSt
         latest_updated_at: None,
     })
 }
-
-

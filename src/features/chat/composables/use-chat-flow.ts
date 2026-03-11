@@ -10,6 +10,12 @@ export type AssistantDeltaEvent = {
   message?: string;
 };
 
+type HistoryFlushedPayload = {
+  conversationId: string;
+  messageCount: number;
+  messages: ChatMessage[];
+};
+
 type UseChatFlowOptions = {
   chatting: Ref<boolean>;
   forcingArchive: Ref<boolean>;
@@ -40,6 +46,7 @@ type UseChatFlowOptions = {
     reasoningStandard?: string;
     reasoningInline?: string;
     archivedBeforeSend: boolean;
+    assistantMessage?: ChatMessage;
   }>;
   invokeStopChatMessage?: (input: {
     session: { apiConfigId: string; agentId: string };
@@ -48,6 +55,11 @@ type UseChatFlowOptions = {
     partialReasoningInline: string;
   }) => Promise<void>;
   onReloadMessages: () => Promise<void>;
+  onHistoryFlushed?: (input: {
+    conversationId: string;
+    messageCount: number;
+    pendingMessages: ChatMessage[];
+  }) => Promise<void>;
 };
 
 const STREAM_FLUSH_INTERVAL_MS = 33;
@@ -75,6 +87,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
   let streamFlushTimer: ReturnType<typeof setInterval> | null = null;
   let streamToolCallCount = 0;
   let streamLastToolName = "";
+  let activeHistoryMessageCount = 0;
   const reasoningStartedAtMs = ref(0);
 
   function summarizeToolCallsText(): string {
@@ -128,6 +141,44 @@ export function useChatFlow(options: UseChatFlowOptions) {
     options.toolStatusState.value = "";
   }
 
+  function hasAssistantVisibleOutput(result: {
+    assistantText: string;
+    reasoningStandard?: string;
+    reasoningInline?: string;
+  }): boolean {
+    return (
+      !!result.assistantText.trim() ||
+      !!(result.reasoningStandard || "").trim() ||
+      !!(result.reasoningInline || "").trim()
+    );
+  }
+
+  function readHistoryFlushedPayload(
+    raw: string | undefined,
+  ): HistoryFlushedPayload | null {
+    const text = String(raw || "").trim();
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const conversationId = String(parsed.conversationId || "").trim();
+      const messageCount = Math.max(
+        0,
+        Math.round(Number(parsed.messageCount) || 0),
+      );
+      return {
+        conversationId,
+        messageCount,
+        messages: Array.isArray(parsed.messages) ? (parsed.messages as ChatMessage[]) : [],
+      };
+    } catch {
+      return {
+        conversationId: text,
+        messageCount: 0,
+        messages: [],
+      };
+    }
+  }
+
   function flushStreamBuffer(gen: number) {
     if (gen !== activeDisplayGeneration) {
       clearStreamBuffer();
@@ -152,7 +203,10 @@ export function useChatFlow(options: UseChatFlowOptions) {
     streamPendingText += delta;
     streamDrainDeadline = Date.now() + STREAM_DRAIN_TARGET_MS;
     if (!streamFlushTimer) {
-      streamFlushTimer = setInterval(() => flushStreamBuffer(gen), STREAM_FLUSH_INTERVAL_MS);
+      streamFlushTimer = setInterval(
+        () => flushStreamBuffer(gen),
+        STREAM_FLUSH_INTERVAL_MS,
+      );
     }
   }
 
@@ -162,7 +216,8 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const text = options.chatInput.value.trim();
     if (!text && options.clipboardImages.value.length === 0) return;
     const sendSession = options.getSession();
-    if (!sendSession || !sendSession.apiConfigId || !sendSession.agentId) return;
+    if (!sendSession || !sendSession.apiConfigId || !sendSession.agentId)
+      return;
 
     const wasChatting = options.chatting.value;
     options.toolStatusText.value = "";
@@ -172,8 +227,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const sentImages = [...options.clipboardImages.value];
     options.chatInput.value = "";
     options.clipboardImages.value = [];
-
-    options.visibleMessageBlockCount.value = 1;
 
     const gen = ++requestGeneration;
     if (!wasChatting) {
@@ -187,16 +240,45 @@ export function useChatFlow(options: UseChatFlowOptions) {
       const parsed = readAssistantEvent(event);
       if (parsed.kind === "history_flushed") {
         void (async () => {
-          // history_flushed 表示：当前批次的所有消息已经正式写入历史。
-          // 只有到这一刻，前端才允许切换“前台可见轮次”。
-          //
-          // 如果这是排队中的下一轮请求，它会在这里接管前台显示；
-          // 如果这是空闲状态下的直接对话，也同样通过这条边界完成
-          // “队列/临时态 -> 正式历史 -> 新一轮流式”的切换。
-          activeDisplayGeneration = gen;
-          options.chatting.value = true;
-          resetDisplayedRoundState();
-          await options.onReloadMessages();
+          try {
+            const flushed = readHistoryFlushedPayload(parsed.message);
+            const batchVisibleCount = Math.max(1, flushed?.messageCount || 0);
+            // history_flushed 表示：当前批次的所有消息已经正式写入历史。
+            // 只有到这一刻，前端才允许切换“前台可见轮次”。
+            //
+            // 如果这是排队中的下一轮请求，它会在这里接管前台显示；
+            // 如果这是空闲状态下的直接对话，也同样通过这条边界完成
+            // “队列/临时态 -> 正式历史 -> 新一轮流式”的切换。
+            activeDisplayGeneration = gen;
+            activeHistoryMessageCount = batchVisibleCount;
+            // 前台窗口的单位不再是“最后 1 条消息”，
+            // 而是“当前批次刚刚刷入历史的全部消息块”。
+            options.visibleMessageBlockCount.value = batchVisibleCount;
+            resetDisplayedRoundState();
+            // 优先消费前端已持有的“已确认批次”，减少每轮都回源后端带来的等待。
+            // 未提供本地批次消费器时，退化到原有整段历史重载。
+            if (options.onHistoryFlushed) {
+              await options.onHistoryFlushed({
+                conversationId: String(flushed?.conversationId || "").trim(),
+                messageCount: batchVisibleCount,
+                pendingMessages: flushed?.messages || [],
+              });
+            } else {
+              await options.onReloadMessages();
+            }
+            // 只有当本批消息已经真正刷新到当前窗口之后，
+            // 才允许出现新的助理流式气泡和停止按钮。
+            options.chatting.value = true;
+          } catch (error) {
+            const err = error as { message?: unknown; stack?: unknown };
+            console.error("[CHAT] history_flushed 处理失败", {
+              action: "history_flushed",
+              message: String(err?.message ?? error ?? ""),
+              stack: String(err?.stack ?? ""),
+              requestGeneration: gen,
+            });
+            options.chatErrorText.value = options.formatRequestFailed(error);
+          }
         })();
         return;
       }
@@ -208,20 +290,25 @@ export function useChatFlow(options: UseChatFlowOptions) {
           streamLastToolName = toolName;
         }
         options.toolStatusText.value = parsed.message || "";
-        options.toolStatusState.value = parsed.toolStatus === "running" || parsed.toolStatus === "done" || parsed.toolStatus === "failed"
-          ? parsed.toolStatus
-          : "";
+        options.toolStatusState.value =
+          parsed.toolStatus === "running" ||
+          parsed.toolStatus === "done" ||
+          parsed.toolStatus === "failed"
+            ? parsed.toolStatus
+            : "";
         return;
       }
       if (parsed.kind === "reasoning_standard") {
         const deltaText = readDeltaMessage(parsed);
-        if (deltaText && reasoningStartedAtMs.value === 0) reasoningStartedAtMs.value = Date.now();
+        if (deltaText && reasoningStartedAtMs.value === 0)
+          reasoningStartedAtMs.value = Date.now();
         options.latestReasoningStandardText.value += deltaText;
         return;
       }
       if (parsed.kind === "reasoning_inline") {
         const deltaText = readDeltaMessage(parsed);
-        if (deltaText && reasoningStartedAtMs.value === 0) reasoningStartedAtMs.value = Date.now();
+        if (deltaText && reasoningStartedAtMs.value === 0)
+          reasoningStartedAtMs.value = Date.now();
         options.latestReasoningInlineText.value += deltaText;
         return;
       }
@@ -248,16 +335,37 @@ export function useChatFlow(options: UseChatFlowOptions) {
       options.chatErrorText.value = "";
       if ((options.toolStatusState.value as string) === "running") {
         options.toolStatusState.value = "done";
-        options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallDone");
+        options.toolStatusText.value =
+          summarizeToolCallsText() || options.t("status.toolCallDone");
       }
       const currentSession = options.getSession();
-      const sameSession = !!currentSession
-        && currentSession.apiConfigId === sendSession.apiConfigId
-        && currentSession.agentId === sendSession.agentId;
+      const sameSession =
+        !!currentSession &&
+        currentSession.apiConfigId === sendSession.apiConfigId &&
+        currentSession.agentId === sendSession.agentId;
       if (sameSession) {
-        await options.onReloadMessages();
+        if (result.assistantMessage) {
+          const currentMessages = options.allMessages.value;
+          if (!currentMessages.some((item) => item.id === result.assistantMessage?.id)) {
+            options.allMessages.value = [...currentMessages, result.assistantMessage];
+          }
+        } else {
+          await options.onReloadMessages();
+        }
+        options.visibleMessageBlockCount.value =
+          activeHistoryMessageCount +
+          (hasAssistantVisibleOutput(result) ? 1 : 0);
       }
     } catch (error) {
+      const err = error as { message?: unknown; stack?: unknown };
+      console.error("[CHAT] chat flow request failed", {
+        action: "sendChat",
+        apiConfigId: sendSession.apiConfigId,
+        agentId: sendSession.agentId,
+        requestGeneration: gen,
+        message: String(err?.message ?? error ?? ""),
+        stack: String(err?.stack ?? ""),
+      });
       if (gen !== activeDisplayGeneration) {
         options.chatErrorText.value = options.formatRequestFailed(error);
         return;
@@ -269,13 +377,16 @@ export function useChatFlow(options: UseChatFlowOptions) {
       options.chatErrorText.value = options.formatRequestFailed(error);
       if (!options.toolStatusText.value) {
         options.toolStatusState.value = "failed";
-        options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallFailed");
+        options.toolStatusText.value =
+          summarizeToolCallsText() || options.t("status.toolCallFailed");
       }
       const currentSession = options.getSession();
-      const sameSession = !!currentSession
-        && currentSession.apiConfigId === sendSession.apiConfigId
-        && currentSession.agentId === sendSession.agentId;
+      const sameSession =
+        !!currentSession &&
+        currentSession.apiConfigId === sendSession.apiConfigId &&
+        currentSession.agentId === sendSession.agentId;
       if (sameSession) {
+        options.visibleMessageBlockCount.value = activeHistoryMessageCount;
         await options.onReloadMessages();
       }
     } finally {
@@ -300,7 +411,8 @@ export function useChatFlow(options: UseChatFlowOptions) {
     reasoningStartedAtMs.value = 0;
     if (options.toolStatusState.value === "running") {
       options.toolStatusState.value = "failed";
-      options.toolStatusText.value = summarizeToolCallsText() || options.t("status.interrupted");
+      options.toolStatusText.value =
+        summarizeToolCallsText() || options.t("status.interrupted");
     } else {
       options.toolStatusState.value = "";
       options.toolStatusText.value = "";
@@ -328,11 +440,12 @@ export function useChatFlow(options: UseChatFlowOptions) {
                 }
               })();
         console.warn(
-          `[聊天] 停止消息失败，apiConfigId=${stopSession.apiConfigId}，agentId=${stopSession.agentId}，latestAssistantTextLength=${partialAssistantText.length}，错误=${errorText}`
+          `[聊天] 停止消息失败，apiConfigId=${stopSession.apiConfigId}，agentId=${stopSession.agentId}，latestAssistantTextLength=${partialAssistantText.length}，错误=${errorText}`,
         );
       }
     }
     if (gen !== activeDisplayGeneration) return;
+    // stop 是纠偏路径，保持从后端整段重载，确保最终一致性。
     await options.onReloadMessages();
   }
 

@@ -400,6 +400,7 @@ async fn process_conversation_batch(
         .map(|event| event.created_at.trim())
         .find(|value| !value.is_empty())
         .unwrap_or("");
+    let mut persisted_batch_messages = Vec::<ChatMessage>::new();
 
     // 1. 先写入所有消息到会话记录。
     //
@@ -410,7 +411,7 @@ async fn process_conversation_batch(
         let guard = state.state_lock.lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
 
-        let mut data = read_app_data(&state.data_path)?;
+        let mut data = state_read_app_data_cached(state)?;
         if let Some(conversation) = data.conversations.iter_mut()
             .find(|c| c.id == conversation_id && c.summary.trim().is_empty())
         {
@@ -418,6 +419,7 @@ async fn process_conversation_batch(
                 for message in &event.messages {
                     let mut persisted = message.clone();
                     persisted.created_at = history_flush_time.clone();
+                    persisted_batch_messages.push(persisted.clone());
                     conversation.messages.push(persisted.clone());
                     match persisted.role.trim() {
                         "user" => conversation.last_user_at = Some(history_flush_time.clone()),
@@ -429,7 +431,7 @@ async fn process_conversation_batch(
                 }
             }
             conversation.updated_at = history_flush_time.clone();
-            write_app_data(&state.data_path, &data)?;
+            state_write_app_data_cached(state, &data)?;
         } else {
             drop(guard);
             complete_pending_chat_events_with_error(
@@ -448,10 +450,11 @@ async fn process_conversation_batch(
     let should_activate = events.iter().any(|e| e.activate_assistant);
     let activate_status = if should_activate { "开始" } else { "跳过" };
 
+    let batch_message_count = events.iter().map(|e| e.messages.len()).sum::<usize>();
     eprintln!(
         "[聊天调度] 批次写入完成: conversation_id={}, message_count={}, activate={}, oldest_queue_created_at={}",
         conversation_id,
-        events.iter().map(|e| e.messages.len()).sum::<usize>(),
+        batch_message_count,
         activate_status,
         oldest_queue_created_at,
     );
@@ -471,7 +474,14 @@ async fn process_conversation_batch(
                     kind: Some("history_flushed".to_string()),
                     tool_name: None,
                     tool_status: None,
-                    message: Some(conversation_id.to_string()),
+                    message: Some(
+                        serde_json::json!({
+                            "conversationId": conversation_id,
+                            "messageCount": batch_message_count,
+                            "messages": persisted_batch_messages,
+                        })
+                        .to_string(),
+                    ),
                 });
             }
             // 同一批里可能有多个激活请求，但前台主助理轮次只能有一个。
@@ -513,6 +523,7 @@ async fn process_conversation_batch(
                 reasoning_standard: String::new(),
                 reasoning_inline: String::new(),
                 archived_before_send: false,
+                assistant_message: None,
             },
         )?;
     }

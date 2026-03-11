@@ -30,15 +30,16 @@ struct HighestInstruction {
 fn built_in_response_styles() -> &'static Vec<ResponseStylePreset> {
     static STYLES: OnceLock<Vec<ResponseStylePreset>> = OnceLock::new();
     STYLES.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../../src/constants/response-styles.json")).unwrap_or_else(
-            |_| {
-                vec![ResponseStylePreset {
-                    id: DEFAULT_RESPONSE_STYLE_ID.to_string(),
-                    name: "简洁".to_string(),
-                    prompt: "- 用最少但足够的信息回答。".to_string(),
-                }]
-            },
-        )
+        serde_json::from_str(include_str!(
+            "../../../../src/constants/response-styles.json"
+        ))
+        .unwrap_or_else(|_| {
+            vec![ResponseStylePreset {
+                id: DEFAULT_RESPONSE_STYLE_ID.to_string(),
+                name: "简洁".to_string(),
+                prompt: "- 用最少但足够的信息回答。".to_string(),
+            }]
+        })
     })
 }
 
@@ -71,22 +72,28 @@ fn response_style_preset(id: &str) -> ResponseStylePreset {
 fn highest_instruction() -> &'static HighestInstruction {
     static INSTRUCTION: OnceLock<HighestInstruction> = OnceLock::new();
     INSTRUCTION.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../../src/constants/highest-instruction.json"))
-            .unwrap_or_else(|_| HighestInstruction {
-                title: "系统准则".to_string(),
-                rules: vec![
-                    "你必须基于客观事实回答问题，不编造数据、来源或结论。".to_string(),
-                    "若信息不足或不确定，直接说明不确定，并给出可验证路径。".to_string(),
-                    "优先给出可执行、可验证、与用户问题直接相关的结论。".to_string(),
-                ],
-            })
+        serde_json::from_str(include_str!(
+            "../../../../src/constants/highest-instruction.json"
+        ))
+        .unwrap_or_else(|_| HighestInstruction {
+            title: "系统准则".to_string(),
+            rules: vec![
+                "你必须基于客观事实回答问题，不编造数据、来源或结论。".to_string(),
+                "若信息不足或不确定，直接说明不确定，并给出可验证路径。".to_string(),
+                "优先给出可执行、可验证、与用户问题直接相关的结论。".to_string(),
+            ],
+        })
     })
 }
 
 fn highest_instruction_markdown() -> String {
     let source = highest_instruction();
     let title = source.title.trim();
-    let title = if title.is_empty() { "系统准则" } else { title };
+    let title = if title.is_empty() {
+        "系统准则"
+    } else {
+        title
+    };
     let mut out = format!("# {}\n", title);
     for rule in &source.rules {
         let line = rule.trim();
@@ -184,7 +191,10 @@ impl RequestFormat {
     }
 
     fn is_openai_style(self) -> bool {
-        matches!(self, Self::OpenAI | Self::OpenAIResponses | Self::DeepSeekKimi)
+        matches!(
+            self,
+            Self::OpenAI | Self::OpenAIResponses | Self::DeepSeekKimi
+        )
     }
 
     fn is_chat_text(self) -> bool {
@@ -212,10 +222,7 @@ impl<'de> serde::Deserialize<'de> for RequestFormat {
     {
         let raw = <String as serde::Deserialize>::deserialize(deserializer)?;
         Self::from_str(&raw).ok_or_else(|| {
-            serde::de::Error::custom(format!(
-                "unsupported request format '{}'",
-                raw.trim()
-            ))
+            serde::de::Error::custom(format!("unsupported request format '{}'", raw.trim()))
         })
     }
 }
@@ -516,7 +523,7 @@ fn default_record_hotkey() -> String {
     }
     #[cfg(not(target_os = "macos"))]
     {
-    "Alt".to_string()
+        "Alt".to_string()
     }
 }
 
@@ -709,6 +716,8 @@ struct SendChatResult {
     reasoning_standard: String,
     reasoning_inline: String,
     archived_before_send: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assistant_message: Option<ChatMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1006,7 +1015,11 @@ impl Default for AppData {
     fn default() -> Self {
         Self {
             version: APP_DATA_SCHEMA_VERSION,
-            agents: vec![default_agent(), default_user_persona(), default_system_persona()],
+            agents: vec![
+                default_agent(),
+                default_user_persona(),
+                default_system_persona(),
+            ],
             assistant_department_agent_id: default_assistant_department_agent_id(),
             user_alias: default_user_alias(),
             response_style_id: default_response_style_id(),
@@ -1040,11 +1053,18 @@ fn assistant_department_mut(config: &mut AppConfig) -> Option<&mut DepartmentCon
 }
 
 fn assistant_department_agent_id(config: &AppConfig) -> Option<String> {
-    assistant_department(config)
-        .and_then(|dept| dept.agent_ids.iter().find(|id| !id.trim().is_empty()).cloned())
+    assistant_department(config).and_then(|dept| {
+        dept.agent_ids
+            .iter()
+            .find(|id| !id.trim().is_empty())
+            .cloned()
+    })
 }
 
-fn department_by_id<'a>(config: &'a AppConfig, department_id: &str) -> Option<&'a DepartmentConfig> {
+fn department_by_id<'a>(
+    config: &'a AppConfig,
+    department_id: &str,
+) -> Option<&'a DepartmentConfig> {
     let trimmed = department_id.trim();
     if trimmed.is_empty() {
         return None;
@@ -1052,7 +1072,10 @@ fn department_by_id<'a>(config: &'a AppConfig, department_id: &str) -> Option<&'
     config.departments.iter().find(|item| item.id == trimmed)
 }
 
-fn department_for_agent_id<'a>(config: &'a AppConfig, agent_id: &str) -> Option<&'a DepartmentConfig> {
+fn department_for_agent_id<'a>(
+    config: &'a AppConfig,
+    agent_id: &str,
+) -> Option<&'a DepartmentConfig> {
     let trimmed = agent_id.trim();
     if trimmed.is_empty() {
         return None;
@@ -1070,7 +1093,10 @@ fn department_for_agent_id<'a>(config: &'a AppConfig, agent_id: &str) -> Option<
         })
 }
 
-fn tool_restricted_by_department(department: Option<&DepartmentConfig>, tool_id: &str) -> Option<String> {
+fn tool_restricted_by_department(
+    department: Option<&DepartmentConfig>,
+    tool_id: &str,
+) -> Option<String> {
     let department = department?;
     let is_assistant = department.id == ASSISTANT_DEPARTMENT_ID || department.is_built_in_assistant;
     if is_assistant {
@@ -1088,7 +1114,9 @@ fn tool_restricted_by_department(department: Option<&DepartmentConfig>, tool_id:
     } else {
         department_name
     };
-    Some(format!("因为当前人格在 {department_name} 部门，本工具不被允许"))
+    Some(format!(
+        "因为当前人格在 {department_name} 部门，本工具不被允许"
+    ))
 }
 
 fn user_persona_name(data: &AppData) -> String {
@@ -1147,6 +1175,12 @@ struct AppState {
     llm_workspace_path: PathBuf,
     terminal_shell: TerminalShellProfile,
     state_lock: Arc<Mutex<()>>,
+    // 运行态内存缓存：减少热路径重复读盘（配置）
+    cached_config: Arc<Mutex<Option<AppConfig>>>,
+    cached_config_mtime: Arc<Mutex<Option<std::time::SystemTime>>>,
+    // 运行态内存缓存：减少热路径重复读盘（业务数据）
+    cached_app_data: Arc<Mutex<Option<AppData>>>,
+    cached_app_data_mtime: Arc<Mutex<Option<std::time::SystemTime>>>,
     last_panic_snapshot: Arc<Mutex<Option<String>>>,
     inflight_chat_abort_handles: Arc<Mutex<std::collections::HashMap<String, AbortHandle>>>,
     inflight_tool_abort_handles: Arc<Mutex<std::collections::HashMap<String, AbortHandle>>>,
@@ -1226,6 +1260,10 @@ impl AppState {
             llm_workspace_path,
             terminal_shell,
             state_lock: Arc::new(Mutex::new(())),
+            cached_config: Arc::new(Mutex::new(None)),
+            cached_config_mtime: Arc::new(Mutex::new(None)),
+            cached_app_data: Arc::new(Mutex::new(None)),
+            cached_app_data_mtime: Arc::new(Mutex::new(None)),
             last_panic_snapshot: Arc::new(Mutex::new(None)),
             inflight_chat_abort_handles: Arc::new(Mutex::new(std::collections::HashMap::new())),
             inflight_tool_abort_handles: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -1241,6 +1279,104 @@ impl AppState {
             dequeue_lock: Arc::new(Mutex::new(())),
         })
     }
+}
+
+fn path_modified_time(path: &PathBuf) -> Option<std::time::SystemTime> {
+    fs::metadata(path).ok()?.modified().ok()
+}
+
+fn state_read_config_cached(state: &AppState) -> Result<AppConfig, String> {
+    let disk_mtime = path_modified_time(&state.config_path);
+    {
+        let cached = state
+            .cached_config
+            .lock()
+            .map_err(|_| "Failed to lock cached config".to_string())?;
+        let cached_mtime = state
+            .cached_config_mtime
+            .lock()
+            .map_err(|_| "Failed to lock cached config mtime".to_string())?;
+        if let (Some(config), Some(cached_time), Some(disk_time)) =
+            (cached.as_ref(), *cached_mtime, disk_mtime)
+        {
+            if cached_time == disk_time {
+                return Ok(config.clone());
+            }
+        }
+    }
+
+    let config = read_config(&state.config_path)?;
+    let disk_mtime = path_modified_time(&state.config_path);
+    *state
+        .cached_config
+        .lock()
+        .map_err(|_| "Failed to lock cached config".to_string())? = Some(config.clone());
+    *state
+        .cached_config_mtime
+        .lock()
+        .map_err(|_| "Failed to lock cached config mtime".to_string())? = disk_mtime;
+    Ok(config)
+}
+
+fn state_write_config_cached(state: &AppState, config: &AppConfig) -> Result<(), String> {
+    write_config(&state.config_path, config)?;
+    let disk_mtime = path_modified_time(&state.config_path);
+    *state
+        .cached_config
+        .lock()
+        .map_err(|_| "Failed to lock cached config".to_string())? = Some(config.clone());
+    *state
+        .cached_config_mtime
+        .lock()
+        .map_err(|_| "Failed to lock cached config mtime".to_string())? = disk_mtime;
+    Ok(())
+}
+
+fn state_read_app_data_cached(state: &AppState) -> Result<AppData, String> {
+    let disk_mtime = path_modified_time(&state.data_path);
+    {
+        let cached = state
+            .cached_app_data
+            .lock()
+            .map_err(|_| "Failed to lock cached app data".to_string())?;
+        let cached_mtime = state
+            .cached_app_data_mtime
+            .lock()
+            .map_err(|_| "Failed to lock cached app data mtime".to_string())?;
+        if let (Some(data), Some(cached_time), Some(disk_time)) =
+            (cached.as_ref(), *cached_mtime, disk_mtime)
+        {
+            if cached_time == disk_time {
+                return Ok(data.clone());
+            }
+        }
+    }
+
+    let data = read_app_data(&state.data_path)?;
+    let disk_mtime = path_modified_time(&state.data_path);
+    *state
+        .cached_app_data
+        .lock()
+        .map_err(|_| "Failed to lock cached app data".to_string())? = Some(data.clone());
+    *state
+        .cached_app_data_mtime
+        .lock()
+        .map_err(|_| "Failed to lock cached app data mtime".to_string())? = disk_mtime;
+    Ok(data)
+}
+
+fn state_write_app_data_cached(state: &AppState, data: &AppData) -> Result<(), String> {
+    write_app_data(&state.data_path, data)?;
+    let disk_mtime = path_modified_time(&state.data_path);
+    *state
+        .cached_app_data
+        .lock()
+        .map_err(|_| "Failed to lock cached app data".to_string())? = Some(data.clone());
+    *state
+        .cached_app_data_mtime
+        .lock()
+        .map_err(|_| "Failed to lock cached app data mtime".to_string())? = disk_mtime;
+    Ok(())
 }
 
 fn app_root_from_data_path(data_path: &PathBuf) -> PathBuf {
@@ -1471,17 +1607,13 @@ fn normalize_agent_tools(agent: &mut AgentProfile) -> bool {
         }
     }
     let changed = agent.tools.len() != next.len()
-        || agent
-            .tools
-            .iter()
-            .zip(next.iter())
-            .any(|(left, right)| {
-                left.id != right.id
-                    || left.enabled != right.enabled
-                    || left.command != right.command
-                    || left.args != right.args
-                    || left.values != right.values
-            });
+        || agent.tools.iter().zip(next.iter()).any(|(left, right)| {
+            left.id != right.id
+                || left.enabled != right.enabled
+                || left.command != right.command
+                || left.args != right.args
+                || left.values != right.values
+        });
     if changed {
         agent.tools = next;
     }
@@ -1557,10 +1689,11 @@ fn ensure_default_agent(data: &mut AppData) -> bool {
         changed = true;
     }
     if data.assistant_department_agent_id.trim().is_empty()
-        || !data
-            .agents
-            .iter()
-            .any(|a| a.id == data.assistant_department_agent_id && !a.is_built_in_user && !a.is_built_in_system)
+        || !data.agents.iter().any(|a| {
+            a.id == data.assistant_department_agent_id
+                && !a.is_built_in_user
+                && !a.is_built_in_system
+        })
     {
         data.assistant_department_agent_id = default_assistant_department_agent_id();
         changed = true;
@@ -1592,7 +1725,11 @@ fn fill_missing_message_speaker_agent_ids(data: &mut AppData) -> bool {
             "sourceAgentId",
             "source_agent_id",
         ] {
-            let value = object.get(key).and_then(|item| item.as_str()).unwrap_or("").trim();
+            let value = object
+                .get(key)
+                .and_then(|item| item.as_str())
+                .unwrap_or("")
+                .trim();
             if !value.is_empty() {
                 return Some(value.to_string());
             }
@@ -1613,15 +1750,14 @@ fn fill_missing_message_speaker_agent_ids(data: &mut AppData) -> bool {
                 .map(str::trim)
                 .unwrap_or("");
             if current.is_empty() {
-                message.speaker_agent_id = Some(
-                    provider_meta_speaker_agent_id(message).unwrap_or_else(|| {
+                message.speaker_agent_id =
+                    Some(provider_meta_speaker_agent_id(message).unwrap_or_else(|| {
                         if message.role == "user" {
                             USER_PERSONA_ID.to_string()
                         } else {
                             host_agent_id.clone()
                         }
-                    }),
-                );
+                    }));
                 changed = true;
             }
         }
@@ -1638,7 +1774,12 @@ fn fill_missing_conversation_metadata(data: &mut AppData) -> bool {
         }
     }
     for archive in &mut data.archived_conversations {
-        if archive.source_conversation.conversation_kind.trim().is_empty() {
+        if archive
+            .source_conversation
+            .conversation_kind
+            .trim()
+            .is_empty()
+        {
             archive.source_conversation.conversation_kind = CONVERSATION_KIND_CHAT.to_string();
             changed = true;
         }
@@ -1668,7 +1809,3 @@ struct ConversationApiSettings {
     #[serde(default)]
     stt_auto_send: bool,
 }
-
-
-
-

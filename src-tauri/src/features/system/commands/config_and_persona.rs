@@ -156,13 +156,13 @@ fn load_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
         .state_lock
         .lock()
         .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
-    let mut result = read_config(&state.config_path)?;
+    let mut result = state_read_config_cached(&state)?;
     normalize_app_config(&mut result);
     ensure_default_shell_workspace_in_config(&mut result, &state);
-    let mut data = read_app_data(&state.data_path)?;
+    let mut data = state_read_app_data_cached(&state)?;
     let changed = ensure_default_agent(&mut data);
     if changed {
-        write_app_data(&state.data_path, &data)?;
+        state_write_app_data_cached(&state, &data)?;
     }
     let mut runtime_data = data.clone();
     merge_private_organization_into_runtime_data(&state.data_path, &mut result, &mut runtime_data)?;
@@ -199,18 +199,18 @@ fn save_config(
         .lock()
         .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
 
-    let mut data = read_app_data(&state.data_path)?;
+    let mut data = state_read_app_data_cached(&state)?;
     let _ = ensure_default_agent(&mut data);
-    let base_config = read_config(&state.config_path)?;
+    let base_config = state_read_config_cached(&state)?;
     let (_private_agent_ids, private_department_ids) =
         runtime_private_organization_ids(&state.data_path, &base_config, &data.agents)?;
     config.departments.retain(|item| !private_department_ids.contains(&item.id));
     validate_department_names_unique(&config)?;
-    write_config(&state.config_path, &config)?;
+    state_write_config_cached(&state, &config)?;
     if let Some(agent_id) = assistant_department_agent_id(&config) {
         if data.assistant_department_agent_id != agent_id {
             data.assistant_department_agent_id = agent_id;
-            write_app_data(&state.data_path, &data)?;
+            state_write_app_data_cached(&state, &data)?;
         }
     }
     register_hotkey_from_config(&app, &config)?;
@@ -227,11 +227,11 @@ fn load_agents(state: State<'_, AppState>) -> Result<Vec<AgentProfile>, String> 
         .lock()
         .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
 
-    let mut config = read_config(&state.config_path)?;
-    let mut data = read_app_data(&state.data_path)?;
+    let mut config = state_read_config_cached(&state)?;
+    let mut data = state_read_app_data_cached(&state)?;
     let changed = ensure_default_agent(&mut data);
     if changed {
-        write_app_data(&state.data_path, &data)?;
+        state_write_app_data_cached(&state, &data)?;
     }
     let mut runtime_data = data.clone();
     merge_private_organization_into_runtime_data(&state.data_path, &mut config, &mut runtime_data)?;
@@ -1012,12 +1012,12 @@ fn get_chat_snapshot(
         .lock()
         .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
 
-    let mut app_config = read_config(&state.config_path)?;
+    let mut app_config = state_read_config_cached(&state)?;
 
-    let mut data = read_app_data(&state.data_path)?;
+    let mut data = state_read_app_data_cached(&state)?;
     let defaults_changed = ensure_default_agent(&mut data);
     if defaults_changed {
-        write_app_data(&state.data_path, &data)?;
+        state_write_app_data_cached(&state, &data)?;
     }
     let mut runtime_data = data.clone();
     merge_private_organization_into_runtime_data(&state.data_path, &mut app_config, &mut runtime_data)?;
@@ -1482,7 +1482,16 @@ fn rewind_conversation_from_message(
     }
 
     let before_len = data.conversations.len();
-    let idx = latest_active_conversation_index(&data, "", requested_agent_id)
+    let requested_api_config_id = input
+        .session
+        .api_config_id
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
+    if requested_api_config_id.is_empty() {
+        return Err("apiConfigId is required.".to_string());
+    }
+    let idx = latest_active_conversation_index(&data, requested_api_config_id, requested_agent_id)
         .ok_or_else(|| "No active conversation found for current agent.".to_string())?;
     let conversation = data
         .conversations

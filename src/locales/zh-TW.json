@@ -485,6 +485,8 @@
     "archiving": "正在归档优化上下文...",
     "archivingLock": "期间将暂时锁定输入",
     "currentHistoryTitle": "當前會話記錄（未歸檔）",
+    "stop": "停止",
+    "stopReplying": "正在回覆",
     "taskTrigger": {
       "badge": "任務提醒",
       "kindImmediate": "立即任務",

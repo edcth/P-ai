@@ -486,6 +486,7 @@
     "archivingLock": "期间将暂时锁定输入",
     "currentHistoryTitle": "当前会话记录（未归档）",
     "stop": "停止",
+    "stopReplying": "正在回复",
     "send": "发送",
     "taskTrigger": {
       "badge": "任务提醒",

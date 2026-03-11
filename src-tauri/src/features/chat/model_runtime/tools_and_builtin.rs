@@ -1615,45 +1615,6 @@ fn delegate_enqueue_result_message(
     Ok(())
 }
 
-fn delegate_append_root_result_message(
-    app_state: &AppState,
-    root_conversation_id: &str,
-    speaker_agent_id: &str,
-    text: &str,
-    provider_meta: Value,
-) -> Result<(), String> {
-    let guard = app_state
-        .state_lock
-        .lock()
-        .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-    let mut data = read_app_data(&app_state.data_path)?;
-    if let Some(conversation) = data
-        .conversations
-        .iter_mut()
-        .find(|item| item.id == root_conversation_id && item.summary.trim().is_empty())
-    {
-        let now = now_iso();
-        conversation.messages.push(ChatMessage {
-            id: Uuid::new_v4().to_string(),
-            role: "assistant".to_string(),
-            created_at: now.clone(),
-            speaker_agent_id: Some(speaker_agent_id.to_string()),
-            parts: vec![MessagePart::Text {
-                text: text.to_string(),
-            }],
-            extra_text_blocks: Vec::new(),
-            provider_meta: Some(provider_meta),
-            tool_call: None,
-            mcp_call: None,
-        });
-        conversation.updated_at = now.clone();
-        conversation.last_assistant_at = Some(now);
-        write_app_data(&app_state.data_path, &data)?;
-    }
-    drop(guard);
-    Ok(())
-}
-
 fn emit_refresh_signal(app_state: &AppState) -> Result<(), String> {
     let app_handle = {
         let guard = app_state
@@ -1668,77 +1629,6 @@ fn emit_refresh_signal(app_state: &AppState) -> Result<(), String> {
     app_handle
         .emit("easy-call:refresh", ())
         .map_err(|err| format!("Emit refresh signal failed: {err}"))
-}
-
-fn delegate_build_assistant_notify_text(delegate: &DelegateEntry, result_text: &str) -> String {
-    let mut lines = vec![format!("委托结果提醒：{}", delegate.title.trim())];
-    lines.push(format!("来源部门：{}", delegate.target_department_id.trim()));
-    if result_text.trim().is_empty() {
-        lines.push("结果：对方已完成处理。".to_string());
-    } else {
-        lines.push(format!("结果：{}", result_text.trim()));
-    }
-    lines.push("请结合主对话决定是否继续推进、整合或回复用户。".to_string());
-    lines.join("\n")
-}
-
-async fn delegate_notify_assistant_if_needed(
-    app_state: &AppState,
-    delegate: &DelegateEntry,
-    result_text: &str,
-    result_status: &str,
-) -> Result<(), String> {
-    if !delegate.notify_assistant_when_done || delegate.kind != DELEGATE_TOOL_KIND_DELEGATE {
-        return Ok(());
-    }
-    let guard = app_state
-        .state_lock
-        .lock()
-        .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-    let config = read_config(&app_state.config_path)?;
-    let assistant_agent_id = assistant_department_agent_id(&config)
-        .ok_or_else(|| "未找到助理部门委任人".to_string())?;
-    let assistant_department = assistant_department(&config)
-        .ok_or_else(|| "未找到助理部门配置".to_string())?;
-    let assistant_api_config_ids = department_api_config_ids(assistant_department);
-    drop(guard);
-
-    let notify_text = delegate_build_assistant_notify_text(delegate, result_text);
-    let provider_meta = serde_json::json!({
-        "messageKind": "delegate_notify_assistant",
-        "delegateId": delegate.delegate_id,
-        "delegateKind": delegate.kind,
-        "resultStatus": result_status,
-        "sourceDepartmentId": delegate.source_department_id,
-        "targetDepartmentId": delegate.target_department_id,
-    });
-    let noop_channel = tauri::ipc::Channel::new(|_| Ok(()));
-    let mut errors = Vec::<String>::new();
-    for api_config_id in assistant_api_config_ids {
-        let request = SendChatRequest {
-            payload: ChatInputPayload {
-                text: Some(notify_text.clone()),
-                display_text: Some(String::new()),
-                images: None,
-                audios: None,
-                model: None,
-                extra_text_blocks: None,
-                provider_meta: Some(provider_meta.clone()),
-            },
-            session: Some(SessionSelector {
-                api_config_id: Some(api_config_id.clone()),
-                agent_id: assistant_agent_id.clone(),
-                conversation_id: None,
-            }),
-            speaker_agent_id: Some(SYSTEM_PERSONA_ID.to_string()),
-            trigger_only: true,
-        };
-        match send_chat_message_inner(request, app_state, &noop_channel).await {
-            Ok(_) => return Ok(()),
-            Err(err) => errors.push(format!("{api_config_id}: {err}")),
-        }
-    }
-    Err(format!("助理部门所有候选模型均失败：{}", errors.join(" | ")))
 }
 
 async fn delegate_execute_agent_run(

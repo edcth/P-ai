@@ -10,7 +10,7 @@
     </div>
     <div
       ref="scrollContainer"
-      class="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col"
+      class="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col scrollbar-gutter-stable"
       @scroll="onScroll"
       @wheel.passive="onWheel"
     >
@@ -182,12 +182,28 @@
       <template v-if="showAssistantStreamingPreview">
         <!-- 助手流式响应 -->
         <div class="chat chat-start mt-3">
-          <div class="chat-image avatar self-start">
-            <div class="w-7 rounded-full">
-              <img v-if="assistantAvatarUrl" :src="assistantAvatarUrl" :alt="personaName || t('archives.roleAssistant')" />
-              <div v-else class="bg-neutral text-neutral-content w-7 h-7 rounded-full flex items-center justify-center text-xs">
-                {{ avatarInitial(personaName || t("archives.roleAssistant")) }}
+          <div class="chat-image self-start">
+            <div class="flex flex-col items-center gap-2">
+              <div class="avatar">
+                <div class="w-7 rounded-full">
+                  <img v-if="assistantAvatarUrl" :src="assistantAvatarUrl" :alt="personaName || t('archives.roleAssistant')" />
+                  <div v-else class="bg-neutral text-neutral-content w-7 h-7 rounded-full flex items-center justify-center text-xs">
+                    {{ avatarInitial(personaName || t("archives.roleAssistant")) }}
+                  </div>
+                </div>
               </div>
+              <button
+                v-if="chatting"
+                type="button"
+                class="btn btn-error btn-sm btn-circle relative"
+                :title="`${t('chat.stop')} / ${t('chat.stopReplying')}`"
+                @click="$emit('stopChat')"
+              >
+                <Square class="h-4 w-4 fill-current" />
+                <span class="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <span class="loading loading-spinner loading-xl"></span>
+                </span>
+              </button>
             </div>
           </div>
           <div class="chat-header mb-1 flex items-center gap-2">
@@ -240,19 +256,6 @@
               ></span>
               <span>{{ toolStatusText }}</span>
             </div>
-            <div class="mt-2 flex items-center gap-1.5">
-              <button
-                type="button"
-                class="btn btn-warning btn-sm btn-circle"
-                :title="`${t('chat.stop')} / 正在回复`"
-                @click="$emit('stopChat')"
-              >
-                <span class="relative flex h-4 w-4 items-center justify-center">
-                  <Square class="h-3.5 w-3.5 fill-current" />
-                  <span class="absolute -right-1.5 -top-1.5 loading loading-spinner loading-xs"></span>
-                </span>
-              </button>
-            </div>
           </div>
         </div>
       </template>
@@ -277,13 +280,26 @@
           >
             {{ currentWorkspaceName }}{{ workspaceLocked ? " (临时)" : "" }}
           </button>
-          <button
-            class="btn btn-sm bg-base-100 ml-auto"
-            :disabled="chatting || frozen"
-            @click="$emit('openSkillList')"
-          >
-            技能
-          </button>
+          <div class="ml-auto flex items-center gap-1.5 overflow-x-auto scrollbar-thin">
+            <button
+              v-for="persona in workspacePersonaChips"
+              :key="persona.id"
+              type="button"
+              class="btn btn-ghost btn-sm btn-circle p-0 shrink-0 border"
+              :class="persona.active ? 'border-primary/60 bg-primary/10' : 'border-base-300/70 bg-base-100/70'"
+              :title="persona.name"
+              disabled
+            >
+              <div class="avatar">
+                <div class="w-7 rounded-full">
+                  <img v-if="persona.avatarUrl" :src="persona.avatarUrl" :alt="persona.name" />
+                  <div v-else class="bg-neutral text-neutral-content w-7 h-7 rounded-full flex items-center justify-center text-[10px]">
+                    {{ avatarInitial(persona.name) }}
+                  </div>
+                </div>
+              </div>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -628,6 +644,38 @@ function messageAvatarUrl(block: ChatMessageBlock): string {
   return "";
 }
 
+const workspacePersonaChips = computed(() => {
+  const ids = new Set<string>([
+    ...Object.keys(props.personaNameMap || {}),
+    ...Object.keys(props.personaAvatarUrlMap || {}),
+  ]);
+  const currentAssistantName = String(props.personaName || "").trim();
+  const items = [...ids]
+    .map((id) => {
+      const trimmedId = String(id || "").trim();
+      if (!trimmedId) return null;
+      const name =
+        String(props.personaNameMap[trimmedId] || "").trim()
+        || (trimmedId === "user-persona" ? props.userAlias || t("archives.roleUser") : trimmedId);
+      const avatarUrl =
+        String(props.personaAvatarUrlMap[trimmedId] || "").trim()
+        || (trimmedId === "user-persona" ? props.userAvatarUrl || "" : "");
+      return {
+        id: trimmedId,
+        name,
+        avatarUrl,
+        active: name === currentAssistantName,
+      };
+    })
+    .filter((item): item is { id: string; name: string; avatarUrl: string; active: boolean } => !!item);
+  return items.sort((left, right) => {
+    if (left.active !== right.active) return left.active ? -1 : 1;
+    if (left.id === "user-persona" && right.id !== "user-persona") return -1;
+    if (right.id === "user-persona" && left.id !== "user-persona") return 1;
+    return left.name.localeCompare(right.name, "zh-CN");
+  });
+});
+
 function isOwnMessage(block: ChatMessageBlock): boolean {
   const id = String(block.speakerAgentId || "").trim();
   return !id || id === "user-persona";
@@ -700,11 +748,28 @@ const latestInlineReasoningText = computed(
   () => latestAssistantParts.value.inline || props.latestReasoningInlineText || "",
 );
 const renderedAssistantHtml = computed(() => renderMarkdown(latestAssistantParts.value.visible));
+const latestPersistedAssistantBlock = computed(() => {
+  for (let i = props.messageBlocks.length - 1; i >= 0; i -= 1) {
+    const block = props.messageBlocks[i];
+    if (block.role === "assistant") return block;
+  }
+  return null;
+});
+const streamingPreviewDuplicatedInHistory = computed(() => {
+  const lastAssistant = latestPersistedAssistantBlock.value;
+  if (!lastAssistant) return false;
+  if (!props.latestAssistantText.trim()) return false;
+  return (
+    String(lastAssistant.text || "").trim() === latestAssistantParts.value.visible.trim()
+    && String(lastAssistant.reasoningStandard || "").trim() === String(props.latestReasoningStandardText || "").trim()
+    && String(resolvedInlineReasoning(lastAssistant) || "").trim() === String(latestInlineReasoningText.value || "").trim()
+  );
+});
 const showAssistantStreamingPreview = computed(() => {
   // 只要当前存在前台主助理轮次，就应立即显示助理气泡。
   // 这样用户一点击发送，就能看到“助理已接手当前轮次”的稳定反馈，
   // 而不是等第一段 delta 到来后气泡才突然出现。
-  return props.chatting;
+  return props.chatting && !streamingPreviewDuplicatedInHistory.value;
 });
 
 function resolvedInlineReasoning(block: ChatMessageBlock): string {
@@ -988,6 +1053,10 @@ watch(
 </script>
 
 <style scoped>
+.scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
 .assistant-markdown :deep(.ecall-markdown-content) {
   overflow-wrap: anywhere;
   word-break: break-word;

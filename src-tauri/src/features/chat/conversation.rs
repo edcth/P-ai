@@ -1,14 +1,16 @@
 fn latest_active_conversation_index(
     data: &AppData,
-    _api_config_id: &str,
+    api_config_id: &str,
     agent_id: &str,
 ) -> Option<usize> {
+    let requested_api_config_id = api_config_id.trim();
     data.conversations
         .iter()
         .enumerate()
         .filter(|(_, c)| {
             c.status == "active"
                 && c.summary.trim().is_empty()
+                && (requested_api_config_id.is_empty() || c.api_config_id == requested_api_config_id)
                 && c.agent_id == agent_id
                 && !conversation_is_delegate(c)
         })
