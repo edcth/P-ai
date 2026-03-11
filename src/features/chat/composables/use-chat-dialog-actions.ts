@@ -10,12 +10,12 @@ type UseChatDialogActionsOptions = {
 
 export function useChatDialogActions(options: UseChatDialogActionsOptions) {
   async function openCurrentHistory() {
-    console.info("[CHAT] openCurrentHistory opening archives window");
+    console.info("[CHAT] openCurrentHistory 开始: 打开归档窗口");
     try {
       await invokeTauri("show_archives_window");
     } catch (error) {
       const err = error as { message?: unknown; stack?: unknown };
-      console.error("[CHAT] openCurrentHistory failed:", {
+      console.error("[CHAT] openCurrentHistory 失败: 打开归档窗口", {
         message: String(err?.message ?? error ?? ""),
         stack: String(err?.stack ?? ""),
         action: "show_archives_window",

@@ -243,7 +243,7 @@ async fn force_archive_current(
         (selected_api, resolved_api, source, effective_agent_id)
     };
 
-    run_archive_pipeline(
+    let result = run_archive_pipeline(
         &state,
         &selected_api,
         &resolved_api,
@@ -252,7 +252,9 @@ async fn force_archive_current(
         "manual_force_archive",
         "ARCHIVE-FORCE",
     )
-    .await
+    .await;
+    trigger_chat_queue_processing(state.inner());
+    result
 }
 
 pub(crate) async fn run_archive_pipeline(
@@ -267,6 +269,56 @@ pub(crate) async fn run_archive_pipeline(
     let started_at = std::time::Instant::now();
     let trace_id = Uuid::new_v4().to_string();
 
+    // 设置状态为 OrganizingContext
+    set_main_session_state(state, MainSessionState::OrganizingContext)?;
+    eprintln!(
+        "[ARCHIVE-PIPELINE] 开始: task=archive_pipeline, trace_id={}, agent_id={}, api_id={}, started_at={}",
+        trace_id, effective_agent_id, selected_api.id, started_at.elapsed().as_millis()
+    );
+
+    // 确保在所有退出路径都恢复状态
+    let result = run_archive_pipeline_inner(
+        state,
+        selected_api,
+        resolved_api,
+        source,
+        effective_agent_id,
+        archive_reason,
+        trace_tag,
+        started_at,
+        &trace_id,
+    ).await;
+
+    // 归档完成，切换回 Idle（即使内部失败也要恢复状态）
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if let Err(state_err) = set_main_session_state(state, MainSessionState::Idle) {
+        eprintln!(
+            "[ARCHIVE-PIPELINE] 警告: 状态恢复失败, trace_id={}, elapsed_ms={}, error={}",
+            trace_id, elapsed_ms, state_err
+        );
+    } else {
+        eprintln!(
+            "[ARCHIVE-PIPELINE] 完成: task=archive_pipeline, trace_id={}, agent_id={}, api_id={}, elapsed_ms={}",
+            trace_id, effective_agent_id, selected_api.id, elapsed_ms
+        );
+    }
+
+    // 注意：不在这里触发 process_chat_queue，由调用方负责
+
+    result
+}
+
+async fn run_archive_pipeline_inner(
+    state: &AppState,
+    selected_api: &ApiConfig,
+    resolved_api: &ResolvedApiConfig,
+    source: &Conversation,
+    effective_agent_id: &str,
+    archive_reason: &str,
+    trace_tag: &str,
+    started_at: std::time::Instant,
+    trace_id: &str,
+) -> Result<ForceArchiveResult, String> {
     if source.messages.is_empty() {
         return Ok(ForceArchiveResult {
             archived: false,
@@ -391,4 +443,3 @@ pub(crate) async fn run_archive_pipeline(
         merge_groups: Some(merged_groups),
     })
 }
-

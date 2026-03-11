@@ -77,12 +77,13 @@ describe("useChatFlow stream isolation", () => {
       t: (key) => key,
       setStatus: () => {},
       setStatusError: () => {},
+      setChatError: () => {},
       activeChatApiConfigId: ref("api-1"),
-      selectedPersonaId: ref("agent-1"),
+      assistantDepartmentAgentId: ref("agent-1"),
       chatting,
       forcingArchive,
       allMessages,
-      visibleTurnCount,
+      visibleMessageBlockCount: visibleTurnCount,
       perfNow: () => Date.now(),
       perfLog: () => {},
       perfDebug: false,
@@ -118,7 +119,7 @@ describe("useChatFlow stream isolation", () => {
       toolStatusState,
       chatErrorText,
       allMessages,
-      visibleTurnCount,
+      visibleMessageBlockCount: visibleTurnCount,
       t: (key) => key,
       formatRequestFailed: (error) => String(error),
       removeBinaryPlaceholders: (text) => text,
@@ -133,7 +134,7 @@ describe("useChatFlow stream isolation", () => {
     const sendPromise = flow.sendChat();
     await Promise.resolve();
 
-    expect(chatting.value).toBe(true);
+    expect(chatting.value).toBe(false);
     expect(latestAssistantText.value).toBe("");
 
     await runtime.refreshConversationHistory();
@@ -141,6 +142,10 @@ describe("useChatFlow stream isolation", () => {
     expect(latestAssistantText.value).toBe("");
 
     expect(capturedChannel).not.toBeNull();
+    capturedChannel!.emit({ kind: "history_flushed", message: "conversation-1" });
+    await Promise.resolve();
+    expect(chatting.value).toBe(true);
+
     capturedChannel!.emit({ delta: "N" });
     await vi.advanceTimersByTimeAsync(34);
     expect(latestAssistantText.value).toBe("N");
@@ -199,7 +204,7 @@ describe("useChatFlow stream isolation", () => {
       toolStatusState,
       chatErrorText,
       allMessages,
-      visibleTurnCount,
+      visibleMessageBlockCount: visibleTurnCount,
       t: (key) => key,
       formatRequestFailed: (error) => String(error),
       removeBinaryPlaceholders: (text) => text,
@@ -213,9 +218,12 @@ describe("useChatFlow stream isolation", () => {
 
     void flow.sendChat();
     await Promise.resolve();
-    expect(chatting.value).toBe(true);
+    expect(chatting.value).toBe(false);
 
     expect(capturedChannel).not.toBeNull();
+    capturedChannel!.emit({ kind: "history_flushed", message: "conversation-1" });
+    await Promise.resolve();
+    expect(chatting.value).toBe(true);
     capturedChannel!.emit({ delta: "ABC" });
     capturedChannel!.emit({ kind: "reasoning_inline", delta: "R1" });
 
@@ -229,6 +237,199 @@ describe("useChatFlow stream isolation", () => {
       partialReasoningStandard: "",
       partialReasoningInline: "R1",
     });
+    expect(onReloadMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps current streaming round visible until history_flushed switches to next round", async () => {
+    const chatting = ref(false);
+    const forcingArchive = ref(false);
+    const chatInput = ref("first question");
+    const clipboardImages = ref<Array<{ mime: string; bytesBase64: string }>>([]);
+    const latestUserText = ref("");
+    const latestUserImages = ref<Array<{ mime: string; bytesBase64: string }>>([]);
+    const latestAssistantText = ref("");
+    const latestReasoningStandardText = ref("");
+    const latestReasoningInlineText = ref("");
+    const toolStatusText = ref("");
+    const toolStatusState = ref<"running" | "done" | "failed" | "">("");
+    const chatErrorText = ref("");
+    const allMessages = shallowRef<ChatMessage[]>([]);
+    const visibleTurnCount = ref(1);
+    const onReloadMessages = vi.fn(async () => {});
+
+    type ChannelLike = {
+      emit: (event: AssistantDeltaEvent) => void;
+    };
+
+    const capturedChannels: ChannelLike[] = [];
+    const resolveRequests: Array<(value: {
+      assistantText: string;
+      latestUserText: string;
+      reasoningStandard?: string;
+      reasoningInline?: string;
+      archivedBeforeSend: boolean;
+    }) => void> = [];
+
+    const flow = useChatFlow({
+      chatting,
+      forcingArchive,
+      getSession: () => ({ apiConfigId: "api-1", agentId: "agent-1" }),
+      chatInput,
+      clipboardImages,
+      latestUserText,
+      latestUserImages,
+      latestAssistantText,
+      latestReasoningStandardText,
+      latestReasoningInlineText,
+      toolStatusText,
+      toolStatusState,
+      chatErrorText,
+      allMessages,
+      visibleMessageBlockCount: visibleTurnCount,
+      t: (key) => key,
+      formatRequestFailed: (error) => String(error),
+      removeBinaryPlaceholders: (text) => text,
+      invokeSendChatMessage: ({ onDelta }) =>
+        new Promise((resolve) => {
+          capturedChannels.push(onDelta as unknown as ChannelLike);
+          resolveRequests.push(resolve);
+        }),
+      onReloadMessages,
+    });
+
+    const firstSend = flow.sendChat();
+    await Promise.resolve();
+    expect(chatting.value).toBe(false);
+    expect(capturedChannels).toHaveLength(1);
+
+    capturedChannels[0].emit({ kind: "history_flushed", message: "conversation-1" });
+    await Promise.resolve();
+    expect(chatting.value).toBe(true);
+
+    capturedChannels[0].emit({ delta: "FIRST" });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(latestAssistantText.value).toBe("FIRST");
+
+    chatInput.value = "second question";
+    const secondSend = flow.sendChat();
+    await Promise.resolve();
+    expect(capturedChannels).toHaveLength(2);
+
+    // 第二次发送只是在排队，不能抢占当前正在显示的第一轮流式。
+    expect(chatting.value).toBe(true);
+    expect(latestAssistantText.value).toBe("FIRST");
+
+    capturedChannels[1].emit({ delta: "SECOND-BEFORE-FLUSH" });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(latestAssistantText.value).toBe("FIRST");
+
+    capturedChannels[1].emit({ kind: "history_flushed", message: "conversation-1" });
+    await Promise.resolve();
+    expect(onReloadMessages).toHaveBeenCalledTimes(2);
+    expect(latestAssistantText.value).toBe("");
+    expect(chatting.value).toBe(true);
+
+    capturedChannels[1].emit({ delta: "SECOND-AFTER-FLUSH" });
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(latestAssistantText.value).toBe("SECOND-AFTER-FLUSH");
+
+    resolveRequests[0]({
+      assistantText: "FIRST-DONE",
+      latestUserText: "first question",
+      reasoningStandard: "",
+      reasoningInline: "",
+      archivedBeforeSend: false,
+    });
+    await firstSend;
+
+    // 第一轮的收尾结果也不应再污染已经接管前台的第二轮。
+    expect(latestAssistantText.value).toBe("SECOND-AFTER-FLUSH");
+    expect(chatting.value).toBe(true);
+
+    resolveRequests[1]({
+      assistantText: "SECOND-DONE",
+      latestUserText: "second question",
+      reasoningStandard: "",
+      reasoningInline: "",
+      archivedBeforeSend: false,
+    });
+    await secondSend;
+
+    expect(latestAssistantText.value).toBe("SECOND-DONE");
+    expect(chatting.value).toBe(false);
+  });
+
+  it("does not enter streaming view for non-activated batch without history_flushed", async () => {
+    const chatting = ref(false);
+    const forcingArchive = ref(false);
+    const chatInput = ref("queued-only");
+    const clipboardImages = ref<Array<{ mime: string; bytesBase64: string }>>([]);
+    const latestUserText = ref("");
+    const latestUserImages = ref<Array<{ mime: string; bytesBase64: string }>>([]);
+    const latestAssistantText = ref("");
+    const latestReasoningStandardText = ref("");
+    const latestReasoningInlineText = ref("");
+    const toolStatusText = ref("");
+    const toolStatusState = ref<"running" | "done" | "failed" | "">("");
+    const chatErrorText = ref("");
+    const allMessages = shallowRef<ChatMessage[]>([]);
+    const visibleTurnCount = ref(1);
+    const onReloadMessages = vi.fn(async () => {});
+
+    let resolveRequest:
+      | ((value: {
+        assistantText: string;
+        latestUserText: string;
+        reasoningStandard?: string;
+        reasoningInline?: string;
+        archivedBeforeSend: boolean;
+      }) => void)
+      | null = null;
+
+    const flow = useChatFlow({
+      chatting,
+      forcingArchive,
+      getSession: () => ({ apiConfigId: "api-1", agentId: "agent-1" }),
+      chatInput,
+      clipboardImages,
+      latestUserText,
+      latestUserImages,
+      latestAssistantText,
+      latestReasoningStandardText,
+      latestReasoningInlineText,
+      toolStatusText,
+      toolStatusState,
+      chatErrorText,
+      allMessages,
+      visibleMessageBlockCount: visibleTurnCount,
+      t: (key) => key,
+      formatRequestFailed: (error) => String(error),
+      removeBinaryPlaceholders: (text) => text,
+      invokeSendChatMessage: () =>
+        new Promise((resolve) => {
+          resolveRequest = resolve;
+        }),
+      onReloadMessages,
+    });
+
+    const sendPromise = flow.sendChat();
+    await Promise.resolve();
+
+    // 仅入队、未收到 history_flushed 时，不应出现新的前台流式轮次。
+    expect(chatting.value).toBe(false);
+    expect(latestAssistantText.value).toBe("");
+
+    resolveRequest!({
+      assistantText: "",
+      latestUserText: "queued-only",
+      reasoningStandard: "",
+      reasoningInline: "",
+      archivedBeforeSend: false,
+    });
+    await sendPromise;
+
+    expect(latestAssistantText.value).toBe("");
     expect(onReloadMessages).toHaveBeenCalledTimes(1);
+    expect(chatting.value).toBe(false);
   });
 });

@@ -48,6 +48,7 @@ include!("features/config/app_data_layout.rs");
 // ==================== 对话核心 ====================
 include!("features/chat/conversation.rs");
 include!("features/chat/model_runtime.rs");
+include!("features/chat/scheduler.rs");
 
 // ==================== 系统窗口与命令 ====================
 include!("features/system/windowing.rs");
@@ -281,6 +282,9 @@ fn main() {
             open_external_url,
             send_chat_message,
             stop_chat_message,
+            get_chat_queue_snapshot,
+            remove_chat_queue_event,
+            get_main_session_state_snapshot,
             read_local_binary_file,
             stt_transcribe,
             force_archive_current,

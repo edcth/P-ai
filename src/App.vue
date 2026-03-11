@@ -777,7 +777,7 @@ const { visibleMessageBlocks, hasMoreMessageBlocks, chatContextUsageRatio, chatU
   perfDebug: PERF_DEBUG,
   perfNow,
 });
-const displayMessageBlocks = computed(() => chatting.value ? [] : visibleMessageBlocks.value);
+const displayMessageBlocks = computed(() => visibleMessageBlocks.value);
 const displayHasMoreMessageBlocks = computed(() => hasMoreMessageBlocks.value);
 const terminalApprovalCurrent = computed(() => terminalApprovalQueue.value[0] ?? null);
 const terminalApprovalDialogOpen = computed(() => !!terminalApprovalCurrent.value);

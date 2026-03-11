@@ -293,21 +293,39 @@ fn build_task_trigger_provider_meta(task: &TaskEntry) -> Value {
 async fn task_dispatch_due_task(state: &AppState, task: &TaskEntry) -> Result<(), String> {
     let started_at = std::time::Instant::now();
     task_store_mark_triggered(&state.data_path, &task.task_id)?;
-    let request = SendChatRequest {
-        payload: ChatInputPayload {
-            text: Some(build_task_trigger_hidden_prompt(task)),
-            display_text: Some(String::new()),
-            images: None,
-            audios: None,
-            model: None,
-            extra_text_blocks: None,
-            provider_meta: Some(build_task_trigger_provider_meta(task)),
-        },
-        session: None,
+
+    // 获取会话信息
+    let (api_id, agent_id, _) = task_resolve_default_session(state)?;
+
+    // 构造任务消息
+    let task_message = ChatMessage {
+        id: Uuid::new_v4().to_string(),
+        role: "user".to_string(),
+        created_at: now_iso(),
         speaker_agent_id: Some(SYSTEM_PERSONA_ID.to_string()),
-        trigger_only: false,
+        parts: vec![MessagePart::Text {
+            text: build_task_trigger_hidden_prompt(task),
+        }],
+        extra_text_blocks: Vec::new(),
+        provider_meta: Some(build_task_trigger_provider_meta(task)),
+        tool_call: None,
+        mcp_call: None,
     };
-    let noop_channel = tauri::ipc::Channel::new(|_| Ok(()));
+
+    // 创建事件并入队
+    let event = ChatPendingEvent {
+        id: Uuid::new_v4().to_string(),
+        conversation_id: "main".to_string(),  // 任务总是进入主会话
+        created_at: now_iso(),
+        source: ChatEventSource::Task,
+        messages: vec![task_message],
+        activate_assistant: true,
+        session_info: ChatSessionInfo {
+            api_config_id: api_id,
+            agent_id,
+        },
+    };
+
     let trigger_label = if task.trigger.run_at.is_none() {
         "immediate"
     } else if task.trigger.every_minutes.unwrap_or(0) > 0 {
@@ -316,15 +334,20 @@ async fn task_dispatch_due_task(state: &AppState, task: &TaskEntry) -> Result<()
         "once"
     };
     let todo_count = task.todos.len();
-    match send_chat_message_inner(request, state, &noop_channel).await {
+
+    // 入队
+    match enqueue_chat_event(state, event) {
         Ok(_) => {
+            // 异步触发出队处理
+            trigger_chat_queue_processing(state);
+
             let duration_ms = started_at.elapsed().as_millis();
             task_store_insert_run_log(
                 &state.data_path,
                 &task.task_id,
-                "sent",
+                "queued",
                 &format!(
-                    "任务已发送，title={}，trigger={}，todoCount={}，hasRunAt={}，everyMinutes={}，durationMs={}",
+                    "任务已入队，title={}，trigger={}，todoCount={}，hasRunAt={}，everyMinutes={}，durationMs={}",
                     task.title.trim(),
                     trigger_label,
                     todo_count,
@@ -337,23 +360,22 @@ async fn task_dispatch_due_task(state: &AppState, task: &TaskEntry) -> Result<()
         }
         Err(err) => {
             let duration_ms = started_at.elapsed().as_millis();
-            let err_text = err;
             task_store_insert_run_log(
                 &state.data_path,
                 &task.task_id,
                 "failed",
                 &format!(
-                    "任务发送失败，title={}，trigger={}，todoCount={}，hasRunAt={}，everyMinutes={}，durationMs={}，error={}",
+                    "任务入队失败，title={}，trigger={}，todoCount={}，hasRunAt={}，everyMinutes={}，durationMs={}，error={}",
                     task.title.trim(),
                     trigger_label,
                     todo_count,
                     task.trigger.run_at.is_some(),
                     task.trigger.every_minutes.unwrap_or(0),
                     duration_ms,
-                    err_text
+                    err
                 ),
             )?;
-            Err(err_text)
+            Err(err)
         }
     }
 }

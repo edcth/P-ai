@@ -1287,6 +1287,7 @@ async fn builtin_organize_context(
         "ORGANIZE-CONTEXT",
     )
     .await?;
+    trigger_chat_queue_processing(app_state);
     serde_json::to_value(result)
         .map(|value| {
             let mut obj = serde_json::Map::new();
@@ -1551,6 +1552,69 @@ fn delegate_build_trigger_provider_meta(
     })
 }
 
+fn delegate_enqueue_result_message(
+    app_state: &AppState,
+    root_conversation_id: &str,
+    speaker_agent_id: &str,
+    text: &str,
+    provider_meta: Value,
+    notify_assistant: bool,
+) -> Result<(), String> {
+    // 获取会话信息
+    let (api_config_id, agent_id) = {
+        let guard = app_state
+            .state_lock
+            .lock()
+            .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
+        let config = read_config(&app_state.config_path)?;
+        let assistant_agent_id = assistant_department_agent_id(&config)
+            .ok_or_else(|| "未找到助理部门委任人".to_string())?;
+        let selected_api = resolve_selected_api_config(&config, None)
+            .ok_or_else(|| "No API config configured.".to_string())?;
+        drop(guard);
+        (selected_api.id.clone(), assistant_agent_id)
+    };
+
+    // 构造委托结果消息
+    let delegate_message = ChatMessage {
+        id: Uuid::new_v4().to_string(),
+        role: "assistant".to_string(),
+        created_at: now_iso(),
+        speaker_agent_id: Some(speaker_agent_id.to_string()),
+        parts: vec![MessagePart::Text {
+            text: text.to_string(),
+        }],
+        extra_text_blocks: Vec::new(),
+        provider_meta: Some(provider_meta),
+        tool_call: None,
+        mcp_call: None,
+    };
+
+    // 创建事件并入队
+    let event = ChatPendingEvent {
+        id: Uuid::new_v4().to_string(),
+        conversation_id: root_conversation_id.to_string(),
+        created_at: now_iso(),
+        source: ChatEventSource::Delegate,
+        messages: vec![delegate_message],
+        activate_assistant: notify_assistant,
+        session_info: ChatSessionInfo {
+            api_config_id,
+            agent_id,
+        },
+    };
+
+    enqueue_chat_event(app_state, event)?;
+
+    // 异步触发出队处理
+    trigger_chat_queue_processing(app_state);
+
+    // 发送UI刷新信号
+    let _ = emit_refresh_signal(app_state);
+
+    Ok(())
+}
+
 fn delegate_append_root_result_message(
     app_state: &AppState,
     root_conversation_id: &str,
@@ -1813,7 +1877,7 @@ async fn delegate_finish_and_publish_result(
             } else {
                 result.assistant_text.clone()
             };
-            delegate_append_root_result_message(
+            delegate_enqueue_result_message(
                 &app_state,
                 &root_conversation_id,
                 &delegate.target_agent_id,
@@ -1828,9 +1892,8 @@ async fn delegate_finish_and_publish_result(
                     "targetAgentId": delegate.target_agent_id,
                     "reasoningStandard": result.reasoning_standard,
                 }),
+                delegate.notify_assistant_when_done,  // 根据配置决定是否激活助理
             )?;
-            delegate_notify_assistant_if_needed(&app_state, &delegate, &text, "completed").await?;
-            let _ = emit_refresh_signal(&app_state);
             Ok(result)
         }
         Err(err) => {
@@ -1840,7 +1903,7 @@ async fn delegate_finish_and_publish_result(
                 DELEGATE_STATUS_FAILED,
             );
             let fail_text = format!("《{}》执行失败：{}", delegate.title.trim(), err);
-            let _ = delegate_append_root_result_message(
+            let _ = delegate_enqueue_result_message(
                 &app_state,
                 &root_conversation_id,
                 &delegate.target_agent_id,
@@ -1855,9 +1918,8 @@ async fn delegate_finish_and_publish_result(
                     "targetAgentId": delegate.target_agent_id,
                     "error": err,
                 }),
+                delegate.notify_assistant_when_done,  // 根据配置决定是否激活助理
             );
-            let _ = delegate_notify_assistant_if_needed(&app_state, &delegate, &fail_text, "failed").await;
-            let _ = emit_refresh_signal(&app_state);
             Err(err)
         }
     }

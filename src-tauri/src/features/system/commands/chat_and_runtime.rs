@@ -690,8 +690,8 @@ async fn send_chat_message_inner(
                         break;
                     }
                     (
-                        "Model returned an empty reply".to_string(),
-                        "Model kept returning empty replies. Stopped retrying. Please try again later or switch model."
+                        "模型返回空响应".to_string(),
+                        "模型持续返回空响应，已停止重试，请稍后再试或切换模型。"
                             .to_string(),
                     )
                 }
@@ -701,8 +701,8 @@ async fn send_chat_message_inner(
                         break;
                     }
                     (
-                        "Model request was rate-limited (429)".to_string(),
-                        format!("Model remained rate-limited (429) after retries: {error}"),
+                        "模型请求被限流 (429)".to_string(),
+                        format!("模型持续被限流 (429)，重试后仍失败: {error}"),
                     )
                 }
             };
@@ -716,7 +716,7 @@ async fn send_chat_message_inner(
                     tool_name: None,
                     tool_status: Some("running".to_string()),
                     message: Some(format!(
-                        "{reason_text}. Retrying ({retry_index}/{max_failure_retries}) in {wait_seconds}s..."
+                        "{reason_text}，正在重试 ({retry_index}/{max_failure_retries})，等待 {wait_seconds} 秒..."
                     )),
                 });
                 tokio::time::sleep(std::time::Duration::from_secs(wait_seconds)).await;
@@ -751,7 +751,7 @@ async fn send_chat_message_inner(
     let model_reply =
         model_reply.ok_or_else(|| {
             if fallback_errors.is_empty() {
-                "Model reply was invalid: no usable content received.".to_string()
+                "模型回复无效：未收到可用内容。".to_string()
             } else {
                 format!("所有候选模型均失败：{}", fallback_errors.join(" | "))
             }
@@ -926,7 +926,137 @@ async fn send_chat_message(
     state: State<'_, AppState>,
     on_delta: tauri::ipc::Channel<AssistantDeltaEvent>,
 ) -> Result<SendChatResult, String> {
-    send_chat_message_inner(input, state.inner(), &on_delta).await
+    // 如果是 trigger_only 模式（由调度器调用），直接执行
+    if input.trigger_only {
+        return send_chat_message_inner(input, state.inner(), &on_delta).await;
+    }
+
+    // 用户发言：构造消息并入队
+    let text = input.payload.text.as_deref().unwrap_or("").trim();
+    let images = input.payload.images.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+
+    if text.is_empty() && images.is_empty() {
+        return Err("消息内容为空".to_string());
+    }
+
+    // 获取会话信息
+    let session = input.session.as_ref().ok_or_else(|| "缺少会话信息".to_string())?;
+    let api_config_id = session.api_config_id.as_deref().unwrap_or("").trim().to_string();
+    let agent_id = session.agent_id.trim().to_string();
+
+    if api_config_id.is_empty() || agent_id.is_empty() {
+        return Err("会话信息不完整".to_string());
+    }
+
+    // 获取或创建会话ID
+    let conversation_id = {
+        let guard = state.state_lock.lock()
+            .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
+        let mut data = read_app_data(&state.data_path)?;
+
+        let conversation_id = if let Some(cid) = session.conversation_id.as_deref().filter(|s| !s.is_empty()) {
+            cid.to_string()
+        } else {
+            let idx = ensure_active_conversation_index(&mut data, &api_config_id, &agent_id);
+            let id = data
+                .conversations
+                .get(idx)
+                .map(|item| item.id.clone())
+                .ok_or_else(|| "活动会话索引超出范围".to_string())?;
+            write_app_data(&state.data_path, &data)?;
+            id
+        };
+
+        drop(guard);
+        conversation_id
+    };
+
+    // 构造用户消息
+    let mut message_parts = Vec::new();
+    if !text.is_empty() {
+        message_parts.push(MessagePart::Text { text: text.to_string() });
+    }
+    for img in images {
+        message_parts.push(MessagePart::Image {
+            mime: img.mime.clone(),
+            bytes_base64: img.bytes_base64.clone(),
+            name: None,
+            compressed: false,
+        });
+    }
+
+    let user_message = ChatMessage {
+        id: Uuid::new_v4().to_string(),
+        role: "user".to_string(),
+        created_at: now_iso(),
+        speaker_agent_id: None,
+        parts: message_parts,
+        extra_text_blocks: Vec::new(),
+        provider_meta: None,
+        tool_call: None,
+        mcp_call: None,
+    };
+
+    // 构造队列事件
+    let event_id = Uuid::new_v4().to_string();
+    let event = ChatPendingEvent {
+        id: event_id.clone(),
+        conversation_id: conversation_id.clone(),
+        created_at: now_iso(),
+        source: ChatEventSource::User,
+        messages: vec![user_message],
+        activate_assistant: true,
+        session_info: ChatSessionInfo {
+            api_config_id,
+            agent_id: agent_id.clone(),
+        },
+    };
+
+    let main_session_state_text = get_main_session_state(state.inner())
+        .map(|value| match value {
+            MainSessionState::Idle => "idle".to_string(),
+            MainSessionState::AssistantStreaming => "assistant_streaming".to_string(),
+            MainSessionState::OrganizingContext => "organizing_context".to_string(),
+        })
+        .unwrap_or_else(|err| format!("unknown({err})"));
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    register_chat_event_runtime(state.inner(), &event_id, on_delta.clone(), result_tx)?;
+
+    // 入队
+    if let Err(err) = enqueue_chat_event(state.inner(), event) {
+        let _ = state
+            .pending_chat_delta_channels
+            .lock()
+            .map(|mut map| map.remove(&event_id));
+        let _ = state
+            .pending_chat_result_senders
+            .lock()
+            .map(|mut map| map.remove(&event_id));
+        return Err(err);
+    }
+
+    let queue_len = state
+        .chat_pending_queue
+        .lock()
+        .map(|queue| queue.len())
+        .unwrap_or_default();
+    eprintln!(
+        "[聊天调度] 用户消息已入队: event_id={}, conversation_id={}, api_config_id={}, agent_id={}, queue_len={}, main_session_state={}",
+        event_id,
+        conversation_id,
+        session.api_config_id.as_deref().unwrap_or(""),
+        agent_id,
+        queue_len,
+        main_session_state_text,
+    );
+
+    // 触发出队处理
+    trigger_chat_queue_processing(state.inner());
+
+    result_rx
+        .await
+        .map_err(|_| "聊天请求已取消或调度结果丢失".to_string())?
 }
 
 #[tauri::command]
@@ -1059,6 +1189,29 @@ async fn stop_chat_message(
         persisted: true,
         conversation_id: Some(conversation_id),
     })
+}
+
+#[tauri::command]
+async fn get_chat_queue_snapshot(
+    state: State<'_, AppState>,
+) -> Result<Vec<ChatQueueEventSummary>, String> {
+    get_queue_snapshot(state.inner())
+}
+
+#[tauri::command]
+async fn remove_chat_queue_event(
+    event_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let removed = remove_from_queue(state.inner(), &event_id)?;
+    Ok(removed.is_some())
+}
+
+#[tauri::command]
+async fn get_main_session_state_snapshot(
+    state: State<'_, AppState>,
+) -> Result<MainSessionState, String> {
+    get_main_session_state(state.inner())
 }
 
 async fn fetch_models_openai(input: &RefreshModelsInput) -> Result<Vec<String>, String> {
@@ -1698,9 +1851,5 @@ fn clear_image_text_cache(state: State<'_, AppState>) -> Result<ImageTextCacheSt
         latest_updated_at: None,
     })
 }
-
-
-
-
 
 

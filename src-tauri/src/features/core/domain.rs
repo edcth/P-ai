@@ -1139,7 +1139,7 @@ struct PreparedPrompt {
     latest_audios: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct AppState {
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     config_path: PathBuf,
@@ -1155,6 +1155,31 @@ struct AppState {
         Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
     llm_round_logs: Arc<Mutex<std::collections::VecDeque<LlmRoundLogEntry>>>,
     task_dispatch_queue: Arc<Mutex<std::collections::VecDeque<TaskDispatchQueueItem>>>,
+    // 群聊消息队列与主助理串行调度系统
+    chat_pending_queue: Arc<Mutex<std::collections::VecDeque<ChatPendingEvent>>>,
+    pending_chat_result_senders: Arc<
+        Mutex<
+            std::collections::HashMap<
+                String,
+                tokio::sync::oneshot::Sender<Result<SendChatResult, String>>,
+            >,
+        >,
+    >,
+    pending_chat_delta_channels:
+        Arc<Mutex<std::collections::HashMap<String, tauri::ipc::Channel<AssistantDeltaEvent>>>>,
+    main_session_state: Arc<Mutex<MainSessionState>>,
+    dequeue_lock: Arc<Mutex<()>>,
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("config_path", &self.config_path)
+            .field("data_path", &self.data_path)
+            .field("llm_workspace_path", &self.llm_workspace_path)
+            .field("terminal_shell", &self.terminal_shell)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AppState {
@@ -1208,6 +1233,12 @@ impl AppState {
             terminal_pending_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
             llm_round_logs: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             task_dispatch_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            // 群聊消息队列与主助理串行调度系统
+            chat_pending_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            pending_chat_result_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pending_chat_delta_channels: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            main_session_state: Arc::new(Mutex::new(MainSessionState::Idle)),
+            dequeue_lock: Arc::new(Mutex::new(())),
         })
     }
 }

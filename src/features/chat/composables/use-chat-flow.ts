@@ -54,7 +54,22 @@ const STREAM_FLUSH_INTERVAL_MS = 33;
 const STREAM_DRAIN_TARGET_MS = 1000;
 
 export function useChatFlow(options: UseChatFlowOptions) {
-  let chatGeneration = 0;
+  // requestGeneration: 每次 send/stop 都会递增，用于区分不同请求实例。
+  // activeDisplayGeneration: 当前“前台可见轮次”的代号。
+  //
+  // 关键规则：
+  // 1. 新消息可以在主助理流式期间继续入队；
+  // 2. 入队请求不能抢占当前前台轮次，也不能清空当前流式显示；
+  // 3. 只有在收到 history_flushed 之后，才能把这批消息视为“正式进入历史”；
+  // 4. 也只有在 history_flushed 之后，前端才允许切换到新的前台轮次。
+  //
+  // 这套规则保证了：
+  // - 队列是入口层
+  // - 历史是唯一生效层
+  // - 主助理永远只有一个前台流式轮次
+  // 从而为未来的跨进程、多来源消息汇流保留稳定的状态边界。
+  let requestGeneration = 0;
+  let activeDisplayGeneration = 0;
   let streamPendingText = "";
   let streamDrainDeadline = 0;
   let streamFlushTimer: ReturnType<typeof setInterval> | null = null;
@@ -100,8 +115,21 @@ export function useChatFlow(options: UseChatFlowOptions) {
     }
   }
 
+  function resetDisplayedRoundState() {
+    clearStreamBuffer();
+    streamToolCallCount = 0;
+    streamLastToolName = "";
+    options.latestUserText.value = "";
+    options.latestUserImages.value = [];
+    options.latestAssistantText.value = "";
+    options.latestReasoningStandardText.value = "";
+    options.latestReasoningInlineText.value = "";
+    options.toolStatusText.value = "";
+    options.toolStatusState.value = "";
+  }
+
   function flushStreamBuffer(gen: number) {
-    if (gen !== chatGeneration) {
+    if (gen !== activeDisplayGeneration) {
       clearStreamBuffer();
       return;
     }
@@ -120,7 +148,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
   }
 
   function enqueueStreamDelta(gen: number, delta: string) {
-    if (gen !== chatGeneration || !delta) return;
+    if (gen !== activeDisplayGeneration || !delta) return;
     streamPendingText += delta;
     streamDrainDeadline = Date.now() + STREAM_DRAIN_TARGET_MS;
     if (!streamFlushTimer) {
@@ -129,22 +157,17 @@ export function useChatFlow(options: UseChatFlowOptions) {
   }
 
   async function sendChat() {
-    if (options.chatting.value || options.forcingArchive.value) return;
+    // 注意：不再检查 forcingArchive 和 chatting，因为后端已通过状态机（MainSessionState）和队列处理并发控制
+    // 流式期间和归档期间的消息都会入队，由后端串行处理
     const text = options.chatInput.value.trim();
     if (!text && options.clipboardImages.value.length === 0) return;
     const sendSession = options.getSession();
     if (!sendSession || !sendSession.apiConfigId || !sendSession.agentId) return;
 
-    options.latestUserText.value = text;
-    options.latestUserImages.value = [...options.clipboardImages.value];
-    options.latestAssistantText.value = "";
-    options.latestReasoningStandardText.value = "";
-    options.latestReasoningInlineText.value = "";
+    const wasChatting = options.chatting.value;
     options.toolStatusText.value = "";
     options.toolStatusState.value = "";
     options.chatErrorText.value = "";
-    streamToolCallCount = 0;
-    streamLastToolName = "";
 
     const sentImages = [...options.clipboardImages.value];
     options.chatInput.value = "";
@@ -152,12 +175,32 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
     options.visibleMessageBlockCount.value = 1;
 
-    const gen = ++chatGeneration;
-    clearStreamBuffer();
+    const gen = ++requestGeneration;
+    if (!wasChatting) {
+      // 非对话中发送时，先只完成“入队”。
+      // 当前轮次必须等到 history_flushed 之后，才允许进入前台可见状态。
+      activeDisplayGeneration = gen;
+      resetDisplayedRoundState();
+    }
     const deltaChannel = new Channel<AssistantDeltaEvent>();
     deltaChannel.onmessage = (event) => {
-      if (gen !== chatGeneration) return;
       const parsed = readAssistantEvent(event);
+      if (parsed.kind === "history_flushed") {
+        void (async () => {
+          // history_flushed 表示：当前批次的所有消息已经正式写入历史。
+          // 只有到这一刻，前端才允许切换“前台可见轮次”。
+          //
+          // 如果这是排队中的下一轮请求，它会在这里接管前台显示；
+          // 如果这是空闲状态下的直接对话，也同样通过这条边界完成
+          // “队列/临时态 -> 正式历史 -> 新一轮流式”的切换。
+          activeDisplayGeneration = gen;
+          options.chatting.value = true;
+          resetDisplayedRoundState();
+          await options.onReloadMessages();
+        })();
+        return;
+      }
+      if (gen !== activeDisplayGeneration) return;
       if (parsed.kind === "tool_status") {
         const toolName = String(parsed.toolName || "").trim();
         if (parsed.toolStatus === "running" && toolName) {
@@ -185,7 +228,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
       enqueueStreamDelta(gen, readDeltaMessage(parsed));
     };
 
-    options.chatting.value = true;
     try {
       const result = await options.invokeSendChatMessage({
         text,
@@ -193,9 +235,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
         session: sendSession,
         onDelta: deltaChannel,
       });
-      if (gen !== chatGeneration) return;
-      options.latestUserText.value = options.removeBinaryPlaceholders(result.latestUserText);
-      options.latestUserImages.value = sentImages;
+      if (gen !== activeDisplayGeneration) return;
       // Always align to backend final text to avoid stream/snapshot race drift.
       clearStreamBuffer();
       options.latestAssistantText.value = String(result.assistantText || "");
@@ -218,7 +258,10 @@ export function useChatFlow(options: UseChatFlowOptions) {
         await options.onReloadMessages();
       }
     } catch (error) {
-      if (gen !== chatGeneration) return;
+      if (gen !== activeDisplayGeneration) {
+        options.chatErrorText.value = options.formatRequestFailed(error);
+        return;
+      }
       clearStreamBuffer();
       options.latestAssistantText.value = "";
       options.latestReasoningStandardText.value = "";
@@ -236,7 +279,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
         await options.onReloadMessages();
       }
     } finally {
-      if (gen === chatGeneration) {
+      if (gen === activeDisplayGeneration) {
         options.chatting.value = false;
         reasoningStartedAtMs.value = 0;
       }
@@ -246,7 +289,8 @@ export function useChatFlow(options: UseChatFlowOptions) {
   async function stopChat() {
     if (!options.chatting.value) return;
     const stopSession = options.getSession();
-    const gen = ++chatGeneration;
+    const gen = ++requestGeneration;
+    activeDisplayGeneration = gen;
     if (streamPendingText) {
       options.latestAssistantText.value += streamPendingText;
       streamPendingText = "";
@@ -288,7 +332,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
         );
       }
     }
-    if (gen !== chatGeneration) return;
+    if (gen !== activeDisplayGeneration) return;
     await options.onReloadMessages();
   }
 

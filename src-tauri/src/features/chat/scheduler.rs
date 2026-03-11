@@ -1,0 +1,666 @@
+// ==================== 群聊消息队列与主助理串行调度系统 ====================
+//
+// 这是当前项目最核心、也最容易被误改的业务边界之一。
+//
+// 我们实现的不是传统“用户发一句 -> 助理立刻回一句”的线性聊天，
+// 而是一个面向未来跨进程协作的“单主助理消息流”：
+//
+// 1. 队列是入口层
+//    所有新消息，无论来自用户、任务、委托、系统，未来甚至来自其他进程，
+//    都必须先入队，不能直接写进正式历史。
+//
+// 2. 历史是唯一生效层
+//    一条消息只有在批量出队、写入 conversation.messages 之后，才算正式生效。
+//    因此消息的业务时间应以“刷入历史的时间”为准，而不是入队时间。
+//
+// 3. 激活信号决定是否开启下一轮主助理
+//    批次写入历史后，只有当本批次存在 activate_assistant=true 的事件，
+//    才允许开启新的主助理轮次；否则只更新历史，不启动流式。
+//
+// 4. 主助理永远只有一个前台轮次
+//    当主助理正在流式，或者正在整理上下文时，新的消息只能继续排队，
+//    绝不能插入当前轮次，也不能抢占当前流式显示。
+//
+// 这套设计保证了：
+// - 无论同一时刻涌入多少消息、来自多少个来源，都能稳定收敛；
+// - 批量消息总是先统一进入历史，再决定是否开启下一轮；
+// - 前后端都能围绕“队列 -> 历史 -> 激活新轮次”的固定节奏工作。
+
+// ==================== 数据结构定义 ====================
+
+/// 主会话状态机
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MainSessionState {
+    /// 空闲，可以出队
+    Idle,
+    /// 主助理正在流式输出
+    AssistantStreaming,
+    /// 正在压缩/整理上下文
+    OrganizingContext,
+}
+
+/// 消息来源类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ChatEventSource {
+    /// 用户发言
+    User,
+    /// 任务触发
+    Task,
+    /// 委托回报
+    Delegate,
+    /// 系统事件
+    System,
+}
+
+/// 会话信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatSessionInfo {
+    pub api_config_id: String,
+    pub agent_id: String,
+}
+
+/// 待处理事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatPendingEvent {
+    /// 事件唯一ID
+    pub id: String,
+    /// 目标会话ID
+    pub conversation_id: String,
+    /// 入队时间，仅用于排队观测，不代表正式生效时间
+    pub created_at: String,
+    /// 来源类型
+    pub source: ChatEventSource,
+    /// 要写入的消息集合
+    pub messages: Vec<ChatMessage>,
+    /// 是否在本批消息写入历史后激活主助理
+    pub activate_assistant: bool,
+    /// 会话信息
+    pub session_info: ChatSessionInfo,
+}
+
+#[derive(Clone)]
+struct QueuedChatActivation {
+    event_id: String,
+    on_delta: tauri::ipc::Channel<AssistantDeltaEvent>,
+}
+
+// ==================== 队列查询和管理 ====================
+
+/// 队列事件摘要（用于前端显示）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatQueueEventSummary {
+    pub id: String,
+    pub source: ChatEventSource,
+    pub created_at: String,
+    pub message_preview: String,
+    pub conversation_id: String,
+}
+
+/// 获取队列状态
+pub(crate) fn get_queue_snapshot(state: &AppState) -> Result<Vec<ChatQueueEventSummary>, String> {
+    let queue = state
+        .chat_pending_queue
+        .lock()
+        .map_err(|_| "Failed to lock chat pending queue".to_string())?;
+
+    let summaries = queue
+        .iter()
+        .map(|event| {
+            let message_preview = event
+                .messages
+                .first()
+                .and_then(|msg| {
+                    msg.parts.iter().find_map(|part| match part {
+                        MessagePart::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_default();
+
+            let preview = if message_preview.len() > 50 {
+                format!("{}...", &message_preview[..50])
+            } else {
+                message_preview
+            };
+
+            ChatQueueEventSummary {
+                id: event.id.clone(),
+                source: event.source.clone(),
+                created_at: event.created_at.clone(),
+                message_preview: preview,
+                conversation_id: event.conversation_id.clone(),
+            }
+        })
+        .collect();
+
+    Ok(summaries)
+}
+
+/// 从队列中移除指定事件
+pub(crate) fn remove_from_queue(state: &AppState, event_id: &str) -> Result<Option<ChatPendingEvent>, String> {
+    let mut queue = state
+        .chat_pending_queue
+        .lock()
+        .map_err(|_| "Failed to lock chat pending queue".to_string())?;
+
+    if let Some(pos) = queue.iter().position(|e| e.id == event_id) {
+        let removed = queue.remove(pos);
+        eprintln!(
+            "[聊天调度] 从队列移除事件: id={}, source={:?}, queue_len={}",
+            event_id, removed.as_ref().map(|e| &e.source), queue.len()
+        );
+        drop(queue);
+        complete_pending_chat_events_with_error(state, &[event_id.to_string()], "消息已从队列移除")?;
+        Ok(removed)
+    } else {
+        Ok(None)
+    }
+}
+
+// ==================== 队列管理函数 ====================
+
+/// 入队函数：添加事件到队列
+pub(crate) fn enqueue_chat_event(
+    state: &AppState,
+    event: ChatPendingEvent,
+) -> Result<(), String> {
+    let started_at = std::time::Instant::now();
+    let mut queue = state
+        .chat_pending_queue
+        .lock()
+        .map_err(|_| "Failed to lock chat pending queue".to_string())?;
+
+    let queue_len_before = queue.len();
+    queue.push_back(event.clone());
+    let elapsed_ms = started_at.elapsed().as_millis();
+
+    eprintln!(
+        "[聊天调度] 完成: 事件入队, id={}, source={:?}, activate={}, queue_len={}->{}, elapsed_ms={}",
+        event.id, event.source, event.activate_assistant, queue_len_before, queue.len(), elapsed_ms
+    );
+
+    Ok(())
+}
+
+pub(crate) fn register_chat_event_runtime(
+    state: &AppState,
+    event_id: &str,
+    on_delta: tauri::ipc::Channel<AssistantDeltaEvent>,
+    sender: tokio::sync::oneshot::Sender<Result<SendChatResult, String>>,
+) -> Result<(), String> {
+    state
+        .pending_chat_delta_channels
+        .lock()
+        .map_err(|_| "Failed to lock pending chat delta channels".to_string())?
+        .insert(event_id.to_string(), on_delta);
+    state
+        .pending_chat_result_senders
+        .lock()
+        .map_err(|_| "Failed to lock pending chat result senders".to_string())?
+        .insert(event_id.to_string(), sender);
+    Ok(())
+}
+
+pub(crate) fn trigger_chat_queue_processing(state: &AppState) {
+    let state_clone = state.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = process_chat_queue(&state_clone).await {
+            eprintln!("[聊天调度] process_chat_queue 失败: {}", err);
+        }
+    });
+}
+
+/// 批量出队：一次性取走当前所有待处理事件
+///
+/// 注意：这里故意不是“一条一条弹出”。
+/// 我们需要把同一时刻已经排到门口的消息视为同一批候选输入，
+/// 之后再按 conversation_id 分组，统一决定这批消息如何进入正式历史。
+fn dequeue_batch(
+    state: &AppState,
+) -> Result<Vec<ChatPendingEvent>, String> {
+    let mut queue = state
+        .chat_pending_queue
+        .lock()
+        .map_err(|_| "Failed to lock chat pending queue".to_string())?;
+
+    let batch: Vec<ChatPendingEvent> = queue.drain(..).collect();
+    Ok(batch)
+}
+
+// ==================== 状态机管理函数 ====================
+
+/// 获取当前状态
+pub(crate) fn get_main_session_state(state: &AppState) -> Result<MainSessionState, String> {
+    let state_guard = state
+        .main_session_state
+        .lock()
+        .map_err(|_| "Failed to lock main session state".to_string())?;
+    Ok(state_guard.clone())
+}
+
+/// 设置状态并记录日志
+pub(crate) fn set_main_session_state(
+    state: &AppState,
+    new_state: MainSessionState,
+) -> Result<(), String> {
+    let mut state_guard = state
+        .main_session_state
+        .lock()
+        .map_err(|_| "Failed to lock main session state".to_string())?;
+
+    let old_state = state_guard.clone();
+    *state_guard = new_state.clone();
+
+    let old_state_cn = match old_state {
+        MainSessionState::Idle => "空闲",
+        MainSessionState::AssistantStreaming => "助理流式输出",
+        MainSessionState::OrganizingContext => "整理上下文",
+    };
+    let new_state_cn = match new_state {
+        MainSessionState::Idle => "空闲",
+        MainSessionState::AssistantStreaming => "助理流式输出",
+        MainSessionState::OrganizingContext => "整理上下文",
+    };
+
+    eprintln!(
+        "[聊天调度] 状态转换: {} -> {}",
+        old_state_cn, new_state_cn
+    );
+
+    // 可选：发送事件到前端
+    // if let Some(app_handle) = state.app_handle.lock().ok().and_then(|g| g.as_ref()) {
+    //     let _ = app_handle.emit("main-session-state-changed", &new_state);
+    // }
+
+    Ok(())
+}
+
+/// 检查是否可以出队
+///
+/// 只有主助理完全空闲时，才允许把下一批消息刷入历史。
+/// 这样可以保证：
+/// 1. 当前轮次流式期间，新消息只会排队，不会打断当前轮次；
+/// 2. 整理上下文期间，也不会出现“半整理、半对话”的混乱状态；
+/// 3. 每一轮开始前，输入集都是稳定且封闭的一批消息。
+pub(crate) fn can_dequeue(state: &AppState) -> Result<bool, String> {
+    let current_state = get_main_session_state(state)?;
+    let queue = state
+        .chat_pending_queue
+        .lock()
+        .map_err(|_| "Failed to lock chat pending queue".to_string())?;
+
+    let can = current_state == MainSessionState::Idle && !queue.is_empty();
+
+    if !can && !queue.is_empty() {
+        let state_cn = match current_state {
+            MainSessionState::Idle => "空闲",
+            MainSessionState::AssistantStreaming => "助理流式输出",
+            MainSessionState::OrganizingContext => "整理上下文",
+        };
+        eprintln!(
+            "[聊天调度] 跳过: 出队被阻塞, state={}, queue_len={}, 原因=主助理未空闲或仍在整理上下文",
+            state_cn, queue.len()
+        );
+    }
+
+    Ok(can)
+}
+
+// ==================== 出队调度器 ====================
+
+/// 主出队处理函数
+///
+/// 语义上，它是在做“下一轮候选输入结算”：
+/// 1. 把当前门口的所有消息先收进来；
+/// 2. 按会话分别批处理；
+/// 3. 每个会话先批量写正式历史；
+/// 4. 再决定该会话是否需要开启新的主助理轮次。
+pub(crate) async fn process_chat_queue(state: &AppState) -> Result<(), String> {
+    loop {
+        // 获取出队锁并批量获取事件，然后立即释放锁
+        let batch = {
+            let _dequeue_guard = state
+                .dequeue_lock
+                .lock()
+                .map_err(|_| "Failed to lock dequeue lock".to_string())?;
+
+            // 检查是否可以出队
+            if !can_dequeue(state)? {
+                return Ok(());
+            }
+
+            // 批量获取所有待处理事件
+            dequeue_batch(state)?
+        }; // _dequeue_guard 在这里被释放
+
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        eprintln!(
+            "[CHAT-SCHEDULER] Processing batch: size={}, events={:?}",
+            batch.len(),
+            batch.iter().map(|e| (&e.id, &e.source)).collect::<Vec<_>>()
+        );
+
+        // 按会话分组，并保持首次出现顺序稳定。
+        // 这样不同会话互不串扰，而同一会话在同一批里收到的消息，
+        // 又能以稳定顺序一起进入该会话的下一轮输入集。
+        let mut grouped: std::collections::HashMap<String, Vec<ChatPendingEvent>> = std::collections::HashMap::new();
+        let mut conversation_order = Vec::<String>::new();
+        for event in batch {
+            let conversation_id = event.conversation_id.clone();
+            if !grouped.contains_key(&conversation_id) {
+                conversation_order.push(conversation_id.clone());
+            }
+            grouped
+                .entry(conversation_id)
+                .or_insert_with(Vec::new)
+                .push(event);
+        }
+
+        // 逐会话处理
+        for conversation_id in conversation_order {
+            let Some(events) = grouped.remove(&conversation_id) else {
+                continue;
+            };
+            if let Err(err) = process_conversation_batch(state, &conversation_id, events).await {
+                eprintln!("[CHAT-SCHEDULER] Error processing conversation {}: {}", conversation_id, err);
+            }
+        }
+
+        // 处理完一批后，检查是否还有新事件，如果有则继续循环
+        // 如果没有或状态不是 Idle，则退出
+    }
+}
+
+/// 处理单个会话的批次
+///
+/// 这里严格遵守“先历史，后激活”的顺序：
+/// 1. 不论是否需要激活主助理，先把整批消息写入正式历史；
+/// 2. 写入时统一刷新 created_at，确保消息生效时间以入历史为准；
+/// 3. 然后再判断 should_activate：
+///    - false：只更新历史，不开启流式；
+///    - true：先通知前端历史已落地，再开启新的主助理轮次。
+async fn process_conversation_batch(
+    state: &AppState,
+    conversation_id: &str,
+    events: Vec<ChatPendingEvent>,
+) -> Result<(), String> {
+    let event_ids = events.iter().map(|event| event.id.clone()).collect::<Vec<_>>();
+    let latest_user_text = latest_user_text_from_events(&events);
+    let history_flush_time = now_iso();
+    let oldest_queue_created_at = events
+        .iter()
+        .map(|event| event.created_at.trim())
+        .find(|value| !value.is_empty())
+        .unwrap_or("");
+
+    // 1. 先写入所有消息到会话记录。
+    //
+    // 这里统一覆盖 created_at 为 history_flush_time，
+    // 目的是把“正式进入历史的时间”作为消息的业务生效时间。
+    // 入队时间只用于队列观察，不用于正式会话排序和轮次判断。
+    {
+        let guard = state.state_lock.lock()
+            .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
+
+        let mut data = read_app_data(&state.data_path)?;
+        if let Some(conversation) = data.conversations.iter_mut()
+            .find(|c| c.id == conversation_id && c.summary.trim().is_empty())
+        {
+            for event in &events {
+                for message in &event.messages {
+                    let mut persisted = message.clone();
+                    persisted.created_at = history_flush_time.clone();
+                    conversation.messages.push(persisted.clone());
+                    match persisted.role.trim() {
+                        "user" => conversation.last_user_at = Some(history_flush_time.clone()),
+                        "assistant" => {
+                            conversation.last_assistant_at = Some(history_flush_time.clone())
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            conversation.updated_at = history_flush_time.clone();
+            write_app_data(&state.data_path, &data)?;
+        } else {
+            drop(guard);
+            complete_pending_chat_events_with_error(
+                state,
+                &event_ids,
+                &format!("目标会话不存在，conversationId={conversation_id}"),
+            )?;
+            return Err(format!("目标会话不存在，conversationId={conversation_id}"));
+        }
+        drop(guard);
+    }
+
+    // 2. 判断是否需要激活主助理。
+    // 这一步故意放在“写历史之后”，避免出现前端先开流式、
+    // 但本批消息还没正式落入历史的时序错乱。
+    let should_activate = events.iter().any(|e| e.activate_assistant);
+    let activate_status = if should_activate { "开始" } else { "跳过" };
+
+    eprintln!(
+        "[聊天调度] 批次写入完成: conversation_id={}, message_count={}, activate={}, oldest_queue_created_at={}",
+        conversation_id,
+        events.iter().map(|e| e.messages.len()).sum::<usize>(),
+        activate_status,
+        oldest_queue_created_at,
+    );
+
+    // 3. 如果需要激活，调用主助理。
+    if should_activate {
+        // 取第一个事件的会话信息
+        if let Some(first_event) = events.first() {
+            let mut activations = take_queued_chat_activations(state, &event_ids)?;
+            // 先向当前批次相关的前端监听方广播 history_flushed。
+            //
+            // 前端在收到这个信号后，才允许把本批消息视为“正式进入当前窗口”，
+            // 然后再切换到新的主助理流式显示。
+            for active in &activations {
+                let _ = active.on_delta.send(AssistantDeltaEvent {
+                    delta: String::new(),
+                    kind: Some("history_flushed".to_string()),
+                    tool_name: None,
+                    tool_status: None,
+                    message: Some(conversation_id.to_string()),
+                });
+            }
+            // 同一批里可能有多个激活请求，但前台主助理轮次只能有一个。
+            // 因此这里只保留最后一个激活请求作为实际流式绑定对象。
+            let activation = activations.pop();
+            if let Some(active) = activation.as_ref() {
+                eprintln!(
+                    "[聊天调度] 批次流式绑定: conversation_id={}, event_id={}, oldest_queue_created_at={}",
+                    conversation_id, active.event_id, oldest_queue_created_at
+                );
+            }
+            match activate_main_assistant(
+                state,
+                &first_event.session_info,
+                conversation_id,
+                activation,
+                oldest_queue_created_at,
+            ).await {
+                Ok(result) => {
+                    complete_pending_chat_events_with_result(state, &event_ids, result)?;
+                }
+                Err(err) => {
+                    complete_pending_chat_events_with_error(state, &event_ids, &err)?;
+                    return Err(err);
+                }
+            }
+        }
+    } else {
+        // 不激活时，本批消息依然已经是正式历史的一部分。
+        // 这里只回传一个“已落地但未开启新轮次”的结果，前端应刷新历史，
+        // 但不应启动新的主助理流式显示。
+        complete_pending_chat_events_with_result(
+            state,
+            &event_ids,
+            SendChatResult {
+                conversation_id: conversation_id.to_string(),
+                latest_user_text,
+                assistant_text: String::new(),
+                reasoning_standard: String::new(),
+                reasoning_inline: String::new(),
+                archived_before_send: false,
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+/// 激活主助理
+///
+/// 注意：这里只负责启动“下一轮主助理”，不负责把新消息写进历史。
+/// 新消息进入历史的动作已经在 process_conversation_batch 中完成。
+async fn activate_main_assistant(
+    state: &AppState,
+    session_info: &ChatSessionInfo,
+    conversation_id: &str,
+    activation: Option<QueuedChatActivation>,
+    oldest_queue_created_at: &str,
+) -> Result<SendChatResult, String> {
+    eprintln!(
+        "[聊天调度] 开始: 激活主助理, conversation_id={}, api_config_id={}, agent_id={}, oldest_queue_created_at={}",
+        conversation_id,
+        session_info.api_config_id,
+        session_info.agent_id,
+        oldest_queue_created_at,
+    );
+
+    // 设置状态为 AssistantStreaming
+    set_main_session_state(state, MainSessionState::AssistantStreaming)?;
+
+    // 构造 trigger_only 请求
+    let request = SendChatRequest {
+        trigger_only: true,  // 不写入新消息，只触发助理回复
+        session: Some(SessionSelector {
+            api_config_id: Some(session_info.api_config_id.clone()),
+            agent_id: session_info.agent_id.clone(),
+            conversation_id: Some(conversation_id.to_string()),
+        }),
+        payload: ChatInputPayload {
+            text: None,
+            display_text: None,
+            images: None,
+            audios: None,
+            model: None,
+            extra_text_blocks: None,
+            provider_meta: None,
+        },
+        speaker_agent_id: None,
+    };
+
+    // 创建一个空的 delta channel
+    let noop_channel = tauri::ipc::Channel::new(|_event| {
+        // 不处理，实际流式输出由前端的 channel 处理
+        Ok(())
+    });
+    let active_channel = activation
+        .as_ref()
+        .map(|item| item.on_delta.clone())
+        .unwrap_or(noop_channel);
+
+    // 调用 send_chat_message_inner
+    let result = send_chat_message_inner(request, state, &active_channel).await;
+
+    // 回复完成，切换回 Idle
+    set_main_session_state(state, MainSessionState::Idle)?;
+
+    // 不在这里递归调用 process_chat_queue，避免 Send 问题
+    // 改为在外部调用
+
+    result
+}
+
+fn latest_user_text_from_events(events: &[ChatPendingEvent]) -> String {
+    events
+        .iter()
+        .flat_map(|event| event.messages.iter())
+        .rev()
+        .find_map(|message| {
+            if message.role.trim() != "user" {
+                return None;
+            }
+            message.parts.iter().find_map(|part| match part {
+                MessagePart::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn take_queued_chat_activations(
+    state: &AppState,
+    event_ids: &[String],
+) -> Result<Vec<QueuedChatActivation>, String> {
+    let mut channels = state
+        .pending_chat_delta_channels
+        .lock()
+        .map_err(|_| "Failed to lock pending chat delta channels".to_string())?;
+    let mut activations = Vec::<QueuedChatActivation>::new();
+    for event_id in event_ids {
+        if let Some(on_delta) = channels.remove(event_id) {
+            activations.push(QueuedChatActivation {
+                event_id: event_id.clone(),
+                on_delta,
+            });
+        }
+    }
+    Ok(activations)
+}
+
+fn complete_pending_chat_events_with_result(
+    state: &AppState,
+    event_ids: &[String],
+    result: SendChatResult,
+) -> Result<(), String> {
+    let mut channels = state
+        .pending_chat_delta_channels
+        .lock()
+        .map_err(|_| "Failed to lock pending chat delta channels".to_string())?;
+    let mut senders = state
+        .pending_chat_result_senders
+        .lock()
+        .map_err(|_| "Failed to lock pending chat result senders".to_string())?;
+    for event_id in event_ids {
+        channels.remove(event_id);
+        if let Some(sender) = senders.remove(event_id) {
+            let _ = sender.send(Ok(result.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn complete_pending_chat_events_with_error(
+    state: &AppState,
+    event_ids: &[String],
+    error: &str,
+) -> Result<(), String> {
+    let mut channels = state
+        .pending_chat_delta_channels
+        .lock()
+        .map_err(|_| "Failed to lock pending chat delta channels".to_string())?;
+    let mut senders = state
+        .pending_chat_result_senders
+        .lock()
+        .map_err(|_| "Failed to lock pending chat result senders".to_string())?;
+    for event_id in event_ids {
+        channels.remove(event_id);
+        if let Some(sender) = senders.remove(event_id) {
+            let _ = sender.send(Err(error.to_string()));
+        }
+    }
+    Ok(())
+}

@@ -179,34 +179,7 @@
         </div>
       </template>
 
-      <!-- 发送中的即时反馈 -->
-      <template v-if="chatting">
-        <!-- 用户消息 (与历史消息样式一致) -->
-        <div class="chat chat-end mt-3">
-          <div class="chat-image avatar self-start">
-            <div class="w-7 rounded-full">
-              <img v-if="userAvatarUrl" :src="userAvatarUrl" :alt="userAlias || t('archives.roleUser')" />
-              <div v-else class="bg-neutral text-neutral-content w-7 h-7 rounded-full flex items-center justify-center text-xs">
-                {{ avatarInitial(userAlias || t("archives.roleUser")) }}
-              </div>
-            </div>
-          </div>
-          <div class="chat-header mb-1 flex items-center gap-2">
-            <span class="text-xs text-base-content">{{ userAlias || t("archives.roleUser") }}</span>
-          </div>
-          <div class="chat-bubble max-w-[92%]">
-            <div v-if="latestUserText" class="whitespace-pre-wrap">{{ latestUserText }}</div>
-            <div v-if="latestUserImages.length > 0" class="mt-2 grid gap-1">
-              <template v-for="(img, idx) in latestUserImages" :key="`streaming-user-img-${idx}`">
-                <img v-if="isImageMime(img.mime)" :src="`data:${img.mime};base64,${img.bytesBase64}`" loading="lazy" decoding="async" class="rounded max-h-28 object-contain bg-base-100/40" />
-                <div v-else-if="isPdfMime(img.mime)" class="badge badge-outline gap-1 py-3 w-fit">
-                  <FileText class="h-3.5 w-3.5" />
-                  <span class="text-[11px]">PDF</span>
-                </div>
-              </template>
-            </div>
-          </div>
-        </div>
+      <template v-if="showAssistantStreamingPreview">
         <!-- 助手流式响应 -->
         <div class="chat chat-start mt-3">
           <div class="chat-image avatar self-start">
@@ -267,6 +240,19 @@
               ></span>
               <span>{{ toolStatusText }}</span>
             </div>
+            <div class="mt-2 flex items-center gap-1.5">
+              <button
+                type="button"
+                class="btn btn-warning btn-sm btn-circle"
+                :title="`${t('chat.stop')} / 正在回复`"
+                @click="$emit('stopChat')"
+              >
+                <span class="relative flex h-4 w-4 items-center justify-center">
+                  <Square class="h-3.5 w-3.5 fill-current" />
+                  <span class="absolute -right-1.5 -top-1.5 loading loading-spinner loading-xs"></span>
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       </template>
@@ -313,6 +299,14 @@
     </div>
 
     <div class="shrink-0 border-t border-base-300 bg-base-100 p-2">
+      <!-- 队列预览 -->
+      <ChatQueuePreview
+        :queue-events="queueEvents"
+        :session-state="sessionState"
+        @recall-to-input="handleRecallToInput"
+        @remove-from-queue="removeFromQueue"
+      />
+
       <div
         v-if="linkOpenErrorText"
         class="alert alert-warning mb-2 py-2 px-3 text-sm whitespace-pre-wrap break-all max-h-24 overflow-auto"
@@ -365,10 +359,15 @@
           >
             <Mic class="h-3.5 w-3.5" />
           </button>
-          <button class="btn btn-sm btn-circle shrink-0" :class="{ 'btn-error': chatting, 'btn-primary': !chatting }" :disabled="frozen" @click="chatting ? $emit('stopChat') : $emit('sendChat')">
-                    <Square v-if="chatting" class="h-3 w-3 fill-current" />
-                    <Send v-else class="h-3.5 w-3.5" />
-                  </button>        </div>
+          <button
+            class="btn btn-sm btn-circle btn-primary shrink-0"
+            :disabled="frozen"
+            :title="t('chat.send')"
+            @click="$emit('sendChat')"
+          >
+            <Send class="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -387,6 +386,8 @@ import DOMPurify from "dompurify";
 import twemoji from "twemoji";
 import { invokeTauri } from "../../../services/tauri-api";
 import type { ChatMessageBlock } from "../../../types/app";
+import ChatQueuePreview from "../components/ChatQueuePreview.vue";
+import { useChatQueue } from "../composables/use-chat-queue";
 
 const props = defineProps<{
   userAlias: string;
@@ -435,6 +436,17 @@ const emit = defineEmits<{
   (e: "openSkillList"): void;
 }>();
 const { t } = useI18n();
+
+// 队列管理
+const { queueEvents, sessionState, removeFromQueue } = useChatQueue();
+
+// 从队列退回到输入框
+function handleRecallToInput(event: any) {
+  if (event.source === "user") {
+    localChatInput.value = event.messagePreview;
+    removeFromQueue(event.id);
+  }
+}
 
 const localChatInput = computed({
   get: () => props.chatInput,
@@ -688,6 +700,12 @@ const latestInlineReasoningText = computed(
   () => latestAssistantParts.value.inline || props.latestReasoningInlineText || "",
 );
 const renderedAssistantHtml = computed(() => renderMarkdown(latestAssistantParts.value.visible));
+const showAssistantStreamingPreview = computed(() => {
+  // 只要当前存在前台主助理轮次，就应立即显示助理气泡。
+  // 这样用户一点击发送，就能看到“助理已接手当前轮次”的稳定反馈，
+  // 而不是等第一段 delta 到来后气泡才突然出现。
+  return props.chatting;
+});
 
 function resolvedInlineReasoning(block: ChatMessageBlock): string {
   return splitThinkText(block.text).inline || block.reasoningInline || "";
