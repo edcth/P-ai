@@ -1193,6 +1193,16 @@ async fn send_chat_message_inner(
         }
     };
     let timeline = stage_timeline.lock().ok().map(|items| items.clone());
+    let (mut pipeline_headers, pipeline_tools) = latest_chat_round_headers_and_tools(
+        state,
+        resolved_api_for_log.request_format,
+        &selected_api_for_log.name,
+        &selected_api_for_log.model,
+        &resolved_api_for_log.base_url,
+    );
+    if pipeline_headers.is_empty() {
+        pipeline_headers = masked_auth_headers(&selected_api_for_log.api_key);
+    }
     push_llm_round_log(
         Some(state),
         Some(trace_id),
@@ -1201,8 +1211,8 @@ async fn send_chat_message_inner(
         &selected_api_for_log.name,
         &selected_api_for_log.model,
         &resolved_api_for_log.base_url,
-        Vec::new(),
-        None,
+        pipeline_headers,
+        pipeline_tools,
         serde_json::json!({
             "triggerOnly": trigger_only,
             "queueWaitMs": queue_wait_ms,

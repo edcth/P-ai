@@ -284,6 +284,28 @@ fn push_llm_round_log(
     }
 }
 
+fn latest_chat_round_headers_and_tools(
+    state: &AppState,
+    request_format: RequestFormat,
+    provider_name: &str,
+    model_name: &str,
+    base_url: &str,
+) -> (Vec<LlmRoundLogHeader>, Option<Value>) {
+    let Ok(logs) = state.llm_round_logs.lock() else {
+        return (Vec::new(), None);
+    };
+    let Some(entry) = logs.iter().rev().find(|entry| {
+        entry.scene == "chat"
+            && entry.request_format == request_format.as_str()
+            && entry.provider == provider_name
+            && entry.model == model_name
+            && entry.base_url == base_url
+    }) else {
+        return (Vec::new(), None);
+    };
+    (entry.headers.clone(), entry.tools.clone())
+}
+
 #[tauri::command]
 fn list_recent_llm_round_logs(state: State<'_, AppState>) -> Result<Vec<LlmRoundLogEntry>, String> {
     let logs = state
