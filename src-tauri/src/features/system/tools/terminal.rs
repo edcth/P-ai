@@ -595,7 +595,13 @@ fn terminal_unquote_token(token: &str) -> String {
 #[cfg(target_os = "windows")]
 fn terminal_has_windows_drive_prefix(token: &str) -> bool {
     let bytes = token.as_bytes();
-    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+    if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
+        return false;
+    }
+    if bytes.len() == 2 {
+        return true;
+    }
+    matches!(bytes[2], b'\\' | b'/')
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -642,6 +648,9 @@ fn terminal_command_contains_absolute_path_token(command: &str) -> bool {
         let unquoted = terminal_unquote_token(&token);
         let trimmed = unquoted.trim();
         if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains("://") {
             continue;
         }
         if PathBuf::from(trimmed).is_absolute() || terminal_has_windows_drive_prefix(trimmed) {

@@ -124,6 +124,9 @@ fn sandbox_run_with_windows_job_backend_blocking(
     let status = child
         .wait()
         .map_err(|err| format!("terminal_exec wait failed: {err}"))?;
+    // Important: close the job as soon as the root process exits so descendant
+    // processes do not keep inherited stdout/stderr handles alive forever.
+    drop(job);
     let stdout = stdout_reader
         .join()
         .map_err(|_| "Join stdout reader thread failed.".to_string())?;

@@ -1359,6 +1359,48 @@ fn parse_delegate_mode(raw: Option<&str>) -> Result<DelegateMode, String> {
     }
 }
 
+fn debug_text_snippet(text: &str, max_chars: usize) -> String {
+    let compact = text.trim().replace('\r', "").replace('\n', "\\n");
+    if compact.chars().count() <= max_chars {
+        compact
+    } else {
+        let head = compact.chars().take(max_chars).collect::<String>();
+        format!("{head}...")
+    }
+}
+
+fn debug_exec_result_summary(value: &Value) -> String {
+    let Some(obj) = value.as_object() else {
+        return debug_value_snippet(value, 320);
+    };
+    let ok = obj.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let approved = obj.get("approved").and_then(Value::as_bool);
+    let timed_out = obj.get("timedOut").and_then(Value::as_bool).unwrap_or(false);
+    let exit_code = obj.get("exitCode").and_then(Value::as_i64).unwrap_or(-1);
+    let duration_ms = obj.get("durationMs").and_then(Value::as_u64).unwrap_or(0);
+    let blocked_reason = obj
+        .get("blockedReason")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let command = obj.get("command").and_then(Value::as_str).unwrap_or_default();
+    let stdout = obj.get("stdout").and_then(Value::as_str).unwrap_or_default();
+    let stderr = obj.get("stderr").and_then(Value::as_str).unwrap_or_default();
+    format!(
+        "ok={}, approved={}, timedOut={}, exitCode={}, durationMs={}, blockedReason={}, command={}, stdout={}, stderr={}",
+        ok,
+        approved
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "n/a".to_string()),
+        timed_out,
+        exit_code,
+        duration_ms,
+        if blocked_reason.is_empty() { "none" } else { blocked_reason },
+        debug_text_snippet(command, 160),
+        debug_text_snippet(stdout, 220),
+        debug_text_snippet(stderr, 220),
+    )
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct TaskToolArgsWire {
     action: String,
@@ -2610,10 +2652,16 @@ impl Tool for BuiltinTerminalExecTool {
         .await
         .map_err(ToolInvokeError::from);
         match &result {
-            Ok(v) => eprintln!(
-                "[TOOL-DEBUG] execute_builtin_tool.ok name=exec result={}",
-                debug_value_snippet(v, 240)
-            ),
+            Ok(v) => {
+                eprintln!(
+                    "[TOOL-DEBUG] execute_builtin_tool.ok name=exec result={}",
+                    debug_value_snippet(v, 240)
+                );
+                eprintln!(
+                    "[TOOL-DEBUG] execute_builtin_tool.ok name=exec summary={}",
+                    debug_exec_result_summary(v)
+                );
+            }
             Err(err) => {
                 eprintln!("[TOOL-DEBUG] execute_builtin_tool.err name=exec err={err}")
             }
