@@ -21,6 +21,22 @@
             </div>
             <input v-model.trim="ws.path" class="input input-bordered input-sm w-full font-mono" :placeholder="t('config.tools.directoryPath')" />
           </div>
+          <div v-if="isWindowsHost" class="grid gap-2">
+            <div class="text-[12px] font-medium">{{ t("config.tools.terminalRuntime") }}</div>
+            <select
+              class="select select-bordered select-sm w-full"
+              :value="terminalShellKindValue"
+              :disabled="terminalShellOptionsLoading || savingConfig"
+              @change="onTerminalShellKindChange"
+            >
+              <option v-for="item in terminalShellOptions" :key="item.kind" :value="item.kind">
+                {{ item.label }}
+              </option>
+            </select>
+            <div class="text-[11px] opacity-70">
+              {{ t("config.tools.terminalRuntimeHint") }}
+            </div>
+          </div>
         </div>
         <div class="mt-3 px-4 pb-4 text-[11px] opacity-70">
           {{ t('config.tools.workspaceHint') }}
@@ -176,7 +192,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ApiConfigItem, AppConfig, PersonaProfile, ToolLoadStatus } from "../../../../types/app";
 import { invokeTauri } from "../../../../services/tauri-api";
@@ -204,6 +220,20 @@ type TerminalSelfCheckResult = {
   shellPath?: string;
   allowedProjectRoots?: string[];
   steps?: TerminalSelfCheckStep[];
+};
+
+type TerminalShellCandidate = {
+  kind: string;
+  label: string;
+  available: boolean;
+  path?: string;
+};
+
+type TerminalShellCandidatesResult = {
+  preferredKind?: string;
+  currentKind?: string;
+  currentPath?: string;
+  options?: TerminalShellCandidate[];
 };
 
 const props = defineProps<{
@@ -237,13 +267,49 @@ const screenshotDialogRef = ref<HTMLDialogElement | null>(null);
 const shellWorkspaceResetting = ref(false);
 const shellWorkspaceStatus = ref("");
 const shellWorkspaceStatusError = ref(false);
+const terminalShellOptionsLoading = ref(false);
+const terminalShellOptions = ref<TerminalShellCandidate[]>([]);
 const GIT_DOWNLOAD_URL = "https://git-scm.com/downloads";
 const POWERSHELL7_DOWNLOAD_URL = "https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows";
 const isWindowsHost = typeof navigator !== "undefined" && /windows/i.test(String(navigator.userAgent || ""));
+const terminalShellKindValue = computed(() => String(props.config.terminalShellKind || "auto"));
 
 function setShellWorkspaceStatus(text: string, isError = false) {
   shellWorkspaceStatus.value = text;
   shellWorkspaceStatusError.value = isError;
+}
+
+async function loadTerminalShellCandidates() {
+  if (!isWindowsHost) return;
+  terminalShellOptionsLoading.value = true;
+  try {
+    const payload = await invokeTauri<TerminalShellCandidatesResult>("list_terminal_shell_candidates");
+    const options = Array.isArray(payload.options) ? payload.options : [];
+    terminalShellOptions.value =
+      options.length > 0
+        ? options
+        : [{ kind: "auto", label: "Auto", available: true }];
+    const preferred = String(payload.preferredKind || "").trim();
+    if (preferred) {
+      props.config.terminalShellKind = preferred;
+    } else if (!String(props.config.terminalShellKind || "").trim()) {
+      props.config.terminalShellKind = "auto";
+    }
+  } catch {
+    terminalShellOptions.value = [{ kind: "auto", label: "Auto", available: true }];
+    if (!String(props.config.terminalShellKind || "").trim()) {
+      props.config.terminalShellKind = "auto";
+    }
+  } finally {
+    terminalShellOptionsLoading.value = false;
+  }
+}
+
+function onTerminalShellKindChange(event: Event) {
+  const target = event.target as HTMLSelectElement | null;
+  const next = String(target?.value || "auto").trim() || "auto";
+  props.config.terminalShellKind = next;
+  emit("toolSwitchChanged");
 }
 
 async function openShellWorkspaceDir() {
@@ -439,6 +505,10 @@ async function runTerminalSelfCheck() {
     terminalSelfCheckRunning.value = false;
   }
 }
+
+onMounted(() => {
+  void loadTerminalShellCandidates();
+});
 
 async function runDesktopScreenshot() {
   if (!props.toolApiConfig?.enableImage) return;

@@ -95,6 +95,7 @@ export type AppConfig = {
   visionApiConfigId?: string;
   sttApiConfigId?: string;
   sttAutoSend?: boolean;
+  terminalShellKind?: string;
   shellWorkspaces: ShellWorkspace[];
   mcpServers: McpServerConfig[];
   departments: DepartmentConfig[];

@@ -163,6 +163,7 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
       options.config.visionApiConfigId = cfg.visionApiConfigId ?? undefined;
       options.config.sttApiConfigId = cfg.sttApiConfigId ?? undefined;
       options.config.sttAutoSend = !!cfg.sttAutoSend;
+      options.config.terminalShellKind = String((cfg as AppConfig).terminalShellKind || "auto").trim() || "auto";
       options.config.departments = Array.isArray((cfg as AppConfig).departments)
         ? (cfg.departments || []).map(mapDepartmentConfig)
         : [];
@@ -236,6 +237,7 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
       options.config.visionApiConfigId = saved.visionApiConfigId ?? undefined;
       options.config.sttApiConfigId = saved.sttApiConfigId ?? undefined;
       options.config.sttAutoSend = !!saved.sttAutoSend;
+      options.config.terminalShellKind = String((saved as AppConfig).terminalShellKind || "auto").trim() || "auto";
       options.config.departments = Array.isArray(saved.departments)
         ? (saved.departments || []).map(mapDepartmentConfig)
         : [];

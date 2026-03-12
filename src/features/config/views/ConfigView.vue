@@ -101,7 +101,7 @@
           :saving-config="savingConfig"
           @update:persona-editor-id="$emit('update:personaEditorId', $event)"
           @tool-switch-changed="$emit('toolSwitchChanged')"
-          @save-api-config="$emit('saveApiConfig')"
+          @save-api-config="onSaveToolsConfig"
           @save-personas="$emit('savePersonas')"
           @open-memory-viewer="$emit('update:configTab', 'memory')"
         />
@@ -360,6 +360,7 @@ const cropperReady = ref(false);
 const localCropError = ref("");
 const avatarEditorTargetId = ref("");
 const memorySyncLocked = ref(false);
+const savingToolsConfig = ref(false);
 let cropper: Cropper | null = null;
 let cropTarget: AvatarTarget | null = null;
 const MIN_RECORD_SECONDS = 1;
@@ -538,6 +539,37 @@ function requestTabChange(nextTab: ConfigTab) {
 
 function onMemorySyncLockChange(locked: boolean) {
   memorySyncLocked.value = !!locked;
+}
+
+async function onSaveToolsConfig() {
+  if (savingToolsConfig.value) return;
+  savingToolsConfig.value = true;
+  const previousShellWorkspaces = Array.isArray(props.config.shellWorkspaces)
+    ? props.config.shellWorkspaces.map((item) => ({
+      name: String(item.name || ""),
+      path: String(item.path || ""),
+      builtIn: !!item.builtIn,
+    }))
+    : [];
+  const previousTerminalShellKind = String(props.config.terminalShellKind || "auto").trim() || "auto";
+  const previousToolMaxIterations = Number(props.config.toolMaxIterations || 10);
+  try {
+    const saved = await Promise.resolve(props.saveConfigAction());
+    if (!saved) {
+      props.config.shellWorkspaces = previousShellWorkspaces;
+      props.config.terminalShellKind = previousTerminalShellKind;
+      props.config.toolMaxIterations = previousToolMaxIterations;
+      props.setStatusAction(t("status.saveConfigFailed", { err: "tools settings save rejected" }));
+    }
+  } catch (error) {
+    props.config.shellWorkspaces = previousShellWorkspaces;
+    props.config.terminalShellKind = previousTerminalShellKind;
+    props.config.toolMaxIterations = previousToolMaxIterations;
+    props.setStatusAction(t("status.saveConfigFailed", { err: String(error) }));
+    throw error;
+  } finally {
+    savingToolsConfig.value = false;
+  }
 }
 
 async function onAvatarFilePicked(event: Event) {

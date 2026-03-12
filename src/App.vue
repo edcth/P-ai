@@ -357,6 +357,7 @@ const config = reactive<AppConfig>({
   visionApiConfigId: undefined,
   sttApiConfigId: undefined,
   sttAutoSend: false,
+  terminalShellKind: "auto",
   shellWorkspaces: [],
   mcpServers: [],
   departments: [],
@@ -1059,6 +1060,8 @@ const appBootstrap = useAppBootstrap({
     config.visionApiConfigId = payload.visionApiConfigId ?? undefined;
     config.sttApiConfigId = payload.sttApiConfigId ?? undefined;
     config.sttAutoSend = !!payload.sttAutoSend;
+    config.terminalShellKind =
+      String(payload.terminalShellKind || config.terminalShellKind || "auto").trim() || "auto";
     config.apiConfigs.splice(
       0,
       config.apiConfigs.length,

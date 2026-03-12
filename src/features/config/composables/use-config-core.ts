@@ -155,6 +155,17 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       options.config.sttAutoSend = false;
     }
     const seenWorkspaceNames = new Set<string>();
+    const terminalShellKind = String(options.config.terminalShellKind || "").trim().toLowerCase();
+    options.config.terminalShellKind =
+      terminalShellKind === "auto"
+      || terminalShellKind === "powershell7"
+      || terminalShellKind === "powershell5"
+      || terminalShellKind === "git-bash"
+      || terminalShellKind === "zsh"
+      || terminalShellKind === "bash"
+      || terminalShellKind === "sh"
+        ? terminalShellKind
+        : "auto";
     const normalizedWorkspaces = [];
     for (const item of options.config.shellWorkspaces || []) {
       const name = String(item?.name || "").trim();
@@ -328,6 +339,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       ...(options.config.visionApiConfigId ? { visionApiConfigId: options.config.visionApiConfigId } : {}),
       ...(options.config.sttApiConfigId ? { sttApiConfigId: options.config.sttApiConfigId } : {}),
       ...(options.config.sttAutoSend ? { sttAutoSend: true } : {}),
+      terminalShellKind: String(options.config.terminalShellKind || "auto"),
       shellWorkspaces: [...(options.config.shellWorkspaces || [])],
       departments: [...(options.config.departments || [])],
       // `cachedTools` is runtime-derived and should not be client-controlled on save.
@@ -382,6 +394,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       visionApiConfigId: options.config.visionApiConfigId,
       sttApiConfigId: options.config.sttApiConfigId,
       sttAutoSend: !!options.config.sttAutoSend,
+      terminalShellKind: String(options.config.terminalShellKind || "auto"),
       shellWorkspaces: [...(options.config.shellWorkspaces || [])],
       departments: [...(options.config.departments || [])],
       mcpServers: [...(options.config.mcpServers || [])],
@@ -419,4 +432,3 @@ export function useConfigCore(options: UseConfigCoreOptions) {
     buildConfigSnapshotJson,
   };
 }
-

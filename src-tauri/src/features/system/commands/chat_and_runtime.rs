@@ -2191,6 +2191,7 @@ fn check_tools_status(
             .collect());
     }
 
+    let runtime_shell = terminal_shell_for_state(&state);
     let mut statuses = Vec::new();
     for tool in selected_agent.tools {
         if let Some(reason) = tool_restricted_by_department(current_department, &tool.id) {
@@ -2243,7 +2244,7 @@ fn check_tools_status(
             "exec" => {
                 #[cfg(target_os = "windows")]
                 {
-                    if state.terminal_shell.kind == "missing-terminal-shell" {
+                    if runtime_shell.kind == "missing-terminal-shell" {
                         (
                             "unavailable".to_string(),
                             "未检测到可用终端。请安装 PowerShell 7（推荐）/ Windows PowerShell 5.1 / Git Bash。"
@@ -2252,7 +2253,7 @@ fn check_tools_status(
                     } else {
                         (
                             "loaded".to_string(),
-                            format!("执行工具可用（{}）", terminal_shell_runtime_label(&state.terminal_shell)),
+                            format!("执行工具可用（{}）", terminal_shell_runtime_label(&runtime_shell)),
                         )
                     }
                 }
@@ -2260,7 +2261,7 @@ fn check_tools_status(
                 {
                     (
                         "loaded".to_string(),
-                        format!("执行工具可用（{}）", terminal_shell_runtime_label(&state.terminal_shell)),
+                        format!("执行工具可用（{}）", terminal_shell_runtime_label(&runtime_shell)),
                     )
                 }
             }

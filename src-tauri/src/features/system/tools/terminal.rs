@@ -1,4 +1,6 @@
 use std::path::Path;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
 
 const TERMINAL_MAX_OUTPUT_BYTES: usize = 256 * 1024;
 const TERMINAL_DEFAULT_TIMEOUT_MS: u64 = 20_000;
@@ -12,7 +14,211 @@ struct TerminalShellProfile {
     args_prefix: Vec<String>,
 }
 
-fn detect_default_terminal_shell() -> TerminalShellProfile {
+#[derive(Debug)]
+struct TerminalLiveShellSession {
+    session_id: String,
+    shell_kind: String,
+    shell_path: String,
+    created_at: String,
+    last_used_at: tokio::sync::Mutex<String>,
+    child: tokio::sync::Mutex<tokio::process::Child>,
+    stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
+    stdout: tokio::sync::Mutex<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    stderr: tokio::sync::Mutex<tokio::io::BufReader<tokio::process::ChildStderr>>,
+    exec_lock: tokio::sync::Mutex<()>,
+}
+
+type TerminalLiveShellSessionHandle = std::sync::Arc<TerminalLiveShellSession>;
+
+fn terminal_live_session_supported(shell: &TerminalShellProfile) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return matches!(shell.kind.as_str(), "powershell7" | "powershell5" | "git-bash");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return matches!(shell.kind.as_str(), "zsh" | "bash" | "sh");
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        return matches!(shell.kind.as_str(), "bash" | "zsh" | "sh");
+    }
+    #[cfg(not(any(target_os = "windows", unix)))]
+    {
+        false
+    }
+}
+
+fn terminal_powershell_escape_literal(input: &str) -> String {
+    input.replace('\'', "''")
+}
+
+fn terminal_bash_escape_literal(input: &str) -> String {
+    input.replace('\'', "'\"'\"'")
+}
+
+#[cfg(target_os = "windows")]
+fn terminal_windows_path_to_bash(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let bytes = raw.as_bytes();
+    if bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'/' && bytes[0].is_ascii_alphabetic() {
+        let drive = (bytes[0] as char).to_ascii_lowercase();
+        let rest = raw[3..].trim_start_matches('/');
+        if rest.is_empty() {
+            return format!("/{drive}");
+        }
+        return format!("/{drive}/{rest}");
+    }
+    raw
+}
+
+fn terminal_live_compose_command(shell: &TerminalShellProfile, cwd: &Path, command: &str, marker: &str) -> String {
+    if matches!(shell.kind.as_str(), "powershell7" | "powershell5") {
+        let cwd_text = terminal_powershell_escape_literal(&cwd.to_string_lossy());
+        return format!(
+            "$ErrorActionPreference='Continue'; try {{ Set-Location -LiteralPath '{cwd_text}'; {command} }} catch {{ Write-Error $_; $global:LASTEXITCODE = 1 }}; $ecaExit = if ($null -eq $LASTEXITCODE) {{ 0 }} else {{ $LASTEXITCODE }}; Write-Output \"{marker}:$ecaExit\""
+        );
+    }
+    if shell.kind == "git-bash" {
+        #[cfg(target_os = "windows")]
+        {
+            let cwd_text = terminal_bash_escape_literal(&terminal_windows_path_to_bash(cwd));
+            return format!(
+                "cd '{cwd_text}' || exit 1\n{command}\nprintf '%s:%s\\n' '{marker}' \"$?\""
+            );
+        }
+    }
+    format!("{command}\nprintf '%s:%s\\n' '{marker}' \"$?\"")
+}
+
+async fn terminal_live_create_session(
+    state: &AppState,
+    session_id: &str,
+    cwd: &Path,
+) -> Result<TerminalLiveShellSessionHandle, String> {
+    let shell = terminal_shell_for_state(state);
+    if !terminal_live_session_supported(&shell) {
+        return Err("live shell session is unsupported for current shell".to_string());
+    }
+    let mut command_builder = tokio::process::Command::new(&shell.path);
+    command_builder.current_dir(cwd);
+    command_builder.stdin(std::process::Stdio::piped());
+    command_builder.stdout(std::process::Stdio::piped());
+    command_builder.stderr(std::process::Stdio::piped());
+    if matches!(shell.kind.as_str(), "powershell7" | "powershell5") {
+        command_builder.arg("-NoLogo");
+        command_builder.arg("-NoProfile");
+        command_builder.arg("-ExecutionPolicy");
+        command_builder.arg("Bypass");
+        command_builder.arg("-Command");
+        command_builder.arg("-");
+    } else if shell.kind == "git-bash" {
+        command_builder.arg("--noprofile");
+        command_builder.arg("--norc");
+    } else if shell.kind == "bash" {
+        command_builder.arg("--noprofile");
+        command_builder.arg("--norc");
+    } else if shell.kind == "zsh" {
+        command_builder.arg("-f");
+    } else {
+        // For live sessions, avoid one-shot flags like -lc/-c.
+        // Keep shell interactive and feed commands via stdin.
+    }
+    let mut child = command_builder
+        .spawn()
+        .map_err(|err| format!("spawn live shell failed: {err}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "capture live shell stdin failed".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "capture live shell stdout failed".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "capture live shell stderr failed".to_string())?;
+
+    Ok(std::sync::Arc::new(TerminalLiveShellSession {
+        session_id: session_id.to_string(),
+        shell_kind: shell.kind.clone(),
+        shell_path: shell.path.clone(),
+        created_at: now_iso(),
+        last_used_at: tokio::sync::Mutex::new(now_iso()),
+        child: tokio::sync::Mutex::new(child),
+        stdin: tokio::sync::Mutex::new(stdin),
+        stdout: tokio::sync::Mutex::new(tokio::io::BufReader::new(stdout)),
+        stderr: tokio::sync::Mutex::new(tokio::io::BufReader::new(stderr)),
+        exec_lock: tokio::sync::Mutex::new(()),
+    }))
+}
+
+async fn terminal_live_session_for(
+    state: &AppState,
+    session_id: &str,
+    cwd: &Path,
+) -> Result<TerminalLiveShellSessionHandle, String> {
+    let normalized = normalize_terminal_tool_session_id(session_id);
+    let runtime_shell = terminal_shell_for_state(state);
+    {
+        let mut sessions = state.terminal_live_sessions.lock().await;
+        if let Some(existing) = sessions.get(&normalized).cloned() {
+            let shell_changed = existing.shell_kind != runtime_shell.kind
+                || existing.shell_path != runtime_shell.path;
+            if !shell_changed {
+                return Ok(existing);
+            }
+            sessions.remove(&normalized);
+            drop(sessions);
+            let mut child = existing.child.lock().await;
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+    }
+    let created = terminal_live_create_session(state, &normalized, cwd).await?;
+    let mut sessions = state.terminal_live_sessions.lock().await;
+    Ok(sessions
+        .entry(normalized)
+        .or_insert_with(|| created.clone())
+        .clone())
+}
+
+async fn terminal_live_close_session(state: &AppState, session_id: &str) -> Result<bool, String> {
+    let normalized = normalize_terminal_tool_session_id(session_id);
+    let removed = {
+        let mut sessions = state.terminal_live_sessions.lock().await;
+        sessions.remove(&normalized)
+    };
+    let Some(handle) = removed else {
+        return Ok(false);
+    };
+    let mut child = handle.child.lock().await;
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    Ok(true)
+}
+
+async fn terminal_live_list_sessions(state: &AppState) -> Vec<Value> {
+    let handles = {
+        let sessions = state.terminal_live_sessions.lock().await;
+        sessions.values().cloned().collect::<Vec<_>>()
+    };
+    let mut out = Vec::<Value>::new();
+    for handle in handles {
+        let last_used_at = handle.last_used_at.lock().await.clone();
+        out.push(serde_json::json!({
+            "sessionId": handle.session_id,
+            "shellKind": handle.shell_kind,
+            "shellPath": handle.shell_path,
+            "createdAt": handle.created_at,
+            "lastUsedAt": last_used_at
+        }));
+    }
+    out
+}
+
+fn detect_terminal_shell_candidates() -> Vec<TerminalShellProfile> {
     #[cfg(target_os = "windows")]
     {
         fn with_args(kind: &str, path: String, args_prefix: &[&str]) -> TerminalShellProfile {
@@ -63,6 +269,7 @@ fn detect_default_terminal_shell() -> TerminalShellProfile {
             out
         }
 
+        let mut out = Vec::<TerminalShellProfile>::new();
         let mut pwsh7_candidates = vec![
             r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(),
             r"C:\Program Files\PowerShell\7-preview\pwsh.exe".to_string(),
@@ -71,7 +278,7 @@ fn detect_default_terminal_shell() -> TerminalShellProfile {
             pwsh7_candidates.push(path);
         }
         if let Some(path) = first_existing_path(&pwsh7_candidates) {
-            return with_args("powershell7", path, &["-NoProfile", "-Command"]);
+            out.push(with_args("powershell7", path, &["-NoProfile", "-Command"]));
         }
 
         let mut powershell5_candidates = Vec::<String>::new();
@@ -90,7 +297,7 @@ fn detect_default_terminal_shell() -> TerminalShellProfile {
             powershell5_candidates.push(path);
         }
         if let Some(path) = first_existing_path(&powershell5_candidates) {
-            return with_args("powershell5", path, &["-NoProfile", "-Command"]);
+            out.push(with_args("powershell5", path, &["-NoProfile", "-Command"]));
         }
 
         let mut git_bash_candidates = vec![
@@ -107,43 +314,43 @@ fn detect_default_terminal_shell() -> TerminalShellProfile {
         }
 
         if let Some(path) = first_existing_path(&git_bash_candidates) {
-            return with_args("git-bash", path, &["-lc"]);
+            out.push(with_args("git-bash", path, &["-lc"]));
         }
-
-        return TerminalShellProfile {
-            kind: "missing-terminal-shell".to_string(),
-            path: String::new(),
-            args_prefix: Vec::new(),
-        };
+        return out;
     }
 
     #[cfg(target_os = "macos")]
     {
+        let mut out = Vec::<TerminalShellProfile>::new();
         let zsh = Path::new("/bin/zsh");
         if zsh.is_file() {
-            return TerminalShellProfile {
+            out.push(TerminalShellProfile {
                 kind: "zsh".to_string(),
                 path: zsh.to_string_lossy().to_string(),
                 args_prefix: vec!["-lc".to_string()],
-            };
+            });
         }
         let bash = Path::new("/bin/bash");
         if bash.is_file() {
-            return TerminalShellProfile {
+            out.push(TerminalShellProfile {
                 kind: "bash".to_string(),
                 path: bash.to_string_lossy().to_string(),
                 args_prefix: vec!["-lc".to_string()],
-            };
+            });
         }
-        return TerminalShellProfile {
-            kind: "sh".to_string(),
-            path: "/bin/sh".to_string(),
-            args_prefix: vec!["-lc".to_string()],
-        };
+        if Path::new("/bin/sh").is_file() {
+            out.push(TerminalShellProfile {
+                kind: "sh".to_string(),
+                path: "/bin/sh".to_string(),
+                args_prefix: vec!["-lc".to_string()],
+            });
+        }
+        return out;
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        let mut out = Vec::<TerminalShellProfile>::new();
         for candidate in ["/bin/bash", "/usr/bin/bash", "/bin/sh"] {
             if Path::new(candidate).is_file() {
                 let kind = Path::new(candidate)
@@ -151,26 +358,82 @@ fn detect_default_terminal_shell() -> TerminalShellProfile {
                     .and_then(|v| v.to_str())
                     .unwrap_or("sh")
                     .to_string();
-                return TerminalShellProfile {
+                out.push(TerminalShellProfile {
                     kind,
                     path: candidate.to_string(),
                     args_prefix: vec!["-lc".to_string()],
-                };
+                });
             }
         }
-        return TerminalShellProfile {
-            kind: "sh".to_string(),
-            path: "/bin/sh".to_string(),
-            args_prefix: vec!["-lc".to_string()],
-        };
+        return out;
     }
 
     #[allow(unreachable_code)]
+    Vec::new()
+}
+
+fn terminal_shell_missing_profile() -> TerminalShellProfile {
     TerminalShellProfile {
-        kind: "shell".to_string(),
-        path: "sh".to_string(),
-        args_prefix: vec!["-lc".to_string()],
+        kind: "missing-terminal-shell".to_string(),
+        path: String::new(),
+        args_prefix: Vec::new(),
     }
+}
+
+fn detect_default_terminal_shell() -> TerminalShellProfile {
+    detect_terminal_shell_candidates()
+        .into_iter()
+        .next()
+        .unwrap_or_else(terminal_shell_missing_profile)
+}
+
+fn terminal_shell_from_candidates(
+    candidates: &[TerminalShellProfile],
+    preferred_kind: &str,
+) -> TerminalShellProfile {
+    let preferred = preferred_kind.trim().to_ascii_lowercase();
+    if preferred != "auto" && !preferred.is_empty() {
+        if let Some(hit) = candidates.iter().find(|item| item.kind == preferred) {
+            return hit.clone();
+        }
+    }
+    candidates
+        .first()
+        .cloned()
+        .unwrap_or_else(terminal_shell_missing_profile)
+}
+
+fn terminal_shell_for_state(state: &AppState) -> TerminalShellProfile {
+    let preferred = state_read_config_cached(state)
+        .map(|cfg| cfg.terminal_shell_kind)
+        .unwrap_or_else(|_| "auto".to_string());
+    terminal_shell_from_candidates(&state.terminal_shell_candidates, &preferred)
+}
+
+fn terminal_shell_candidates_for_ui(
+    state: &AppState,
+) -> (String, TerminalShellProfile, Vec<Value>) {
+    let preferred = state_read_config_cached(state)
+        .map(|cfg| cfg.terminal_shell_kind)
+        .unwrap_or_else(|_| "auto".to_string());
+    let candidates = state.terminal_shell_candidates.clone();
+    let current = terminal_shell_from_candidates(&candidates, &preferred);
+    let mut items = Vec::<Value>::new();
+    items.push(serde_json::json!({
+        "kind": "auto",
+        "label": "Auto",
+        "available": true,
+        "path": ""
+    }));
+    for item in &candidates {
+        items.push(serde_json::json!({
+            "kind": item.kind,
+            "label": terminal_shell_runtime_label(item),
+            "available": true,
+            "path": item.path
+        }));
+    }
+    (preferred, current, items)
 }
 
 fn terminal_shell_runtime_label(shell: &TerminalShellProfile) -> String {
@@ -1149,18 +1412,132 @@ fn terminal_is_timeout_error(err: &str) -> bool {
     err.to_ascii_lowercase().contains("timed out after")
 }
 
+async fn terminal_live_exec_command(
+    state: &AppState,
+    session_id: &str,
+    cwd: &Path,
+    command: &str,
+    timeout_ms: u64,
+) -> Result<SandboxExecutionResult, String> {
+    let session = terminal_live_session_for(state, session_id, cwd).await?;
+    let runtime_shell = terminal_shell_for_state(state);
+    let _session_guard = session.exec_lock.lock().await;
+    let marker = format!("__ECA_DONE__{}", Uuid::new_v4());
+    let wrapped = terminal_live_compose_command(&runtime_shell, cwd, command, &marker);
+    {
+        let mut stdin = session.stdin.lock().await;
+        stdin
+            .write_all(wrapped.as_bytes())
+            .await
+            .map_err(|err| format!("write live shell stdin failed: {err}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|err| format!("write live shell stdin failed: {err}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|err| format!("flush live shell stdin failed: {err}"))?;
+    }
+
+    let started = std::time::Instant::now();
+    let mut stdout_reader = session.stdout.lock().await;
+    let mut stderr_reader = session.stderr.lock().await;
+    let mut stdout_text = String::new();
+    let mut stderr_text = String::new();
+    let mut exit_code = 0i32;
+
+    loop {
+        let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        if elapsed >= timeout_ms {
+            let _ = terminal_live_close_session(state, session_id).await;
+            return Err(format!("terminal_exec timed out after {}ms", timeout_ms));
+        }
+        let remain = timeout_ms.saturating_sub(elapsed).max(1);
+        let mut out_line = String::new();
+        let mut err_line = String::new();
+        let selected = tokio::time::timeout(
+            std::time::Duration::from_millis(remain),
+            async {
+                tokio::select! {
+                    out = stdout_reader.read_line(&mut out_line) => ("stdout", out.map(|n| n as i64), out_line),
+                    err = stderr_reader.read_line(&mut err_line) => ("stderr", err.map(|n| n as i64), err_line),
+                }
+            },
+        )
+        .await;
+        let (stream, read_res, line) = match selected {
+            Ok(value) => value,
+            Err(_) => {
+                let _ = terminal_live_close_session(state, session_id).await;
+                return Err(format!("terminal_exec timed out after {}ms", timeout_ms));
+            }
+        };
+        let n = read_res.map_err(|err| format!("read live shell output failed: {err}"))?;
+        if n == 0 {
+            let _ = terminal_live_close_session(state, session_id).await;
+            return Err("live shell closed unexpectedly".to_string());
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']).to_string();
+        if stream == "stdout" && trimmed.starts_with(&marker) {
+            loop {
+                let drain_elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                if drain_elapsed >= timeout_ms {
+                    break;
+                }
+                let drain_remain = timeout_ms.saturating_sub(drain_elapsed).max(1).min(50);
+                let mut drain_err_line = String::new();
+                let drained = tokio::time::timeout(
+                    std::time::Duration::from_millis(drain_remain),
+                    stderr_reader.read_line(&mut drain_err_line),
+                )
+                .await;
+                let drain_n = match drained {
+                    Ok(result) => result.map_err(|err| format!("read live shell output failed: {err}"))?,
+                    Err(_) => break,
+                };
+                if drain_n == 0 {
+                    break;
+                }
+                stderr_text.push_str(&drain_err_line);
+            }
+            if let Some(idx) = trimmed.rfind(':') {
+                exit_code = trimmed[idx + 1..].trim().parse::<i32>().unwrap_or(0);
+            }
+            break;
+        }
+        if stream == "stdout" {
+            stdout_text.push_str(&line);
+        } else {
+            stderr_text.push_str(&line);
+        }
+    }
+
+    *session.last_used_at.lock().await = now_iso();
+
+    Ok(SandboxExecutionResult {
+        ok: exit_code == 0,
+        exit_code,
+        stdout: stdout_text.into_bytes(),
+        stderr: stderr_text.into_bytes(),
+        duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+        shell_kind: session.shell_kind.clone(),
+        shell_path: session.shell_path.clone(),
+    })
+}
+
 async fn builtin_shell_exec(
     state: &AppState,
     session_id: &str,
+    action: &str,
     command: &str,
     timeout_ms: Option<u64>,
 ) -> Result<Value, String> {
+    let action = action.trim().to_ascii_lowercase();
     let cmd = command.trim();
-    if cmd.is_empty() {
-        return Err("shell_exec.command is empty".to_string());
-    }
+    let runtime_shell = terminal_shell_for_state(state);
     #[cfg(target_os = "windows")]
-    if state.terminal_shell.kind == "missing-terminal-shell" {
+    if runtime_shell.kind == "missing-terminal-shell" {
         return Ok(serde_json::json!({
             "ok": false,
             "approved": false,
@@ -1169,6 +1546,31 @@ async fn builtin_shell_exec(
             "sessionId": normalize_terminal_tool_session_id(session_id),
             "command": cmd
         }));
+    }
+    let normalized_session = normalize_terminal_tool_session_id(session_id);
+    if action == "list" {
+        let sessions = terminal_live_list_sessions(state).await;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "action": "list",
+            "sessions": sessions,
+            "sessionCount": sessions.len(),
+        }));
+    }
+    if action == "close" {
+        let closed = terminal_live_close_session(state, &normalized_session).await?;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "action": "close",
+            "sessionId": normalized_session,
+            "closed": closed,
+        }));
+    }
+    if action != "run" {
+        return Err(format!("shell_exec.action must be run|list|close, got: {action}"));
+    }
+    if cmd.is_empty() {
+        return Err("shell_exec.command is empty".to_string());
     }
     if let Some(reason) = terminal_command_block_reason(cmd) {
         return Err(format!("shell_exec blocked: {reason}"));
@@ -1184,7 +1586,6 @@ async fn builtin_shell_exec(
         }));
     }
 
-    let normalized_session = normalize_terminal_tool_session_id(session_id);
     let session_root_locked = terminal_session_has_locked_root(state, &normalized_session);
     let allowed_project_roots = terminal_allowed_project_roots_canonical(state)?
         .iter()
@@ -1332,15 +1733,18 @@ async fn builtin_shell_exec(
         }
     }
 
-    let execution = match sandbox_execute_command(state, &normalized_session, cmd, &cwd, timeout_ms)
-        .await
-    {
+    let execution_result = if terminal_live_session_supported(&runtime_shell) {
+        terminal_live_exec_command(state, &normalized_session, &cwd, cmd, timeout_ms).await
+    } else {
+        sandbox_execute_command(state, &normalized_session, cmd, &cwd, timeout_ms).await
+    };
+    let execution = match execution_result {
         Ok(execution) => execution,
         Err(err) if terminal_is_timeout_error(&err) => {
             return Ok(serde_json::json!({
                 "ok": false,
-                "shellKind": state.terminal_shell.kind,
-                "shellPath": state.terminal_shell.path,
+                "shellKind": runtime_shell.kind,
+                "shellPath": runtime_shell.path,
                 "sessionId": normalized_session,
                 "rootPath": session_root.to_string_lossy().to_string(),
                 "workspacePath": state.llm_workspace_path.to_string_lossy().to_string(),
@@ -1377,6 +1781,7 @@ async fn builtin_shell_exec(
         "stderr": stderr,
         "durationMs": execution.duration_ms,
         "timedOut": false,
+        "sessionManaged": terminal_live_session_supported(&runtime_shell),
         "truncated": stdout_truncated || stderr_truncated,
         "stdoutTruncated": stdout_truncated,
         "stderrTruncated": stderr_truncated

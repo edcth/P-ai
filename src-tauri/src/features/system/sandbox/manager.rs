@@ -51,22 +51,23 @@ impl SandboxManager {
     ) -> Result<SandboxExecutionResult, String> {
         // Defense in depth: backend entrance re-checks cwd policy.
         sandbox_assert_cwd_allowed(state, &request.session_id, &request.cwd)?;
+        let runtime_shell = terminal_shell_for_state(state);
         match self.backend {
             #[cfg(target_os = "windows")]
             SandboxBackendKind::WindowsJobBackend => {
-                sandbox_run_with_windows_job_backend(&state.terminal_shell, &request).await
+                sandbox_run_with_windows_job_backend(&runtime_shell, &request).await
             }
             #[cfg(target_os = "linux")]
             SandboxBackendKind::LinuxBubblewrapBackend => {
-                sandbox_run_with_linux_bwrap_backend(&state.terminal_shell, &request).await
+                sandbox_run_with_linux_bwrap_backend(&runtime_shell, &request).await
             }
             #[cfg(target_os = "macos")]
             SandboxBackendKind::MacosSeatbeltBackend => {
-                sandbox_run_with_macos_seatbelt_backend(&state.terminal_shell, &request).await
+                sandbox_run_with_macos_seatbelt_backend(&runtime_shell, &request).await
             }
             #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
             SandboxBackendKind::ProcessBackend => {
-                sandbox_run_with_process_backend(&state.terminal_shell, &request).await
+                sandbox_run_with_process_backend(&runtime_shell, &request).await
             }
         }
     }

@@ -180,15 +180,16 @@ struct TerminalSelfCheckStepResult {
 #[tauri::command]
 async fn terminal_self_check(state: State<'_, AppState>) -> Result<Value, String> {
     let session_id = normalize_terminal_tool_session_id("ui-terminal-self-check");
+    let runtime_shell = terminal_shell_for_state(&state);
     #[cfg(target_os = "windows")]
-    if state.terminal_shell.kind == "missing-terminal-shell" {
+    if runtime_shell.kind == "missing-terminal-shell" {
         return Ok(serde_json::json!({
             "ok": false,
             "blockedReason": "missing_terminal_shell",
             "message": "No supported shell was detected on Windows. Install PowerShell 7 (recommended), Windows PowerShell 5.1, or Git Bash.",
             "sessionId": session_id,
-            "shellKind": state.terminal_shell.kind,
-            "shellPath": state.terminal_shell.path,
+            "shellKind": runtime_shell.kind,
+            "shellPath": runtime_shell.path,
             "steps": []
         }));
     }
@@ -200,7 +201,7 @@ async fn terminal_self_check(state: State<'_, AppState>) -> Result<Value, String
         .map(|v| v.to_string_lossy().to_string())
         .collect::<Vec<_>>();
 
-    let steps = if state.terminal_shell.kind.starts_with("powershell") {
+    let steps = if runtime_shell.kind.starts_with("powershell") {
         vec![
             "Get-Location",
             "$PSVersionTable.PSVersion.ToString()",
@@ -253,10 +254,21 @@ async fn terminal_self_check(state: State<'_, AppState>) -> Result<Value, String
         "sessionId": session_id,
         "rootPath": root_path.to_string_lossy().to_string(),
         "cwd": cwd.to_string_lossy().to_string(),
-        "shellKind": state.terminal_shell.kind,
-        "shellPath": state.terminal_shell.path,
+        "shellKind": runtime_shell.kind,
+        "shellPath": runtime_shell.path,
         "allowedProjectRoots": allowed_project_roots,
         "steps": results,
+    }))
+}
+
+#[tauri::command]
+fn list_terminal_shell_candidates(state: State<'_, AppState>) -> Result<Value, String> {
+    let (preferred_kind, current, options) = terminal_shell_candidates_for_ui(&state);
+    Ok(serde_json::json!({
+        "preferredKind": preferred_kind,
+        "currentKind": current.kind,
+        "currentPath": current.path,
+        "options": options,
     }))
 }
 

@@ -311,6 +311,7 @@ fn main() {
             xcap,
             desktop_wait,
             terminal_self_check,
+            list_terminal_shell_candidates,
             open_chat_shell_workspace_dir,
             reset_chat_shell_workspace,
             get_chat_shell_workspace,

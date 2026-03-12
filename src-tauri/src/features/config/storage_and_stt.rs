@@ -226,6 +226,14 @@ fn normalize_shell_workspaces(config: &mut AppConfig) {
     config.shell_workspaces = normalized;
 }
 
+fn normalize_terminal_shell_kind(config: &mut AppConfig) {
+    let raw = config.terminal_shell_kind.trim().to_ascii_lowercase();
+    config.terminal_shell_kind = match raw.as_str() {
+        "auto" | "powershell7" | "powershell5" | "git-bash" | "zsh" | "bash" | "sh" => raw,
+        _ => "auto".to_string(),
+    };
+}
+
 fn normalize_mcp_servers(config: &mut AppConfig) {
     let mut out = Vec::<McpServerConfig>::new();
     let mut seen = std::collections::HashSet::<String>::new();
@@ -510,6 +518,7 @@ fn normalize_app_config(config: &mut AppConfig) {
     if config.stt_api_config_id.is_none() {
         config.stt_auto_send = false;
     }
+    normalize_terminal_shell_kind(config);
     normalize_shell_workspaces(config);
     normalize_mcp_servers(config);
     normalize_departments(config);

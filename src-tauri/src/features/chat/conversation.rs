@@ -687,6 +687,7 @@ fn departments_only_config(departments: &[DepartmentConfig]) -> AppConfig {
         vision_api_config_id: None,
         stt_api_config_id: None,
         stt_auto_send: false,
+        terminal_shell_kind: default_terminal_shell_kind(),
         shell_workspaces: Vec::new(),
         mcp_servers: Vec::new(),
         departments: departments.to_vec(),

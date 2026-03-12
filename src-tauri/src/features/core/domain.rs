@@ -547,6 +547,10 @@ fn default_ui_font() -> String {
     "auto".to_string()
 }
 
+fn default_terminal_shell_kind() -> String {
+    "auto".to_string()
+}
+
 fn default_api_temperature() -> f64 {
     1.0
 }
@@ -608,6 +612,8 @@ struct AppConfig {
     stt_api_config_id: Option<String>,
     #[serde(default)]
     stt_auto_send: bool,
+    #[serde(default = "default_terminal_shell_kind")]
+    terminal_shell_kind: String,
     #[serde(default)]
     shell_workspaces: Vec<ShellWorkspaceConfig>,
     #[serde(default = "default_mcp_servers")]
@@ -634,6 +640,7 @@ impl Default for AppConfig {
             vision_api_config_id: None,
             stt_api_config_id: None,
             stt_auto_send: false,
+            terminal_shell_kind: default_terminal_shell_kind(),
             shell_workspaces: Vec::new(),
             mcp_servers: default_mcp_servers(),
             departments: default_departments(&api_config.id),
@@ -1216,6 +1223,7 @@ struct AppState {
     data_path: PathBuf,
     llm_workspace_path: PathBuf,
     terminal_shell: TerminalShellProfile,
+    terminal_shell_candidates: Vec<TerminalShellProfile>,
     state_lock: Arc<Mutex<()>>,
     // 运行态内存缓存：减少热路径重复读盘（配置）
     cached_config: Arc<Mutex<Option<AppConfig>>>,
@@ -1227,6 +1235,9 @@ struct AppState {
     inflight_chat_abort_handles: Arc<Mutex<std::collections::HashMap<String, AbortHandle>>>,
     inflight_tool_abort_handles: Arc<Mutex<std::collections::HashMap<String, AbortHandle>>>,
     terminal_session_roots: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    terminal_live_sessions: Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, TerminalLiveShellSessionHandle>>,
+    >,
     terminal_pending_approvals:
         Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
     llm_round_logs: Arc<Mutex<std::collections::VecDeque<LlmRoundLogEntry>>>,
@@ -1260,6 +1271,7 @@ impl std::fmt::Debug for AppState {
             .field("data_path", &self.data_path)
             .field("llm_workspace_path", &self.llm_workspace_path)
             .field("terminal_shell", &self.terminal_shell)
+            .field("terminal_shell_candidates", &self.terminal_shell_candidates)
             .finish_non_exhaustive()
     }
 }
@@ -1299,6 +1311,7 @@ impl AppState {
         }
         fs::create_dir_all(&llm_workspace_path)
             .map_err(|err| format!("Create llm workspace failed: {err}"))?;
+        let terminal_shell_candidates = detect_terminal_shell_candidates();
         let terminal_shell = detect_default_terminal_shell();
 
         Ok(Self {
@@ -1307,6 +1320,7 @@ impl AppState {
             data_path: config_dir.join("app_data.json"),
             llm_workspace_path,
             terminal_shell,
+            terminal_shell_candidates,
             state_lock: Arc::new(Mutex::new(())),
             cached_config: Arc::new(Mutex::new(None)),
             cached_config_mtime: Arc::new(Mutex::new(None)),
@@ -1316,6 +1330,9 @@ impl AppState {
             inflight_chat_abort_handles: Arc::new(Mutex::new(std::collections::HashMap::new())),
             inflight_tool_abort_handles: Arc::new(Mutex::new(std::collections::HashMap::new())),
             terminal_session_roots: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            terminal_live_sessions: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             terminal_pending_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
             llm_round_logs: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             task_dispatch_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),

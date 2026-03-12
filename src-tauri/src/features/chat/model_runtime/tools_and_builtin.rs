@@ -1319,7 +1319,12 @@ struct OrganizeContextToolArgs {}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct TerminalExecToolArgs {
-    command: String,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
 }
@@ -2625,14 +2630,16 @@ impl Tool for BuiltinTerminalExecTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "exec".to_string(),
-            description: terminal_exec_tool_description(&self.app_state.terminal_shell),
+            description: terminal_exec_tool_description(&terminal_shell_for_state(&self.app_state)),
             parameters: serde_json::json!({
               "type": "object",
               "properties": {
-                "command": { "type": "string", "description": "Shell command to execute" },
+                "action": { "type": "string", "enum": ["run", "list", "close"], "default": "run" },
+                "session_id": { "type": "string", "description": "Optional shell session id; defaults to current chat session id." },
+                "command": { "type": "string", "description": "Shell command to execute when action=run" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 120000, "default": 20000 }
               },
-              "required": ["command"]
+              "required": []
             }),
         }
     }
@@ -2643,10 +2650,29 @@ impl Tool for BuiltinTerminalExecTool {
             "[TOOL-DEBUG] execute_builtin_tool.start name=exec args={}",
             debug_value_snippet(&args_json, 240)
         );
+        let resolved_session_id = args
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(&self.session_id);
+        let resolved_action = args
+            .action
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("run");
+        let resolved_command = args.command.as_deref().map(str::trim).unwrap_or("");
+        if resolved_action == "run" && resolved_command.is_empty() {
+            return Err(ToolInvokeError::from(
+                "shell_exec.command is required when action=run".to_string(),
+            ));
+        }
         let result = builtin_shell_exec(
             &self.app_state,
-            &self.session_id,
-            &args.command,
+            resolved_session_id,
+            resolved_action,
+            resolved_command,
             args.timeout_ms,
         )
         .await
