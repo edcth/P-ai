@@ -1710,7 +1710,25 @@ async function rewindConversationFromTurn(turnId: string): Promise<ChatMessage |
         messageId,
       },
     });
-    const keepCount = Math.max(0, Math.min(currentMessages.length, Number(result.remainingCount) || 0));
+    let keepCountFromLocal = -1;
+    const directIndex = currentMessages.findIndex((item) => item.id === messageId);
+    if (directIndex >= 0) {
+      const directRole = String(currentMessages[directIndex]?.role || "").trim();
+      if (directRole === "user") {
+        // Rewind to selected user turn: remove that user message and everything after it.
+        keepCountFromLocal = directIndex;
+      } else {
+        // Regenerate on assistant bubble: rewind to the nearest previous user turn.
+        for (let i = directIndex - 1; i >= 0; i -= 1) {
+          if (String(currentMessages[i]?.role || "").trim() === "user") {
+            keepCountFromLocal = i;
+            break;
+          }
+        }
+      }
+    }
+    const keepCountFromBackend = Math.max(0, Math.min(currentMessages.length, Number(result.remainingCount) || 0));
+    const keepCount = keepCountFromLocal >= 0 ? keepCountFromLocal : keepCountFromBackend;
     const nextMessages = currentMessages.slice(0, keepCount);
     allMessages.value = nextMessages;
     resetVisibleBlocksAfterRewind(nextMessages);
