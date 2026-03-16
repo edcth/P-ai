@@ -96,6 +96,7 @@ type UseChatFlowOptions = {
     conversationId: string;
     messageCount: number;
     pendingMessages: ChatMessage[];
+    activateAssistant: boolean;
   }) => Promise<void>;
 };
 
@@ -465,17 +466,18 @@ export function useChatFlow(options: UseChatFlowOptions) {
     if (source === "bound" && sendChatActiveGen > 0) return;
 
     const flushed = readHistoryFlushedPayload(parsed.message);
+    const shouldActivate = source === "sendChat" || !!flushed?.activateAssistant;
     const replayMessages = Array.isArray(flushed?.messages) ? flushed!.messages : [];
     const batchVisibleCount = Math.max(1, replayMessages.length);
     activeHistoryMessageCount = batchVisibleCount;
-    options.visibleMessageBlockCount.value = batchVisibleCount;
-
-    // ── 清屏 ──
-    const oldDraftId = round.phase === "streaming" ? round.draftId : "";
-    resetDisplayState();
-    if (oldDraftId) removeDraft(oldDraftId);
-
-    round = { phase: "queued", gen };
+    if (shouldActivate) {
+      options.visibleMessageBlockCount.value = batchVisibleCount;
+      // 仅激活助理时清屏，非激活批次保持当前视图并顺序追加历史。
+      const oldDraftId = round.phase === "streaming" ? round.draftId : "";
+      resetDisplayState();
+      if (oldDraftId) removeDraft(oldDraftId);
+      round = { phase: "queued", gen };
+    }
 
     // ── reload ──
     if (options.onHistoryFlushed) {
@@ -483,25 +485,28 @@ export function useChatFlow(options: UseChatFlowOptions) {
         conversationId: String(flushed?.conversationId || "").trim(),
         messageCount: batchVisibleCount,
         pendingMessages: replayMessages,
+        activateAssistant: shouldActivate,
       });
     } else {
       await options.onReloadMessages();
+    }
+
+    if (!shouldActivate) {
+      // await 期间可能有新的 sendChat/轮次启动，避免回写旧状态覆盖新轮次
+      if (gen !== generation) return;
+      round = { phase: "idle" };
+      options.chatting.value = false;
+      return;
     }
 
     // await 后校验：可能已被新 sendChat 抢占
     if (round.phase !== "queued" || round.gen !== gen) return;
 
     // ── 插 draft / 进入 streaming ──
-    const shouldActivate = source === "sendChat" || !!flushed?.activateAssistant;
-    if (shouldActivate) {
-      const draftId = insertDraft(gen);
-      options.visibleMessageBlockCount.value = batchVisibleCount + 1;
-      round = { phase: "streaming", gen, draftId };
-      options.chatting.value = true;
-    } else {
-      round = { phase: "idle" };
-      options.chatting.value = false;
-    }
+    const draftId = insertDraft(gen);
+    options.visibleMessageBlockCount.value = batchVisibleCount + 1;
+    round = { phase: "streaming", gen, draftId };
+    options.chatting.value = true;
   }
 
   /**

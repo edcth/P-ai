@@ -1590,8 +1590,16 @@ async fn send_chat_message(
         main_session_state_text,
     );
 
-    // 触发出队处理
-    trigger_chat_queue_processing(state.inner());
+    // 优先尝试当前请求内立即处理，避免可直出队场景在前端出现排队态。
+    // 仅当当前不可出队时，再退化为异步调度。
+    if can_dequeue(state.inner()).unwrap_or(false) {
+        if let Err(err) = process_chat_queue(state.inner()).await {
+            eprintln!("[聊天调度] 立即处理队列失败，退回异步调度: {}", err);
+            trigger_chat_queue_processing(state.inner());
+        }
+    } else {
+        trigger_chat_queue_processing(state.inner());
+    }
 
     result_rx
         .await

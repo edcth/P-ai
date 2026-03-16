@@ -1634,17 +1634,31 @@ const chatFlow = useChatFlow({
       onDelta,
     }),
   onReloadMessages: () => loadAllMessages(),
-  onHistoryFlushed: async ({ conversationId, pendingMessages }) => {
+  onHistoryFlushed: async ({ conversationId, pendingMessages, activateAssistant }) => {
     const flushedConversationId = String(conversationId || "").trim();
     if (flushedConversationId) {
       currentChatConversationId.value = flushedConversationId;
     }
-    // 出队批次是原子重放：先清空，再按队列顺序逐条写入历史。
+    // 激活助理的批次：清屏并原子重放；非激活批次：仅顺序追加，不清屏。
     const queueMessages = Array.isArray(pendingMessages) ? pendingMessages : [];
-    allMessages.value = [];
-    await nextTick();
-    allMessages.value = [...queueMessages];
-    hasMoreBackendHistory.value = queueMessages.length > 0;
+    if (activateAssistant) {
+      allMessages.value = [];
+      await nextTick();
+      allMessages.value = [...queueMessages];
+      hasMoreBackendHistory.value = queueMessages.length > 0;
+    } else if (queueMessages.length > 0) {
+      const existing = allMessages.value;
+      const dedup = new Set(existing.map((m) => String(m.id || "").trim()).filter((id) => !!id));
+      const appended = queueMessages.filter((m) => {
+        const id = String(m.id || "").trim();
+        if (!id) return true;
+        if (dedup.has(id)) return false;
+        dedup.add(id);
+        return true;
+      });
+      allMessages.value = [...existing, ...appended];
+      hasMoreBackendHistory.value = existing.length > 0 || appended.length > 0;
+    }
     await loadUnarchivedConversations();
   },
 });

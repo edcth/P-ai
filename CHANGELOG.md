@@ -2,6 +2,11 @@
 
 ## 未发布
 
+- 调整（chat-queue）：优化出队时序与前端展示策略
+  - 发送消息入队后优先尝试立即出队处理；仅在不可出队时退回异步调度
+  - `history_flushed` 新增按 `activateAssistant` 分支处理：仅激活批次清屏，非激活批次按顺序追加消息
+  - 修复 `history_flushed` 异步等待后的轮次竞态，避免旧轮次回写覆盖新一轮 `sendChat`
+
 - 重构（chat-routing）：彻底移除“消息/会话绑定模型 API”路径，统一改为“部门 -> 模型”解析
   - `ChatSessionInfo` 改为仅携带 `department_id + agent_id`，不再持有 `api_config_id`
   - `send_chat_message_inner`、远程 IM 入队、任务/委托入队统一按部门解析模型
