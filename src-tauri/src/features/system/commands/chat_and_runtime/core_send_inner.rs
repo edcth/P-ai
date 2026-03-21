@@ -451,7 +451,7 @@ async fn send_chat_message_inner(
                 tool_name: Some("archive".to_string()),
                 tool_status: Some("running".to_string()),
                 tool_args: None,
-                message: Some("正在压缩上下文...".to_string()),
+                message: Some("正在整理上下文...".to_string()),
             });
         }
 
@@ -471,10 +471,10 @@ async fn send_chat_message_inner(
                 archived_before_send = result.archived;
                 if pending_archive_forced {
                     let done_message = if result.warning.as_deref().unwrap_or("").trim().is_empty() {
-                        "压缩完成，将继续当前会话。".to_string()
+                        "整理完成，将继续当前会话。".to_string()
                     } else {
                         format!(
-                            "压缩完成（降级摘要）：{}",
+                            "整理完成（降级摘要）：{}",
                             result.warning.unwrap_or_default()
                         )
                     };
@@ -496,10 +496,10 @@ async fn send_chat_message_inner(
                         tool_name: Some("archive".to_string()),
                         tool_status: Some("failed".to_string()),
                         tool_args: None,
-                        message: Some(format!("压缩失败：{err}")),
+                        message: Some(format!("整理失败：{err}")),
                     });
                 }
-                return Err(format!("压缩失败：{err}"));
+                return Err(format!("整理失败：{err}"));
             }
         }
     }
@@ -1092,7 +1092,7 @@ async fn send_chat_message_inner(
             tool_name: Some("archive".to_string()),
             tool_status: Some("running".to_string()),
             tool_args: None,
-            message: Some("回复后上下文已达到 82%，正在自动压缩...".to_string()),
+            message: Some("回复后上下文已达到 82%，正在自动整理...".to_string()),
         });
         let archive_res = run_context_compaction_pipeline(
             &state,
@@ -1107,9 +1107,9 @@ async fn send_chat_message_inner(
         match archive_res {
             Ok(result) => {
                 let done_message = if result.warning.as_deref().unwrap_or("").trim().is_empty() {
-                    "自动压缩完成，将继续当前会话。".to_string()
+                    "自动整理完成，将继续当前会话。".to_string()
                 } else {
-                    format!("自动压缩完成（降级摘要）：{}", result.warning.unwrap_or_default())
+                    format!("自动整理完成（降级摘要）：{}", result.warning.unwrap_or_default())
                 };
                 let _ = on_delta.send(AssistantDeltaEvent {
                     delta: "".to_string(),
@@ -1127,9 +1127,9 @@ async fn send_chat_message_inner(
                     tool_name: Some("archive".to_string()),
                     tool_status: Some("failed".to_string()),
                     tool_args: None,
-                    message: Some(format!("自动压缩失败：{err}")),
+                    message: Some(format!("自动整理失败：{err}")),
                 });
-                return Err(format!("自动压缩失败：{err}"));
+                return Err(format!("自动整理失败：{err}"));
             }
         }
     }

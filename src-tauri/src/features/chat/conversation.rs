@@ -897,7 +897,10 @@ fn is_context_compaction_message(message: &ChatMessage, role: &str) -> bool {
     if text.is_empty() {
         return false;
     }
-    text.contains("[上下文压缩]")
+    text.contains("[上下文整理]")
+        || text.contains("上下文整理")
+        || text.contains("整理摘要")
+        || text.contains("[上下文压缩]")
         || text.contains("上下文压缩")
         || text.contains("压缩摘要")
         || text.contains("context compression")

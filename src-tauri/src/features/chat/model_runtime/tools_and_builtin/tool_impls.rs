@@ -285,7 +285,7 @@ impl Tool for BuiltinOrganizeContextTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "organize_context".to_string(),
-            description: "只有当话题已经偏离很远、无关信息可能干扰最新话题时才使用。若当前对话太短或上下文占用太低，就不应该压缩。".to_string(),
+            description: "只有当话题已经偏离很远、无关信息可能干扰最新话题时才使用。若当前对话太短或上下文占用太低，就不应该整理。".to_string(),
             parameters: serde_json::json!({
               "type": "object",
               "properties": {},

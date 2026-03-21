@@ -61,7 +61,7 @@ async fn builtin_organize_context(
                 )
             })?;
         let mut app_config = read_config(&app_state.config_path)?;
-        let mut data = read_app_data(&app_state.data_path)?;
+        let mut data = state_read_app_data_cached(app_state)?;
         ensure_default_agent(&mut data);
         merge_private_organization_into_runtime_data(
             &app_state.data_path,
@@ -86,7 +86,7 @@ async fn builtin_organize_context(
             return Ok(serde_json::json!({
                 "ok": false,
                 "shouldArchive": false,
-                "message": "此时不应该压缩：当前对话少于 10 句。"
+                "message": "此时不应该整理：当前对话少于 10 句。"
             }));
         }
         let usage_ratio = if source.last_context_usage_ratio.is_finite() {
@@ -99,7 +99,7 @@ async fn builtin_organize_context(
                 "ok": false,
                 "shouldArchive": false,
                 "usageRatio": usage_ratio,
-                "message": "此时不应该压缩：当前上下文占用不足 10%。"
+                "message": "此时不应该整理：当前上下文占用不足 10%。"
             }));
         }
         drop(guard);

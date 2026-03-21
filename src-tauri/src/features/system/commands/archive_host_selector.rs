@@ -191,7 +191,7 @@ mod archive_host_selection_tests {
                     created_at: now_iso(),
                     speaker_agent_id: Some("p1".to_string()),
                     parts: vec![MessagePart::Text {
-                        text: "我再次测试一次压缩，如何？".to_string(),
+                        text: "我再次测试一次上下文整理，如何？".to_string(),
                     }],
                     extra_text_blocks: Vec::new(),
                     provider_meta: None,

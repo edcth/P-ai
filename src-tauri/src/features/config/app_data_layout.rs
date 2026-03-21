@@ -31,9 +31,6 @@ fn migrate_app_data_archives_into_conversations(
         if conv.id.trim().is_empty() {
             conv.id = Uuid::new_v4().to_string();
         }
-        if conv.summary.trim().is_empty() && !archive.summary.trim().is_empty() {
-            conv.summary = archive.summary.clone();
-        }
         if conv.archived_at.as_deref().unwrap_or("").trim().is_empty() {
             conv.archived_at = Some(archive.archived_at.clone());
         }

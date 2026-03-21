@@ -146,8 +146,6 @@ fn normalize_archive_for_import(archive: &mut ConversationArchive, data_path: &P
     if archive.reason.is_empty() {
         archive.reason = "import_archive".to_string();
     }
-    archive.summary = clean_text(archive.summary.trim());
-
     let conversation = &mut archive.source_conversation;
     if conversation.id.trim().is_empty() {
         conversation.id = Uuid::new_v4().to_string();
@@ -359,10 +357,10 @@ fn build_archive_markdown(archive: &ConversationArchive) -> String {
     blocks.push("# 对话归档".to_string());
     blocks.push(format!("- 标题: {}", archive.source_conversation.title));
     blocks.push(format!("- 归档时间: {}", archive.archived_at));
-    if !archive.summary.trim().is_empty() {
+    if !archive.source_conversation.summary.trim().is_empty() {
         blocks.push(String::new());
         blocks.push("## 摘要".to_string());
-        blocks.push(archive.summary.trim().to_string());
+        blocks.push(archive.source_conversation.summary.trim().to_string());
     }
     blocks.push(String::new());
     blocks.push("## 消息时间线".to_string());

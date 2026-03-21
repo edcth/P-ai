@@ -36,7 +36,7 @@ pub(crate) enum MainSessionState {
     Idle,
     /// 主助理正在流式输出
     AssistantStreaming,
-    /// 正在压缩/整理上下文
+    /// 正在整理上下文
     OrganizingContext,
 }
 

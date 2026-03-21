@@ -158,14 +158,11 @@ const emit = defineEmits<{
 const viewMode = ref<"current" | "delegate" | "archive">("archive");
 
 const visibleMessages = computed(() =>
-  (
-    viewMode.value === "current"
-      ? props.unarchivedMessages
-      : viewMode.value === "delegate"
-        ? props.delegateMessages
-        : props.archiveMessages
-  )
-    .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool"),
+  viewMode.value === "current"
+    ? props.unarchivedMessages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool")
+    : viewMode.value === "delegate"
+      ? props.delegateMessages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool")
+      : props.archiveMessages,
 );
 const archiveImportInputRef = ref<HTMLInputElement | null>(null);
 
@@ -200,9 +197,14 @@ function onDeleteUnarchivedClick(conversationId: string) {
 }
 
 function messageText(msg: ChatMessage): string {
-  return msg.parts
+  const partText = msg.parts
     .filter((p): p is Extract<MessagePart, { type: "text" }> => p.type === "text")
     .map((p) => p.text)
+    .join("\n");
+  const extraBlocks = Array.isArray(msg.extraTextBlocks) ? msg.extraTextBlocks.join("\n") : "";
+  return [partText, extraBlocks]
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0)
     .join("\n")
     .trim();
 }

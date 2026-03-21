@@ -126,14 +126,15 @@ async fn summarize_archived_conversation_with_model_v2(
     agent: &AgentProfile,
     user_alias: &str,
     source_conversation: &Conversation,
+    all_compaction_context: &str,
     memories: &[MemoryEntry],
     recall_table: &[String],
     _trace_tag: &str,
     _trace_id: &str,
-) -> Result<ArchiveSummaryDraft, String> {
+) -> Result<MemoryCurationDraft, String> {
     let used_memories = archive_used_memories_block(memories, recall_table);
 
-    let instruction = build_archive_instruction(agent, user_alias);
+    let instruction = build_memory_generation_instruction(agent, user_alias);
 
     let mut prepared = build_prepared_prompt_for_mode(
         PromptBuildMode::Archive,
@@ -154,7 +155,12 @@ async fn summarize_archived_conversation_with_model_v2(
         None,
     );
     prepared.latest_user_text =
-        build_archive_latest_user_text(&instruction, &used_memories, archive_example_output_block());
+        build_memory_generation_latest_user_text(
+            &instruction,
+            all_compaction_context,
+            &used_memories,
+            memory_curation_example_output_block(),
+        );
     let timeout_secs = 360u64;
 
     let reply = call_archive_summary_model_with_timeout(
@@ -165,45 +171,21 @@ async fn summarize_archived_conversation_with_model_v2(
         timeout_secs,
     )
     .await?;
-    let parsed = match parse_archive_summary_draft(&reply.assistant_text) {
+    let parsed = match parse_memory_curation_draft(&reply.assistant_text) {
         Some(parsed) => parsed,
         None => {
-            let fallback_summary = clean_text(reply.assistant_text.trim());
-            if fallback_summary.is_empty() {
-                return Err("Archive summary is empty".to_string());
-            }
             eprintln!(
-                "[ARCHIVE-PIPELINE] parse archive JSON failed; fallback to raw summary and skip memory generation. raw={}",
+                "[ARCHIVE-PIPELINE] parse memory curation JSON failed; skip memory generation. raw={}",
                 reply.assistant_text.chars().take(240).collect::<String>()
             );
-            return Ok(ArchiveSummaryDraft {
-                summary: fallback_summary,
+            return Ok(MemoryCurationDraft {
                 useful_memory_ids: Vec::new(),
                 new_memories: Vec::new(),
                 merge_groups: Vec::new(),
             });
         }
     };
-    let summary = clean_text(parsed.summary.trim());
-    if summary.is_empty() {
-        let fallback_summary = clean_text(reply.assistant_text.trim());
-        if fallback_summary.is_empty() {
-            return Err("Archive summary is empty".to_string());
-        }
-        return Ok(ArchiveSummaryDraft {
-            summary: fallback_summary,
-            useful_memory_ids: parsed
-                .useful_memory_ids
-                .into_iter()
-                .map(|id| id.trim().to_string())
-                .filter(|id| !id.is_empty())
-                .collect::<Vec<_>>(),
-            new_memories: parsed.new_memories.into_iter().take(7).collect::<Vec<_>>(),
-            merge_groups: parsed.merge_groups.into_iter().take(7).collect::<Vec<_>>(),
-        });
-    }
-    Ok(ArchiveSummaryDraft {
-        summary,
+    Ok(MemoryCurationDraft {
         useful_memory_ids: parsed
             .useful_memory_ids
             .into_iter()
@@ -213,6 +195,58 @@ async fn summarize_archived_conversation_with_model_v2(
         new_memories: parsed.new_memories.into_iter().take(7).collect::<Vec<_>>(),
         merge_groups: parsed.merge_groups.into_iter().take(7).collect::<Vec<_>>(),
     })
+}
+
+async fn summarize_archive_summary_only_with_model(
+    state: &AppState,
+    resolved_api: &ResolvedApiConfig,
+    selected_api: &ApiConfig,
+    agent: &AgentProfile,
+    user_alias: &str,
+    source_conversation: &Conversation,
+    all_compaction_context: &str,
+    memories: &[MemoryEntry],
+    recall_table: &[String],
+) -> Result<String, String> {
+    let used_memories = archive_used_memories_block(memories, recall_table);
+    let instruction = build_archive_summary_only_instruction(agent, user_alias);
+    let mut prepared = build_prepared_prompt_for_mode(
+        PromptBuildMode::Archive,
+        source_conversation,
+        agent,
+        &[],
+        &[],
+        user_alias,
+        "",
+        "concise",
+        "zh-CN",
+        None,
+        None,
+        None,
+        None,
+        Some(state),
+        None,
+        None,
+    );
+    prepared.latest_user_text = build_archive_summary_only_latest_user_text(
+        &instruction,
+        all_compaction_context,
+        &used_memories,
+    );
+    let timeout_secs = 360u64;
+    let reply = call_archive_summary_model_with_timeout(
+        state,
+        resolved_api,
+        selected_api,
+        prepared,
+        timeout_secs,
+    )
+    .await?;
+    let summary = clean_text(reply.assistant_text.trim());
+    if summary.is_empty() {
+        return Err("Archive summary is empty".to_string());
+    }
+    Ok(summary)
 }
 
 async fn summarize_context_compaction_with_model_v1(
@@ -305,7 +339,9 @@ fn archive_pipeline_is_compression_text(text: &str) -> bool {
     if lower.is_empty() {
         return false;
     }
-    lower.contains("上下文压缩")
+    lower.contains("上下文整理")
+        || lower.contains("整理摘要")
+        || lower.contains("上下文压缩")
         || lower.contains("压缩摘要")
         || lower.contains("context compression")
         || lower.contains("context compact")
@@ -326,6 +362,34 @@ fn archive_pipeline_collect_compression_texts(source: &Conversation) -> Vec<Stri
     blocks
 }
 
+fn archive_pipeline_all_compaction_context(source: &Conversation) -> String {
+    let compression_blocks = archive_pipeline_collect_compression_texts(source);
+    if compression_blocks.is_empty() {
+        return "（无）".to_string();
+    }
+    compression_blocks
+        .iter()
+        .enumerate()
+        .map(|(idx, block)| format!("C{}:\n{}", idx + 1, block))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn archive_pipeline_dedup_recall_table(recall_table: &[String]) -> Vec<String> {
+    let mut seen = HashSet::<String>::new();
+    let mut deduped = Vec::<String>::new();
+    for id in recall_table
+        .iter()
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+    {
+        if seen.insert(id.to_string()) {
+            deduped.push(id.to_string());
+        }
+    }
+    deduped
+}
+
 fn build_archive_summary_from_compression_and_last_three_rounds(
     source: &Conversation,
 ) -> Result<String, String> {
@@ -335,8 +399,8 @@ fn build_archive_summary_from_compression_and_last_three_rounds(
     }
     let recent = archive_pipeline_recent_user_assistant_messages(source, 6);
     let mut lines = Vec::<String>::new();
-    lines.push("归档降级摘要（压缩内容 + 最后三轮正文对话）：".to_string());
-    lines.push("【压缩内容】".to_string());
+    lines.push("归档降级摘要（上下文整理信息 + 最后三轮正文对话）：".to_string());
+    lines.push("【上下文整理信息】".to_string());
     for (idx, block) in compression_blocks.iter().enumerate() {
         let snippet = block.chars().take(360).collect::<String>();
         lines.push(format!("C{}. {}", idx + 1, snippet));
@@ -428,7 +492,7 @@ fn emit_compaction_history_flushed_event(
         Some(handle) => handle,
         None => {
             eprintln!(
-                "[ARCHIVE-PIPELINE] 压缩 history_flushed 发送跳过: app_handle 不可用, conversation_id={}",
+                "[ARCHIVE-PIPELINE] 上下文整理 history_flushed 发送跳过: app_handle 不可用, conversation_id={}",
                 conversation_id
             );
             return;
@@ -443,12 +507,12 @@ fn emit_compaction_history_flushed_event(
     });
     if let Err(err) = app_handle.emit(CHAT_HISTORY_FLUSHED_EVENT, payload) {
         eprintln!(
-            "[ARCHIVE-PIPELINE] 压缩 history_flushed 发送失败: conversation_id={}, error={}",
+            "[ARCHIVE-PIPELINE] 上下文整理 history_flushed 发送失败: conversation_id={}, error={}",
             conversation_id, err
         );
     } else {
         eprintln!(
-            "[ARCHIVE-PIPELINE] 压缩 history_flushed 已发送: conversation_id={}",
+            "[ARCHIVE-PIPELINE] 上下文整理 history_flushed 已发送: conversation_id={}",
             conversation_id
         );
     }
@@ -550,7 +614,7 @@ fn build_compaction_message(summary: &str, compaction_reason: &str) -> ChatMessa
         format!("触发原因：{}\n", reason)
     };
     let text = format!(
-        "[上下文压缩]\n{}压缩摘要：\n{}",
+        "[上下文整理]\n{}整理摘要：\n{}",
         reason_line,
         clean_text(summary.trim())
     );
@@ -567,69 +631,202 @@ fn build_compaction_message(summary: &str, compaction_reason: &str) -> ChatMessa
     }
 }
 
-async fn summarize_archive_draft_with_fallback(
+async fn summarize_archive_summary_with_fallback(
     state: &AppState,
     resolved_api: &ResolvedApiConfig,
     selected_api: &ApiConfig,
     host_agent: &AgentProfile,
     user_alias: &str,
     source: &Conversation,
+    all_compaction_context: &str,
     memories: &[MemoryEntry],
-    trace_tag: &str,
-    trace_id: &str,
-) -> (ArchiveSummaryDraft, Option<String>) {
-    match summarize_archived_conversation_with_model_v2(
+) -> (String, Option<String>) {
+    let deduped_recall = archive_pipeline_dedup_recall_table(&source.memory_recall_table);
+    match summarize_archive_summary_only_with_model(
         state,
         resolved_api,
         selected_api,
         host_agent,
         user_alias,
         source,
+        all_compaction_context,
         memories,
-        &source.memory_recall_table,
-        trace_tag,
-        trace_id,
+        &deduped_recall,
     )
     .await
     {
-        Ok(parsed) => (parsed, None),
-        Err(err) => {
-            let fallback_summary = match build_archive_summary_from_compression_and_last_three_rounds(source) {
-                Ok(summary) => {
+        Ok(summary) => (summary, None),
+        Err(err) => match build_archive_summary_from_compression_and_last_three_rounds(source) {
+            Ok(summary) => (
+                summary,
+                Some(format!(
+                    "归档摘要模型失败，已使用上下文整理信息+最后三轮正文对话降级摘要：{}",
+                    err
+                )),
+            ),
+            Err(compression_err) => (
+                build_archive_summary_from_last_three_rounds(source),
+                Some(format!(
+                    "归档摘要模型失败，上下文整理降级失败，已使用最后三轮正文对话降级摘要：{}（上下文整理降级原因：{}）",
+                    err, compression_err
+                )),
+            ),
+        },
+    }
+}
+
+fn archive_pipeline_is_rate_limit_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("429")
+        || lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+}
+
+fn spawn_compaction_memory_generation_task(
+    state: &AppState,
+    selected_api: &ApiConfig,
+    resolved_api: &ResolvedApiConfig,
+    host_agent: &AgentProfile,
+    user_alias: &str,
+    source: &Conversation,
+    all_compaction_context: &str,
+    trace_tag: &str,
+    trace_id: &str,
+) {
+    let app_state = state.clone();
+    let selected_api = selected_api.clone();
+    let resolved_api = resolved_api.clone();
+    let host_agent = host_agent.clone();
+    let user_alias = user_alias.to_string();
+    let source = source.clone();
+    let all_compaction_context = all_compaction_context.to_string();
+    let trace_tag = trace_tag.to_string();
+    let trace_id = trace_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        const MAX_ATTEMPTS: usize = 3;
+        const RETRY_DELAY_SECS: u64 = 30;
+        let deduped_recall = archive_pipeline_dedup_recall_table(&source.memory_recall_table);
+        for attempt in 1..=MAX_ATTEMPTS {
+            let visible_memories = match memory_store_list_memories_visible_for_agent(
+                &app_state.data_path,
+                &host_agent.id,
+                host_agent.private_memory_enabled,
+            ) {
+                Ok(items) => items,
+                Err(err) => {
                     eprintln!(
-                        "[ARCHIVE-PIPELINE] 归档模型失败，已降级到 压缩内容+最后三轮 正文摘要: trace_id={}, conversation_id={}, err={}",
-                        trace_id, source.id, err
+                        "[上下文整理记忆] 失败，任务=compaction_memory_async，stage=list_visible_memories，trace_id={}，conversation_id={}，attempt={}，error={}",
+                        trace_id, source.id, attempt, err
                     );
-                    (
-                        summary,
-                        Some(format!("归档模型失败，已使用压缩内容+最后三轮正文对话降级摘要：{err}")),
-                    )
-                }
-                Err(compression_err) => {
-                    eprintln!(
-                        "[ARCHIVE-PIPELINE] 归档模型失败，压缩降级也失败，已降级到 最后三轮 正文摘要: trace_id={}, conversation_id={}, err={}, compression_err={}",
-                        trace_id, source.id, err, compression_err
-                    );
-                    (
-                        build_archive_summary_from_last_three_rounds(source),
-                        Some(format!(
-                            "归档模型失败，压缩降级失败，已使用最后三轮正文对话降级摘要：{}（压缩降级原因：{}）",
-                            err, compression_err
-                        )),
-                    )
+                    return;
                 }
             };
-            (
-                ArchiveSummaryDraft {
-                    summary: fallback_summary.0,
-                    useful_memory_ids: Vec::new(),
-                    new_memories: Vec::new(),
-                    merge_groups: Vec::new(),
-                },
-                fallback_summary.1,
+
+            let draft_result = summarize_archived_conversation_with_model_v2(
+                &app_state,
+                &resolved_api,
+                &selected_api,
+                &host_agent,
+                &user_alias,
+                &source,
+                &all_compaction_context,
+                &visible_memories,
+                &deduped_recall,
+                &trace_tag,
+                &trace_id,
             )
+            .await;
+
+            let parsed = match draft_result {
+                Ok(value) => value,
+                Err(err) => {
+                    if attempt < MAX_ATTEMPTS {
+                        let retry_stage = if archive_pipeline_is_rate_limit_error(&err) {
+                            "retry_after_429"
+                        } else {
+                            "retry_after_error"
+                        };
+                        eprintln!(
+                            "[上下文整理记忆] 跳过，任务=compaction_memory_async，stage={}，trace_id={}，conversation_id={}，attempt={}，next_retry_secs={}，error={}",
+                            retry_stage,
+                            trace_id,
+                            source.id,
+                            attempt,
+                            RETRY_DELAY_SECS,
+                            err
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
+                        continue;
+                    }
+                    eprintln!(
+                        "[上下文整理记忆] 失败，任务=compaction_memory_async，stage=llm_draft，trace_id={}，conversation_id={}，attempt={}，error={}",
+                        trace_id, source.id, attempt, err
+                    );
+                    return;
+                }
+            };
+
+            let owner_agent_id = if host_agent.private_memory_enabled && !host_agent.is_built_in_user {
+                Some(host_agent.id.as_str())
+            } else {
+                None
+            };
+            let memory_feedback = match memory_store_apply_archive_feedback(
+                &app_state.data_path,
+                &deduped_recall,
+                &parsed.useful_memory_ids,
+            ) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!(
+                        "[上下文整理记忆] 失败，任务=compaction_memory_async，stage=apply_feedback，trace_id={}，conversation_id={}，attempt={}，error={}",
+                        trace_id, source.id, attempt, err
+                    );
+                    return;
+                }
+            };
+            let merged_memories = match merge_memories_into_store(
+                &app_state.data_path,
+                &parsed.new_memories,
+                owner_agent_id,
+            ) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!(
+                        "[上下文整理记忆] 失败，任务=compaction_memory_async，stage=merge_memories，trace_id={}，conversation_id={}，attempt={}，error={}",
+                        trace_id, source.id, attempt, err
+                    );
+                    return;
+                }
+            };
+            let merged_groups = match merge_memory_groups_into_store(
+                &app_state.data_path,
+                &parsed.merge_groups,
+                owner_agent_id,
+            ) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!(
+                        "[上下文整理记忆] 失败，任务=compaction_memory_async，stage=merge_groups，trace_id={}，conversation_id={}，attempt={}，error={}",
+                        trace_id, source.id, attempt, err
+                    );
+                    return;
+                }
+            };
+            eprintln!(
+                "[上下文整理记忆] 完成，任务=compaction_memory_async，trace_id={}，conversation_id={}，merged_memories={}，merged_groups={}，useful_accept={}，penalized={}，natural_decay={}",
+                trace_id,
+                source.id,
+                merged_memories,
+                merged_groups,
+                memory_feedback.useful_accepted_count,
+                memory_feedback.penalized_count,
+                memory_feedback.natural_decay_count
+            );
+            return;
         }
-    }
+    });
 }
 
 async fn summarize_compaction_text_with_fallback(
@@ -641,42 +838,66 @@ async fn summarize_compaction_text_with_fallback(
     source: &Conversation,
     trace_id: &str,
 ) -> (String, Option<String>) {
-    match summarize_context_compaction_with_model_v1(
-        state,
-        resolved_api,
-        selected_api,
-        host_agent,
-        user_alias,
-        source,
-    )
-    .await
-    {
-        Ok(summary) => (summary, None),
-        Err(err) => match build_archive_summary_from_compression_and_last_three_rounds(source) {
-            Ok(summary) => {
-                eprintln!(
-                    "[ARCHIVE-PIPELINE] 压缩模型失败，已降级到 压缩内容+最后三轮 正文摘要: trace_id={}, conversation_id={}, err={}",
-                    trace_id, source.id, err
-                );
-                (
-                    summary,
-                    Some(format!("压缩模型失败，已使用压缩内容+最后三轮正文对话降级摘要：{err}")),
-                )
+    const MAX_ATTEMPTS: usize = 3;
+    const RETRY_DELAY_SECS: u64 = 5;
+
+    let mut last_err = String::new();
+    for attempt in 1..=MAX_ATTEMPTS {
+        match summarize_context_compaction_with_model_v1(
+            state,
+            resolved_api,
+            selected_api,
+            host_agent,
+            user_alias,
+            source,
+        )
+        .await
+        {
+            Ok(summary) => return (summary, None),
+            Err(err) => {
+                last_err = err;
+                if attempt < MAX_ATTEMPTS {
+                    eprintln!(
+                        "[ARCHIVE-PIPELINE] 上下文整理模型跳过: stage=retry_after_error, trace_id={}, conversation_id={}, attempt={}，next_retry_secs={}，error={}",
+                        trace_id,
+                        source.id,
+                        attempt,
+                        RETRY_DELAY_SECS,
+                        last_err
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECS)).await;
+                }
             }
-            Err(compression_err) => {
-                eprintln!(
-                    "[ARCHIVE-PIPELINE] 压缩模型失败，压缩降级也失败，已降级到 最后三轮 正文摘要: trace_id={}, conversation_id={}, err={}, compression_err={}",
-                    trace_id, source.id, err, compression_err
-                );
-                (
-                    build_archive_summary_from_last_three_rounds(source),
-                    Some(format!(
-                        "压缩模型失败，压缩降级失败，已使用最后三轮正文对话降级摘要：{}（压缩降级原因：{}）",
-                        err, compression_err
-                    )),
-                )
-            }
-        },
+        }
+    }
+
+    match build_archive_summary_from_compression_and_last_three_rounds(source) {
+        Ok(summary) => {
+            eprintln!(
+                "[ARCHIVE-PIPELINE] 上下文整理模型失败，重试后降级到 上下文整理信息+最后三轮 正文摘要: trace_id={}, conversation_id={}, attempts={}, err={}",
+                trace_id, source.id, MAX_ATTEMPTS, last_err
+            );
+            (
+                summary,
+                Some(format!(
+                    "上下文整理模型失败（已重试{}次），已使用上下文整理信息+最后三轮正文对话降级摘要：{}",
+                    MAX_ATTEMPTS, last_err
+                )),
+            )
+        }
+        Err(compression_err) => {
+            eprintln!(
+                "[ARCHIVE-PIPELINE] 上下文整理模型失败，重试后上下文整理降级失败，已降级到 最后三轮 正文摘要: trace_id={}, conversation_id={}, attempts={}, err={}, compression_err={}",
+                trace_id, source.id, MAX_ATTEMPTS, last_err, compression_err
+            );
+            (
+                build_archive_summary_from_last_three_rounds(source),
+                Some(format!(
+                    "上下文整理模型失败（已重试{}次），上下文整理降级失败，已使用最后三轮正文对话降级摘要：{}（上下文整理降级原因：{}）",
+                    MAX_ATTEMPTS, last_err, compression_err
+                )),
+            )
+        }
     }
 }
 
@@ -856,7 +1077,7 @@ async fn run_context_compaction_pipeline_inner(
             archived: false,
             archive_id: None,
             active_conversation_id: Some(source.id.clone()),
-            summary: "当前对话为空，无需压缩。".to_string(),
+            summary: "当前对话为空，无需整理。".to_string(),
             merged_memories: 0,
             warning: None,
             reason_code: Some("empty_conversation".to_string()),
@@ -918,13 +1139,14 @@ async fn run_context_compaction_pipeline_inner(
         .conversations
         .iter()
         .position(|item| item.id == source.id && item.summary.trim().is_empty())
-        .ok_or_else(|| "活动对话已变化，请重试压缩。".to_string())?;
+        .ok_or_else(|| "活动对话已变化，请重试上下文整理。".to_string())?;
     let compression_message = build_compaction_message(&summary, compaction_reason);
+    let compression_message_id = compression_message.id.clone();
     {
         let conversation = data
             .conversations
             .get_mut(conversation_idx)
-            .ok_or_else(|| "活动对话索引无效，请重试压缩。".to_string())?;
+            .ok_or_else(|| "活动对话索引无效，请重试上下文整理。".to_string())?;
         conversation.messages.push(compression_message.clone());
         let now = now_iso();
         conversation.updated_at = now.clone();
@@ -936,11 +1158,56 @@ async fn run_context_compaction_pipeline_inner(
         .conversations
         .get(conversation_idx)
         .map(|item| item.id.clone());
+    let conversation_for_memory = data
+        .conversations
+        .get(conversation_idx)
+        .cloned()
+        .ok_or_else(|| "活动对话索引无效，请重试上下文整理。".to_string())?;
     state_write_app_data_cached(&state, &data)?;
 
+    drop(guard);
+
+    {
+        let verify_guard = state
+            .state_lock
+            .lock()
+            .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+        let verify_data = state_read_app_data_cached(&state)?;
+        let persisted = verify_data
+            .conversations
+            .iter()
+            .find(|item| item.id == source.id && item.summary.trim().is_empty())
+            .map(|conversation| {
+                conversation
+                    .messages
+                    .iter()
+                    .any(|message| message.id == compression_message_id)
+            })
+            .unwrap_or(false);
+        drop(verify_guard);
+        if !persisted {
+            return Err("上下文整理消息写入校验失败：已执行整理但未找到落盘消息，请重试。".to_string());
+        }
+    }
+    eprintln!(
+        "[ARCHIVE-PIPELINE] 上下文整理消息写入校验通过: conversation_id={}, message_id={}",
+        source.id,
+        compression_message_id
+    );
     emit_compaction_history_flushed_event(state, &source.id, &compression_message);
 
-    drop(guard);
+    let all_compaction_context = archive_pipeline_all_compaction_context(&conversation_for_memory);
+    spawn_compaction_memory_generation_task(
+        state,
+        selected_api,
+        resolved_api,
+        &host_agent,
+        &user_alias,
+        &conversation_for_memory,
+        &all_compaction_context,
+        "COMPACTION-MEMORY-ASYNC",
+        trace_id,
+    );
 
     eprintln!(
         "[{}] trace={} done compaction=true merged_memories=0 merged_groups=0",
@@ -1061,22 +1328,47 @@ async fn run_archive_pipeline_inner(
         host_agent_id
     );
 
-    let (parsed, archive_warning) = summarize_archive_draft_with_fallback(
+    let (pre_archive_compaction_summary, pre_archive_compaction_warning) =
+        summarize_compaction_text_with_fallback(
+            state,
+            resolved_api,
+            selected_api,
+            &host_agent,
+            &user_alias,
+            source,
+            trace_id,
+        )
+        .await;
+    let pre_archive_compaction_message =
+        build_compaction_message(&pre_archive_compaction_summary, "archive_pre_compaction");
+    let pre_archive_compaction_message_id = pre_archive_compaction_message.id.clone();
+    let mut source_for_archive = source.clone();
+    source_for_archive
+        .messages
+        .push(pre_archive_compaction_message.clone());
+    source_for_archive.updated_at = now_iso();
+
+    let all_compaction_context = archive_pipeline_all_compaction_context(&source_for_archive);
+    let (summary, archive_warning_main) = summarize_archive_summary_with_fallback(
         state,
         resolved_api,
         selected_api,
         &host_agent,
         &user_alias,
-        source,
+        &source_for_archive,
+        &all_compaction_context,
         &memories,
-        trace_tag,
-        &trace_id,
     )
     .await;
-    let summary = parsed.summary;
-    let useful_memory_ids = parsed.useful_memory_ids;
-    let summary_memories = parsed.new_memories;
-    let merge_groups = parsed.merge_groups;
+    let archive_warning = match (
+        archive_warning_main,
+        pre_archive_compaction_warning,
+    ) {
+        (Some(main), Some(compaction)) => Some(format!("{main}；预整理提示：{compaction}")),
+        (Some(main), None) => Some(main),
+        (None, Some(compaction)) => Some(format!("预整理提示：{compaction}")),
+        (None, None) => None,
+    };
 
     let guard = state
         .state_lock
@@ -1084,6 +1376,27 @@ async fn run_archive_pipeline_inner(
         .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
     let mut data = state_read_app_data_cached(&state)?;
     ensure_default_agent(&mut data);
+    let source_conversation_idx = data
+        .conversations
+        .iter()
+        .position(|item| item.id == source.id && item.summary.trim().is_empty())
+        .ok_or_else(|| "归档前上下文整理写回失败：活动会话已变化，请重试归档。".to_string())?;
+    {
+        let conversation = data
+            .conversations
+            .get_mut(source_conversation_idx)
+            .ok_or_else(|| "归档前上下文整理写回失败：活动会话索引无效，请重试归档。".to_string())?;
+        conversation.messages.push(pre_archive_compaction_message);
+        let now = now_iso();
+        conversation.updated_at = now.clone();
+        conversation.last_user_at = Some(now);
+        eprintln!(
+            "[ARCHIVE-PIPELINE] 归档前上下文整理消息已写回: conversation_id={}, message_count={}, message_id={}",
+            conversation.id,
+            conversation.messages.len(),
+            pre_archive_compaction_message_id
+        );
+    }
     let archive_id = archive_conversation_now(&mut data, &source.id, archive_reason, &summary)
         .ok_or_else(|| "活动对话已变化，请重试归档。".to_string())?;
     let active_idx = ensure_active_conversation_index(&mut data, &selected_api.id, "");
@@ -1098,20 +1411,6 @@ async fn run_archive_pipeline_inner(
         );
         return Err("Failed to ensure active conversation after archive.".to_string());
     }
-    let owner_agent_id = data
-        .agents
-        .iter()
-        .find(|a| a.id == host_agent_id && !a.is_built_in_user && a.private_memory_enabled)
-        .map(|a| a.id.as_str());
-    let memory_feedback = memory_store_apply_archive_feedback(
-        &state.data_path,
-        &source.memory_recall_table,
-        &useful_memory_ids,
-    )?;
-    let merged_memories =
-        merge_memories_into_store(&state.data_path, &summary_memories, owner_agent_id)?;
-    let merged_groups =
-        merge_memory_groups_into_store(&state.data_path, &merge_groups, owner_agent_id)?;
     state_write_app_data_cached(&state, &data)?;
 
     // 清理PDF缓存
@@ -1131,15 +1430,23 @@ async fn run_archive_pipeline_inner(
 
     drop(guard);
 
+    // 归档前预整理同样属于“上下文整理行为”，必须独立入一个记忆任务队列。
+    spawn_compaction_memory_generation_task(
+        state,
+        selected_api,
+        resolved_api,
+        &host_agent,
+        &user_alias,
+        &source_for_archive,
+        &all_compaction_context,
+        "ARCHIVE-PRE-COMPACTION-MEMORY-ASYNC",
+        trace_id,
+    );
+
     eprintln!(
-        "[{}] trace={} done archived=true merged_memories={} merged_groups={} useful_accept={} penalized={} natural_decay={}",
+        "[{}] trace={} done archived=true merged_memories=0 merged_groups=0 useful_accept=0 penalized=0 natural_decay=0",
         trace_tag,
         trace_id,
-        merged_memories,
-        merged_groups,
-        memory_feedback.useful_accepted_count,
-        memory_feedback.penalized_count,
-        memory_feedback.natural_decay_count,
     );
 
     Ok(ForceArchiveResult {
@@ -1147,11 +1454,11 @@ async fn run_archive_pipeline_inner(
         archive_id: Some(archive_id),
         active_conversation_id,
         summary,
-        merged_memories,
+        merged_memories: 0,
         warning: archive_warning,
         reason_code: None,
         elapsed_ms: Some(started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
-        memory_feedback: Some(memory_feedback),
-        merge_groups: Some(merged_groups),
+        memory_feedback: None,
+        merge_groups: Some(0),
     })
 }

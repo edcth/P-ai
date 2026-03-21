@@ -271,7 +271,6 @@ fn conversation_to_archive(conversation: &Conversation) -> ConversationArchive {
             .clone()
             .unwrap_or_else(|| conversation.updated_at.clone()),
         reason: "conversation_summary".to_string(),
-        summary: conversation.summary.clone(),
         source_conversation: conversation.clone(),
     }
 }
@@ -294,9 +293,6 @@ fn archive_to_conversation(archive: ConversationArchive) -> Conversation {
     }
     if conversation.id.trim().is_empty() {
         conversation.id = Uuid::new_v4().to_string();
-    }
-    if conversation.summary.trim().is_empty() {
-        conversation.summary = archive.summary;
     }
     if conversation.archived_at.as_deref().unwrap_or("").trim().is_empty() {
         conversation.archived_at = Some(archive.archived_at);

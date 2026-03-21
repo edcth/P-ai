@@ -1131,8 +1131,6 @@ struct ConversationArchive {
     archive_id: String,
     archived_at: String,
     reason: String,
-    #[serde(default)]
-    summary: String,
     source_conversation: Conversation,
 }
 
