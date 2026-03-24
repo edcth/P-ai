@@ -2,6 +2,11 @@
 
 ## 未发布
 
+- 调整（apply-patch-absolute-path）：`apply_patch` 统一为绝对路径输入
+  - `apply_patch` 路径解析改为只接受绝对路径，并继续校验路径必须落在当前工作区内
+  - 同步更新 `apply_patch` 撤回链路与解析测试，统一使用绝对路径补丁输入
+  - 新增计划文档 `plan/20260324_apply_patch绝对路径统一计划.md`
+
 - 调整（tool-copy-alignment）：统一工具说明中文文案并校准 `apply_patch` 约束
   - `apply_patch` 工具说明改为中文规则式描述，移除示例，明确要求绝对路径
   - 补充 `Update File` 必须先写 `@@` hunk 头的说明，并明确不接受完整 git diff 头

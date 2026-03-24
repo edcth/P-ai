@@ -309,10 +309,19 @@ mod rewind_apply_patch_tests {
         }
     }
 
+    fn absolute_user_path(path: &Path) -> String {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    }
+
     #[test]
     fn collect_records_should_only_pick_success_apply_patch() {
+        let base = make_temp_dir("rewind-collect");
+        let add_path = base.join("a.txt");
         let args = json!({
-            "input": "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch",
+            "input": format!("*** Begin Patch\n*** Add File: {}\n+hello\n*** End Patch", add_path.to_string_lossy()),
             "sessionId": "s1"
         })
         .to_string();
@@ -404,8 +413,11 @@ mod rewind_apply_patch_tests {
         let base = make_temp_dir("rewind-legacy-update");
         let file = base.join("a.txt");
         std::fs::write(&file, "line1\nold\nline3\n").expect("seed file");
-        let patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n line1\n-old\n+new\n line3\n*** End Patch";
-        let parsed = apply_patch_parse(patch).expect("parse");
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n line1\n-old\n+new\n line3\n*** End Patch",
+            absolute_user_path(&file)
+        );
+        let parsed = apply_patch_parse(&patch).expect("parse");
         let resolved = apply_patch_resolve_ops(&base, parsed).expect("resolve");
         let ApplyPatchResolvedOp::Update { hunks, .. } = &resolved[0] else {
             panic!("expected update");
@@ -425,8 +437,11 @@ mod rewind_apply_patch_tests {
         let base = make_temp_dir("rewind-legacy-add-drift");
         let file = base.join("a.txt");
         std::fs::write(&file, "drift\n").expect("seed drift");
-        let patch = "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch";
-        let parsed = apply_patch_parse(patch).expect("parse");
+        let patch = format!(
+            "*** Begin Patch\n*** Add File: {}\n+hello\n*** End Patch",
+            absolute_user_path(&file)
+        );
+        let parsed = apply_patch_parse(&patch).expect("parse");
         let resolved = apply_patch_resolve_ops(&base, parsed).expect("resolve");
         let inverse = build_inverse_apply_patch_ops(&resolved).expect("inverse");
         let err = execute_inverse_apply_patch_ops(&inverse).expect_err("should fail");

@@ -93,10 +93,6 @@ struct ApplyPatchBackupRecord {
     entries: Vec<ApplyPatchBackupEntry>,
 }
 
-fn apply_patch_tool_description() -> String {
-    "Apply structured patch to files in current workspace root.".to_string()
-}
-
 fn apply_patch_temp_root(data_path: &PathBuf) -> PathBuf {
     app_root_from_data_path(data_path).join("temp").join("apply_patch")
 }
@@ -607,12 +603,11 @@ fn apply_patch_resolve_path(base: &Path, raw: &str) -> Result<PathBuf, String> {
     if normalized.is_empty() {
         return Err("补丁路径为空。".to_string());
     }
-    if PathBuf::from(&normalized).is_absolute() || apply_patch_has_windows_drive_prefix(&normalized)
+    if !PathBuf::from(&normalized).is_absolute() && !apply_patch_has_windows_drive_prefix(&normalized)
     {
-        return Err(format!("补丁路径必须是相对路径：`{raw}`"));
+        return Err(format!("apply_patch 只支持绝对路径：`{raw}`"));
     }
-    let joined = base.join(&normalized);
-    let safe = terminal_normalize_for_access_check(&joined);
+    let safe = terminal_normalize_for_access_check(Path::new(&normalized));
     if !path_is_within(base, &safe) {
         return Err(format!("补丁路径越界：`{raw}`"));
     }
@@ -974,6 +969,13 @@ async fn builtin_apply_patch(
 mod apply_patch_tool_tests {
     use super::*;
 
+    fn absolute_user_path(path: &Path) -> String {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    }
+
     fn make_temp_data_path(prefix: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("{prefix}-{}", Uuid::new_v4()));
         std::fs::create_dir_all(root.join("config")).expect("create config dir");
@@ -982,13 +984,25 @@ mod apply_patch_tool_tests {
 
     #[test]
     fn parse_should_support_add_delete_update_and_move() {
-        let patch = "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** Delete File: b.txt\n*** Update File: c.txt\n*** Move to: d.txt\n@@\n-old\n+new\n*** End Patch";
-        let ops = apply_patch_parse(patch).expect("parse");
+        let root = std::env::temp_dir().join(format!("eca-apply-patch-parse-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let add_path = root.join("a.txt");
+        let delete_path = root.join("b.txt");
+        let update_path = root.join("c.txt");
+        let move_path = root.join("d.txt");
+        let patch = format!(
+            "*** Begin Patch\n*** Add File: {}\n+hello\n*** Delete File: {}\n*** Update File: {}\n*** Move to: {}\n@@\n-old\n+new\n*** End Patch",
+            add_path.to_string_lossy(),
+            delete_path.to_string_lossy(),
+            update_path.to_string_lossy(),
+            move_path.to_string_lossy()
+        );
+        let ops = apply_patch_parse(&patch).expect("parse");
         assert_eq!(ops.len(), 3);
         match &ops[2] {
             ApplyPatchOp::Update(update) => {
-                assert_eq!(update.from, "c.txt");
-                assert_eq!(update.to.as_deref(), Some("d.txt"));
+                assert_eq!(update.from, update_path.to_string_lossy().to_string());
+                assert_eq!(update.to.as_deref(), Some(move_path.to_string_lossy().as_ref()));
                 assert_eq!(update.hunks.len(), 1);
             }
             _ => panic!("expected update op"),
@@ -1012,10 +1026,19 @@ mod apply_patch_tool_tests {
     }
 
     #[test]
-    fn resolve_path_should_reject_escape() {
+    fn resolve_path_should_reject_relative_path() {
         let base = std::env::temp_dir().join("eca-apply-patch-tests");
         let _ = std::fs::create_dir_all(&base);
-        let result = apply_patch_resolve_path(&base, "../escape.txt");
+        let result = apply_patch_resolve_path(&base, "relative.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_path_should_reject_absolute_path_outside_workspace() {
+        let base = std::env::temp_dir().join(format!("eca-apply-patch-base-{}", Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("eca-apply-patch-outside-{}.txt", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&base);
+        let result = apply_patch_resolve_path(&base, &outside.to_string_lossy());
         assert!(result.is_err());
     }
 
@@ -1028,9 +1051,19 @@ mod apply_patch_tool_tests {
         std::fs::write(cwd.join("delete.txt"), b"\x00\x01delete").expect("seed delete");
         std::fs::write(cwd.join("update.txt"), "old\n").expect("seed update");
         std::fs::write(cwd.join("move.txt"), "before\nold\n").expect("seed move");
-        let patch = "*** Begin Patch\n*** Delete File: delete.txt\n*** Update File: update.txt\n@@\n-old\n+new\n*** Update File: move.txt\n*** Move to: moved.txt\n@@\n before\n-old\n+new\n*** End Patch";
-        let ops = apply_patch_resolve_ops(&cwd, apply_patch_parse(patch).expect("parse")).expect("resolve");
-        let record = apply_patch_prepare_backup_record(&data_path, "s1", &cwd, patch, &ops)
+        let delete_path = absolute_user_path(&cwd.join("delete.txt"));
+        let update_path = absolute_user_path(&cwd.join("update.txt"));
+        let move_from_path = absolute_user_path(&cwd.join("move.txt"));
+        let move_to_path = cwd.join("moved.txt").to_string_lossy().to_string();
+        let patch = format!(
+            "*** Begin Patch\n*** Delete File: {}\n*** Update File: {}\n@@\n-old\n+new\n*** Update File: {}\n*** Move to: {}\n@@\n before\n-old\n+new\n*** End Patch",
+            delete_path,
+            update_path,
+            move_from_path,
+            move_to_path
+        );
+        let ops = apply_patch_resolve_ops(&cwd, apply_patch_parse(&patch).expect("parse")).expect("resolve");
+        let record = apply_patch_prepare_backup_record(&data_path, "s1", &cwd, &patch, &ops)
             .expect("prepare");
         assert_eq!(record.entries.len(), 3);
         assert!(record.entries.iter().any(|entry| entry.kind == ApplyPatchBackupKind::Delete));
