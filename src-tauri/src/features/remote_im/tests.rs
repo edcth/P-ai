@@ -160,8 +160,31 @@
             },
         };
 
-        let conversation_id =
-            resolve_conversation_id(&input, &mut data, DEFAULT_AGENT_ID).expect("resolve route");
+        let mut contact = RemoteImContact {
+            id: "contact-1".to_string(),
+            channel_id: input.channel_id.clone(),
+            platform: input.platform,
+            remote_contact_type: input.remote_contact_type.clone(),
+            remote_contact_id: input.remote_contact_id.clone(),
+            remote_contact_name: input.remote_contact_name.clone().unwrap_or_default(),
+            remark_name: String::new(),
+            allow_send: false,
+            allow_receive: true,
+            activation_mode: "never".to_string(),
+            activation_keywords: Vec::new(),
+            activation_cooldown_seconds: 0,
+            route_mode: "main_session".to_string(),
+            bound_department_id: None,
+            bound_conversation_id: None,
+            processing_mode: "continuous".to_string(),
+            last_activated_at: None,
+            last_message_at: None,
+            dingtalk_session_webhook: None,
+            dingtalk_session_webhook_expired_time: None,
+        };
+        let config = AppConfig::default();
+        let (_, _, conversation_id) =
+            resolve_contact_session_target(&config, &mut data, &mut contact).expect("resolve route");
 
         assert_eq!(conversation_id, "conversation-main");
     }
@@ -242,8 +265,31 @@
             },
         };
 
-        let conversation_id =
-            resolve_conversation_id(&input, &mut data, DEFAULT_AGENT_ID).expect("resolve route");
+        let mut contact = RemoteImContact {
+            id: "contact-1".to_string(),
+            channel_id: input.channel_id.clone(),
+            platform: input.platform,
+            remote_contact_type: input.remote_contact_type.clone(),
+            remote_contact_id: input.remote_contact_id.clone(),
+            remote_contact_name: input.remote_contact_name.clone().unwrap_or_default(),
+            remark_name: String::new(),
+            allow_send: false,
+            allow_receive: true,
+            activation_mode: "never".to_string(),
+            activation_keywords: Vec::new(),
+            activation_cooldown_seconds: 0,
+            route_mode: "main_session".to_string(),
+            bound_department_id: None,
+            bound_conversation_id: None,
+            processing_mode: "continuous".to_string(),
+            last_activated_at: None,
+            last_message_at: None,
+            dingtalk_session_webhook: None,
+            dingtalk_session_webhook_expired_time: None,
+        };
+        let config = AppConfig::default();
+        let (_, _, conversation_id) =
+            resolve_contact_session_target(&config, &mut data, &mut contact).expect("resolve route");
 
         assert_eq!(conversation_id, "conversation-main");
         assert_eq!(data.main_conversation_id.as_deref(), Some("conversation-main"));

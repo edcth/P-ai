@@ -2,6 +2,13 @@
 
 ## 未发布
 
+- 新增（read-file-mcp-experimental）：新增实验性 `read_file` MCP 工具并修正图片读取与会话模型选择
+  - 新增 `read_file` 工具，支持文本、图片、PDF 与部分 Office 文件读取，文本结果统一按 `offset/limit` 分页并限制在 30000 字符内
+  - `read_file` 运行时改为通过内建 MCP 服务器注册，不再直接以内建 tool 形式挂载，图片结果协议对齐截图工具链路
+  - Office 读取实验性接入 `litchi`，补充 `litchi_probe` / `undoc_probe` 验证入口，并对 `.ppt` panic 做普通错误降级
+  - 修复主聊天发送链路未优先使用 `session.api_config_id` 的问题，避免当前会话已选视觉模型时仍错误走图转文回退
+  - 补齐 `read_file` / MCP 启动与执行日志，统一为中文诊断字段，便于排查路径、reader、耗时与错误详情
+
 - 调整（chat-header-archives-shortcut）：聊天窗口左上角新增归档窗口快捷入口
   - 聊天窗口左上角在设置按钮旁新增归档图标按钮
   - 点击后直接打开现有归档窗口，复用既有 `show_archives_window` 链路

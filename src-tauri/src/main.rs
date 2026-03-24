@@ -183,6 +183,12 @@ fn main() {
         }
         return;
     }
+    if std::env::args().any(|arg| arg == MCP_READ_FILE_SERVER_FLAG) {
+        if let Err(err) = run_read_file_mcp_server() {
+            eprintln!("{err}");
+        }
+        return;
+    }
 
     let state = match AppState::new() {
         Ok(state) => state,

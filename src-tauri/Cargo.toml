@@ -52,6 +52,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 tantivy = "0.22"
 font-kit = "0.14"
 chrono = { version = "0.4", features = ["serde"] }
+undoc = "0.1.8"
+litchi = { git = "https://github.com/DevExzh/litchi.git", rev = "5a931961d58bf71c6bb5b7e82f450bda34349e3d" }
 
 [features]
 default = ["custom-protocol"]

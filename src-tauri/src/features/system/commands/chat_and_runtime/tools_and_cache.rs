@@ -131,6 +131,10 @@ fn check_tools_status(
                 "loaded".to_string(),
                 "远程联系人通讯工具可用（支持 list/send）".to_string(),
             ),
+            "read_file" => (
+                "loaded".to_string(),
+                "本地文件读取工具可用（文本/图片/PDF/Office）".to_string(),
+            ),
             "exec" => {
                 #[cfg(target_os = "windows")]
                 {

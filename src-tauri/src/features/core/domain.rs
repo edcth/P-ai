@@ -310,6 +310,13 @@ fn default_api_tools() -> Vec<ApiToolConfig> {
             values: serde_json::json!({}),
         },
         ApiToolConfig {
+            id: "read_file".to_string(),
+            command: "builtin".to_string(),
+            args: vec!["read_file".to_string()],
+            enabled: true,
+            values: serde_json::json!({}),
+        },
+        ApiToolConfig {
             id: "apply_patch".to_string(),
             command: "builtin".to_string(),
             args: vec!["apply_patch".to_string()],

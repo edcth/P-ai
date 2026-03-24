@@ -114,6 +114,50 @@ fn remote_im_find_hidden_contact_by_conversation<'a>(
     })
 }
 
+fn prioritize_requested_chat_api_id(
+    requested_api_id: Option<&str>,
+    candidate_api_ids: &mut Vec<String>,
+    app_config: &AppConfig,
+) {
+    let Some(requested_api_id) = requested_api_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    let Some(requested_api) = app_config
+        .api_configs
+        .iter()
+        .find(|api| api.id == requested_api_id)
+    else {
+        eprintln!(
+            "[聊天] 会话指定模型不存在，忽略 session.api_config_id={}",
+            requested_api_id
+        );
+        return;
+    };
+
+    if !requested_api.request_format.is_chat_text() {
+        eprintln!(
+            "[聊天] 会话指定模型不是聊天文本模型，忽略 session.api_config_id={}, request_format={:?}",
+            requested_api_id,
+            requested_api.request_format
+        );
+        return;
+    }
+
+    if let Some(index) = candidate_api_ids.iter().position(|id| id == requested_api_id) {
+        if index > 0 {
+            let api_id = candidate_api_ids.remove(index);
+            candidate_api_ids.insert(0, api_id);
+        }
+        return;
+    }
+
+    candidate_api_ids.insert(0, requested_api_id.to_string());
+}
+
 async fn send_chat_message_inner(
     input: SendChatRequest,
     state: &AppState,
@@ -172,6 +216,13 @@ async fn send_chat_message_inner(
         .session
         .as_ref()
         .and_then(|s| s.department_id.as_deref())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    let requested_api_config_id = input
+        .session
+        .as_ref()
+        .and_then(|s| s.api_config_id.as_deref())
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(ToOwned::to_owned);
@@ -257,6 +308,11 @@ async fn send_chat_message_inner(
                 .ok_or_else(|| "No API config configured. Please add one.".to_string())?;
             candidate_api_ids.push(fallback.id.clone());
         }
+        prioritize_requested_chat_api_id(
+            requested_api_config_id.as_deref(),
+            &mut candidate_api_ids,
+            &app_config,
+        );
         let selected_api_id = candidate_api_ids
             .first()
             .cloned()
@@ -1398,4 +1454,77 @@ async fn send_chat_message_inner(
     // 兜底催处理：归档阶段可能短暂阻塞出队，这里在当前轮次结束后补一次调度触发。
     trigger_chat_queue_processing(state);
     final_result
+}
+
+#[cfg(test)]
+mod core_send_inner_tests {
+    use super::*;
+
+    fn test_chat_api(id: &str, enable_image: bool) -> ApiConfig {
+        ApiConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            request_format: RequestFormat::OpenAI,
+            enable_text: true,
+            enable_image,
+            enable_audio: false,
+            enable_tools: false,
+            tools: vec![],
+            base_url: "https://example.com/v1".to_string(),
+            api_key: "k".to_string(),
+            model: format!("model-{id}"),
+            temperature: 0.7,
+            context_window_tokens: 128_000,
+            max_output_tokens: 4_096,
+            failure_retry_count: 0,
+        }
+    }
+
+    #[test]
+    fn prioritize_requested_chat_api_id_should_move_requested_id_to_front() {
+        let app_config = AppConfig {
+            api_configs: vec![test_chat_api("text-a", false), test_chat_api("vision-b", true)],
+            ..AppConfig::default()
+        };
+        let mut candidate_api_ids = vec!["text-a".to_string(), "vision-b".to_string()];
+
+        prioritize_requested_chat_api_id(Some("vision-b"), &mut candidate_api_ids, &app_config);
+
+        assert_eq!(
+            candidate_api_ids,
+            vec!["vision-b".to_string(), "text-a".to_string()]
+        );
+    }
+
+    #[test]
+    fn prioritize_requested_chat_api_id_should_insert_requested_chat_model_not_in_department_list() {
+        let app_config = AppConfig {
+            api_configs: vec![test_chat_api("text-a", false), test_chat_api("vision-b", true)],
+            ..AppConfig::default()
+        };
+        let mut candidate_api_ids = vec!["text-a".to_string()];
+
+        prioritize_requested_chat_api_id(Some("vision-b"), &mut candidate_api_ids, &app_config);
+
+        assert_eq!(
+            candidate_api_ids,
+            vec!["vision-b".to_string(), "text-a".to_string()]
+        );
+    }
+
+    #[test]
+    fn prioritize_requested_chat_api_id_should_ignore_non_chat_or_missing_model() {
+        let mut embedding_api = test_chat_api("embed-a", false);
+        embedding_api.request_format = RequestFormat::OpenAIEmbedding;
+        let app_config = AppConfig {
+            api_configs: vec![test_chat_api("text-a", false), embedding_api],
+            ..AppConfig::default()
+        };
+        let mut candidate_api_ids = vec!["text-a".to_string()];
+
+        prioritize_requested_chat_api_id(Some("embed-a"), &mut candidate_api_ids, &app_config);
+        prioritize_requested_chat_api_id(Some("missing"), &mut candidate_api_ids, &app_config);
+
+        assert_eq!(candidate_api_ids, vec!["text-a".to_string()]);
+    }
 }

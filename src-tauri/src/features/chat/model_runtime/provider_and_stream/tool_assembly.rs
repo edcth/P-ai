@@ -67,6 +67,9 @@ async fn assemble_runtime_tools(
     app_state: Option<&AppState>,
     tool_session_id: &str,
 ) -> Result<RuntimeToolAssembly, String> {
+    // 约束：禁止继续新增“直接挂载的内建工具”给模型。
+    // 所有新工具都必须优先实现为 MCP 形态并在这里注册，
+    // 这样才能统一工具协议、媒体转发、权限边界和运行时行为。
     let current_department = department_for_agent_id(app_config, &agent.id);
     let department_reason = |tool_id: &str| tool_restricted_by_department(current_department, tool_id);
     let has_fetch = tool_enabled(selected_api, agent, current_department, "fetch");
@@ -76,6 +79,7 @@ async fn assemble_runtime_tools(
     let has_screenshot = tool_enabled(selected_api, agent, current_department, "screenshot");
     let has_command = tool_enabled(selected_api, agent, current_department, "command");
     let has_exec = tool_enabled(selected_api, agent, current_department, "exec");
+    let has_read_file = tool_enabled(selected_api, agent, current_department, "read_file");
     let has_apply_patch = tool_enabled(selected_api, agent, current_department, "apply_patch");
     let has_task = tool_enabled(selected_api, agent, current_department, "task");
     let has_delegate_base = tool_enabled(selected_api, agent, current_department, "delegate");
@@ -92,6 +96,7 @@ async fn assemble_runtime_tools(
     let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
     let mut tool_manifest = Vec::<Value>::new();
     let mut mcp_screenshot_client: Option<ScreenshotMcpClient> = None;
+    let mut mcp_read_file_client: Option<ReadFileMcpClient> = None;
 
     tool_manifest.push(tool_manifest_item(
         "builtin",
@@ -256,6 +261,45 @@ async fn assemble_runtime_tools(
         ));
     }
 
+    if has_read_file {
+        match try_attach_read_file_mcp_tool(
+            &mut tools,
+            tool_session_id,
+            selected_api.id.as_str(),
+        )
+        .await
+        {
+            Ok(client) => {
+                mcp_read_file_client = Some(client);
+                tool_manifest.push(tool_manifest_item("builtin_mcp", "read_file", true, true, None));
+            }
+            Err(err) => {
+                eprintln!(
+                    "[MCP] 失败，任务=read_file，触发条件=MCP 附加失败，error={}",
+                    err
+                );
+                tool_manifest.push(tool_manifest_item(
+                    "builtin_mcp",
+                    "read_file",
+                    true,
+                    false,
+                    Some(format!(
+                        "MCP 附加失败（任务=read_file，触发条件=MCP 附加失败，error={}）",
+                        err
+                    )),
+                ));
+            }
+        }
+    } else {
+        tool_manifest.push(tool_manifest_item(
+            "builtin_mcp",
+            "read_file",
+            false,
+            false,
+            department_reason("read_file").or_else(|| Some("当前人格未启用该工具".to_string())),
+        ));
+    }
+
     if has_apply_patch {
         let state = app_state
             .ok_or_else(|| "apply_patch requires app state".to_string())?
@@ -337,6 +381,7 @@ async fn assemble_runtime_tools(
         tools,
         tool_manifest,
         _mcp_screenshot_client: mcp_screenshot_client,
+        _mcp_read_file_client: mcp_read_file_client,
     })
 }
 
@@ -374,6 +419,48 @@ async fn try_attach_desktop_screenshot_mcp_tool(
 
     if !attached {
         return Err("MCP screenshot server did not expose desktop_screenshot tool".to_string());
+    }
+    Ok(client)
+}
+
+async fn try_attach_read_file_mcp_tool(
+    tools: &mut Vec<Box<dyn ToolDyn>>,
+    tool_session_id: &str,
+    api_config_id: &str,
+) -> Result<ReadFileMcpClient, String> {
+    let exe = std::env::current_exe()
+        .map_err(|err| format!("Resolve current executable for MCP read_file failed: {err}"))?;
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.arg(MCP_READ_FILE_SERVER_FLAG);
+    cmd.arg(MCP_READ_FILE_SESSION_FLAG).arg(tool_session_id);
+    cmd.arg(MCP_READ_FILE_API_FLAG).arg(api_config_id);
+    let transport = rmcp::transport::TokioChildProcess::new(cmd)
+        .map_err(|err| format!("Start MCP read_file child process failed: {err}"))?;
+
+    let client = ().serve(transport).await.map_err(|err| {
+        format!("Connect to MCP read_file server failed: {err}")
+    })?;
+    let sink = client.peer().clone();
+    let defs = client
+        .list_all_tools()
+        .await
+        .map_err(|err| format!("List MCP read_file tools failed: {err}"))?;
+
+    let mut attached = false;
+    for def in defs {
+        if def.name.as_ref() != MCP_READ_FILE_TOOL_NAME {
+            continue;
+        }
+        tools.push(Box::new(rig::tool::rmcp::McpTool::from_mcp_server(
+            def,
+            sink.clone(),
+        )));
+        attached = true;
+        break;
+    }
+
+    if !attached {
+        return Err("MCP read_file server did not expose read_file tool".to_string());
     }
     Ok(client)
 }

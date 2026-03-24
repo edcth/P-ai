@@ -37,6 +37,26 @@ fn frontend_screenshot_tool_definition() -> FrontendToolDefinition {
     }
 }
 
+fn frontend_read_file_tool_definition() -> FrontendToolDefinition {
+    FrontendToolDefinition {
+        kind: "function".to_string(),
+        function: FrontendToolFunctionDefinition {
+            name: "read_file".to_string(),
+            description: "读取本地文件内容。自动识别文本、图片、PDF 与 Office 文件；absolute_path 必须是绝对路径，文本结果最多返回 30000 字符，超出时请继续使用 offset/limit 分页。".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "absolute_path": { "type": "string", "description": "文件绝对路径，例如 E:\\\\github\\\\easy_call_ai\\\\README.md" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "0-based 起始行号，用于分页读取大文件" },
+                    "limit": { "type": "integer", "minimum": 1, "description": "最多读取的行数，配合 offset 使用" }
+                },
+                "required": ["absolute_path"],
+                "additionalProperties": false
+            }),
+        },
+    }
+}
+
 async fn builtin_tool_definitions_for_frontend(
     state: &AppState,
 ) -> Vec<FrontendToolDefinition> {
@@ -71,7 +91,7 @@ async fn builtin_tool_definitions_for_frontend(
             rig::tool::Tool::definition(
                 &BuiltinCommandTool {
                     app_state: state.clone(),
-                    api_config_id: preview_api_id,
+                    api_config_id: preview_api_id.clone(),
                     agent_id: preview_agent_id,
                 },
                 String::new(),
@@ -88,6 +108,7 @@ async fn builtin_tool_definitions_for_frontend(
             )
             .await,
         ),
+        frontend_read_file_tool_definition(),
         frontend_tool_definition(
             rig::tool::Tool::definition(
                 &BuiltinApplyPatchTool {
