@@ -47,7 +47,6 @@ export function useAppWatchers(options: UseAppWatchersOptions) {
       temperature: a.temperature,
       contextWindowTokens: a.contextWindowTokens,
       maxOutputTokens: a.maxOutputTokens,
-      failureRetryCount: a.failureRetryCount,
     })),
     () => options.normalizeApiBindingsLocal(),
     { deep: true },

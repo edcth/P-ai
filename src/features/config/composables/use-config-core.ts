@@ -50,16 +50,10 @@ export function useConfigCore(options: UseConfigCoreOptions) {
   const MAX_MIN_RECORD_SECONDS = 30;
   const DEFAULT_MAX_RECORD_SECONDS = 60;
   const MAX_RECORD_SECONDS = 600;
-  const MAX_EMPTY_REPLY_RETRY_COUNT = 20;
   function normalizeMaxOutputTokens(value: unknown): number {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return 4096;
     return Math.max(256, Math.min(32768, Math.round(parsed)));
-  }
-  function normalizeFailureRetryCount(value: unknown): number {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return 0;
-    return Math.max(0, Math.min(MAX_EMPTY_REPLY_RETRY_COUNT, Math.round(parsed)));
   }
 
   function normalizeUiFont(value: unknown): string {
@@ -92,7 +86,6 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       temperature: 1,
       contextWindowTokens: 128000,
       maxOutputTokens: 4096,
-      failureRetryCount: 0,
     };
   }
 
@@ -117,10 +110,6 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         Math.min(CONTEXT_WINDOW_HARD_MAX, Math.round(Number(api.contextWindowTokens ?? 128000))),
       );
       api.maxOutputTokens = normalizeMaxOutputTokens(api.maxOutputTokens);
-      api.failureRetryCount = Math.max(
-        0,
-        normalizeFailureRetryCount(api.failureRetryCount),
-      );
       normalizeApiToolBindings(api);
     }
     const recordHotkey = String(options.config.recordHotkey || "").trim();
@@ -417,7 +406,6 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         temperature: Number(a.temperature ?? 1),
         contextWindowTokens: Math.round(Number(a.contextWindowTokens ?? 128000)),
         maxOutputTokens: normalizeMaxOutputTokens(a.maxOutputTokens),
-        failureRetryCount: normalizeFailureRetryCount(a.failureRetryCount),
       })),
     };
   }
@@ -463,7 +451,6 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         temperature: a.temperature,
         contextWindowTokens: a.contextWindowTokens,
         maxOutputTokens: normalizeMaxOutputTokens(a.maxOutputTokens),
-        failureRetryCount: normalizeFailureRetryCount(a.failureRetryCount),
       })),
     });
   }

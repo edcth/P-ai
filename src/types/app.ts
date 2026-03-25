@@ -33,7 +33,6 @@ export type ApiConfigItem = {
   temperature: number;
   contextWindowTokens: number;
   maxOutputTokens?: number;
-  failureRetryCount?: number;
 };
 
 export type ShellWorkspace = {

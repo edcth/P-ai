@@ -202,6 +202,9 @@ async fn send_chat_message_inner(
     state: &AppState,
     on_delta: &tauri::ipc::Channel<AssistantDeltaEvent>,
 ) -> Result<SendChatResult, String> {
+    const FIXED_MODEL_RETRY_COUNT: usize = 3;
+    const FIXED_MODEL_RETRY_WAIT_SECONDS: u64 = 5;
+
     let trace_id = input
         .trace_id
         .as_deref()
@@ -1121,7 +1124,7 @@ async fn send_chat_message_inner(
         } else {
             candidate_selected_api.model.trim().to_string()
         };
-        let max_failure_retries = candidate_selected_api.failure_retry_count as usize;
+        let max_failure_retries = FIXED_MODEL_RETRY_COUNT;
         let mut candidate_final_error: Option<String> = None;
         for attempt in 0..=max_failure_retries {
             eprintln!(
@@ -1167,21 +1170,15 @@ async fn send_chat_message_inner(
                             .to_string(),
                     )
                 }
-                Err(error) => {
-                    if !is_retryable_model_error(&error) {
-                        candidate_final_error = Some(error);
-                        break;
-                    }
-                    (
-                        "模型请求被限流 (429)".to_string(),
-                        format!("模型持续被限流 (429)，重试后仍失败: {error}"),
-                    )
-                }
+                Err(error) => (
+                    "模型请求失败".to_string(),
+                    format!("模型请求重试后仍失败: {error}"),
+                ),
             };
 
             if attempt < max_failure_retries {
                 let retry_index = attempt + 1;
-                let wait_seconds = (retry_index as u64) * 5;
+                let wait_seconds = FIXED_MODEL_RETRY_WAIT_SECONDS;
                 let _ = on_delta.send(AssistantDeltaEvent {
                     delta: "".to_string(),
                     kind: Some("tool_status".to_string()),

@@ -93,8 +93,6 @@
       "contextWindow": "Context Window",
       "maxOutputTokens": "Max Output",
       "maxOutputTokensHint": "Controls the LLM's maximum output length. 4096 is recommended.",
-      "failureRetryCount": "Failure Retry Count",
-      "failureRetryHint": "Only retries empty replies and HTTP 429, with progressively longer delay each time (0 disables).",
       "capabilities": "Capabilities",
       "capText": "Text",
       "capImage": "Image",

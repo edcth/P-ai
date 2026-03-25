@@ -93,8 +93,6 @@
       "contextWindow": "上下文窗口",
       "maxOutputTokens": "最大输出",
       "maxOutputTokensHint": "影响 LLM 的最大输出长度，建议为 4096。",
-      "failureRetryCount": "失败重试",
-      "failureRetryHint": "仅对空回复和 429 进行重试；每次等待时间递增。0 表示关闭。",
       "capabilities": "能力开关",
       "capText": "文本",
       "capImage": "图片",
