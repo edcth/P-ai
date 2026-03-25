@@ -143,15 +143,17 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       options.config.visionApiConfigId = undefined;
     }
     options.config.sttAutoSend = !!options.config.sttAutoSend;
-    if (
-      options.config.sttApiConfigId &&
-      !options.config.apiConfigs.some((a) => a.id === options.config.sttApiConfigId && a.requestFormat === "openai_stt")
-    ) {
-      options.config.sttApiConfigId = undefined;
-    }
-    if (!options.config.sttApiConfigId) {
-      options.config.sttAutoSend = false;
-    }
+    // 移除自动清空 sttApiConfigId 和 sttAutoSend 的逻辑
+    // 用户的选择应该被尊重，即使 API 格式不匹配也不应该自动修改
+    // if (
+    //   options.config.sttApiConfigId &&
+    //   !options.config.apiConfigs.some((a) => a.id === options.config.sttApiConfigId && a.requestFormat === "openai_stt")
+    // ) {
+    //   options.config.sttApiConfigId = undefined;
+    // }
+    // if (!options.config.sttApiConfigId) {
+    //   options.config.sttAutoSend = false;
+    // }
     const seenWorkspaceNames = new Set<string>();
     const terminalShellKind = String(options.config.terminalShellKind || "").trim().toLowerCase();
     options.config.terminalShellKind =

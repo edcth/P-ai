@@ -234,7 +234,8 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
         options.config.apiConfigs.length,
         ...(cfg.apiConfigs.length ? cfg.apiConfigs : [options.createApiConfig("default")]),
       );
-      options.normalizeApiBindingsLocal();
+      // 注意：不在此处调用 normalizeApiBindingsLocal()，避免与 watch 的响应式更新产生竞态条件
+      // apiConfigs 的变化会通过 use-app-watchers 中的 watch 自动触发 normalizeApiBindingsLocal()
       options.lastSavedConfigJson.value = options.buildConfigSnapshotJson();
       options.setStatus(options.t("status.configLoaded"));
     } catch (e) {
