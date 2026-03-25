@@ -1518,6 +1518,10 @@ function cacheConversationMessages(conversationId: string, messages: ChatMessage
   };
 }
 
+function inferHasMoreHistoryFromSnapshot(messages: ChatMessage[]): boolean {
+  return Array.isArray(messages) && messages.length >= BACKGROUND_CONVERSATION_CACHE_LIMIT;
+}
+
 function clearConversationBadge(conversationId: string) {
   const cid = String(conversationId || "").trim();
   if (!cid || !backgroundConversationBadgeMap.value[cid]) return;
@@ -1613,7 +1617,6 @@ async function applyConversationMessagesAfterSynced(payload: ConversationMessage
       allMessages.value = nextMessages;
     }
     visibleMessageBlockCount.value = Math.max(1, nextMessages.length || 1);
-    hasMoreBackendHistory.value = false;
     await nextTick();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
@@ -1634,7 +1637,7 @@ async function switchUnarchivedConversation(conversationId: string) {
     const cachedDisplay = freezeConversationMessages(conversationMessageCache.value[cid] || []);
     allMessages.value = cachedDisplay;
     visibleMessageBlockCount.value = Math.max(1, cachedDisplay.length || 1);
-    hasMoreBackendHistory.value = false;
+    hasMoreBackendHistory.value = inferHasMoreHistoryFromSnapshot(cachedDisplay);
     clearConversationBadge(cid);
     const trace = beginForegroundPaintTrace(cid);
     await nextTick();

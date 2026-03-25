@@ -2,6 +2,10 @@
 
 ## 未发布
 
+- 修复（conversation-scrollback-restore）：恢复并发会话切换后的上拉历史加载
+  - 修复切换到并发会话时前端错误清空 `hasMoreBackendHistory`，导致滚动到顶部后不再触发更早消息加载的问题
+  - 会话前台切换改为根据当前缓存快照保留“可能仍有更早历史”的状态，异步补新消息时也不再覆盖该标志
+
 - 重构（markdown-render-markstream-only）：聊天 Markdown 渲染统一收口到 `markstream-vue`
   - 移除旧的 `markdown-it`、`@mdit/plugin-*`、`DOMPurify`、`twemoji` 与手工 Mermaid 二次扫描链路，避免多套渲染体系并存导致的样式与性能问题
   - 聊天消息正文统一仅通过 `markstream-vue` 的节点解析与流式渲染输出，继续保留公式与 Mermaid 的显示能力
