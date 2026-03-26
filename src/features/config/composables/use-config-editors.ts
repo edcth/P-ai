@@ -30,7 +30,12 @@ export function useConfigEditors(options: UseConfigEditorsOptions) {
       (a) => a.id === options.config.selectedApiConfigId,
     );
     if (idx < 0) return;
+    const removedId = options.config.apiConfigs[idx].id;
     options.config.apiConfigs.splice(idx, 1);
+    if (options.config.sttApiConfigId === removedId) {
+      options.config.sttApiConfigId = undefined;
+      options.config.sttAutoSend = false;
+    }
     if (options.config.apiConfigs.length > 0) {
       options.config.selectedApiConfigId = options.config.apiConfigs[0].id;
     }
