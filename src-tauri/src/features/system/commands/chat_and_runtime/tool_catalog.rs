@@ -117,6 +117,7 @@ async fn builtin_tool_definitions_for_frontend(
             rig::tool::Tool::definition(
                 &BuiltinTaskTool {
                     app_state: state.clone(),
+                    session_id: preview_session_id.clone(),
                 },
                 String::new(),
             )

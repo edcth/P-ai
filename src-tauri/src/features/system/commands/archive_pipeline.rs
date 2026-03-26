@@ -660,15 +660,11 @@ fn delete_main_conversation_and_activate_latest(
     let _ = normalize_main_conversation_marker(&mut data, "");
 
     let active_idx = if let Some(existing_idx) = latest_main_conversation_index(&data, "") {
-        for (idx, conversation) in data.conversations.iter_mut().enumerate() {
+        for (_idx, conversation) in data.conversations.iter_mut().enumerate() {
             if conversation_is_delegate(conversation) || !conversation.summary.trim().is_empty() {
                 continue;
             }
-            conversation.status = if idx == existing_idx {
-                "active".to_string()
-            } else {
-                "inactive".to_string()
-            };
+            conversation.status = "active".to_string();
         }
         if let Some(conversation) = data.conversations.get(existing_idx) {
             data.main_conversation_id = Some(conversation.id.clone());

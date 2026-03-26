@@ -1458,11 +1458,11 @@ fn set_active_unarchived_conversation(
     let target_idx = target_idx.ok_or_else(|| "Unarchived conversation not found.".to_string())?;
 
     let mut changed = defaults_changed || normalized_changed;
-    for (idx, conversation) in data.conversations.iter_mut().enumerate() {
+    for (_idx, conversation) in data.conversations.iter_mut().enumerate() {
         if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
             continue;
         }
-        let target_status = if idx == target_idx { "active" } else { "inactive" };
+        let target_status = "active";
         if conversation.status.trim() != target_status {
             conversation.status = target_status.to_string();
             changed = true;
@@ -1510,11 +1510,11 @@ fn switch_active_conversation_snapshot(
         .ok_or_else(|| "Unarchived conversation not found.".to_string())?;
 
     let mut changed = defaults_changed || normalized_changed;
-    for (idx, conversation) in data.conversations.iter_mut().enumerate() {
+    for (_idx, conversation) in data.conversations.iter_mut().enumerate() {
         if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
             continue;
         }
-        let target_status = if idx == target_idx { "active" } else { "inactive" };
+        let target_status = "active";
         if conversation.status.trim() != target_status {
             conversation.status = target_status.to_string();
             changed = true;
@@ -1655,7 +1655,7 @@ fn create_unarchived_conversation(
         if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
             continue;
         }
-        conversation.status = "inactive".to_string();
+        conversation.status = "active".to_string();
     }
     let conversation = build_conversation_record(
         &api_config_id,
@@ -1935,59 +1935,16 @@ fn get_active_conversation_messages(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let idx = if let Some(conversation_id) = requested_conversation_id {
-        if let Some(idx) = data.conversations
-            .iter()
-            .position(|item| {
-                item.id == conversation_id
-                    && item.summary.trim().is_empty()
-                    && conversation_visible_in_foreground_lists(item)
-            })
-        {
-            idx
-        } else if let Some(existing_idx) =
-            latest_active_conversation_index(&data, "", &effective_agent_id)
-        {
-            eprintln!(
-                "[会话] 指定会话消息读取回退到当前未归档主会话: requested_conversation_id={}, reason=not_found_or_delegate, agent_id={}",
-                conversation_id,
-                effective_agent_id
-            );
-            existing_idx
-        } else {
-            eprintln!(
-                "[会话] 指定会话消息读取未命中，创建新的未归档主会话: requested_conversation_id={}, reason=not_found_and_no_active_main_conversation, agent_id={}",
-                conversation_id,
-                effective_agent_id
-            );
-            let api_config = resolve_selected_api_config(&app_config, None)
-                .ok_or_else(|| "No API config available".to_string())?;
-            ensure_active_conversation_index(&mut data, &api_config.id, &effective_agent_id)
-        }
-    } else if let Some(existing_idx) =
-        latest_active_conversation_index(&data, "", &effective_agent_id)
-    {
-        existing_idx
-    } else {
-        let api_config = resolve_selected_api_config(&app_config, None)
-            .ok_or_else(|| "No API config available".to_string())?;
-        ensure_active_conversation_index(&mut data, &api_config.id, &effective_agent_id)
-    };
-    let mut status_changed = false;
-    for (i, conversation) in data.conversations.iter_mut().enumerate() {
-        if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
-            continue;
-        }
-        let next_status = if i == idx { "active" } else { "inactive" };
-        if conversation.status.trim() != next_status {
-            conversation.status = next_status.to_string();
-            status_changed = true;
-        }
-    }
+    let idx = resolve_unarchived_conversation_index_with_fallback(
+        &mut data,
+        &app_config,
+        &effective_agent_id,
+        requested_conversation_id,
+    )?;
 
     let mut messages = data.conversations[idx].messages.clone();
 
-    if data.conversations.len() != before_len || status_changed {
+    if data.conversations.len() != before_len {
         state_write_app_data_cached(&state, &data)?;
     }
     drop(guard);
@@ -2058,6 +2015,38 @@ struct ConversationMessagesAfterAsyncPayload {
 
 fn default_message_page_limit() -> usize {
     100
+}
+
+fn resolve_unarchived_conversation_index_with_fallback(
+    data: &mut AppData,
+    app_config: &AppConfig,
+    effective_agent_id: &str,
+    requested_conversation_id: Option<&str>,
+) -> Result<usize, String> {
+    if let Some(conversation_id) = requested_conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(idx) = data.conversations.iter().position(|item| {
+            item.id == conversation_id
+                && item.summary.trim().is_empty()
+                && conversation_visible_in_foreground_lists(item)
+        }) {
+            return Ok(idx);
+        }
+    }
+
+    if let Some(existing_idx) = latest_active_conversation_index(data, "", effective_agent_id) {
+        return Ok(existing_idx);
+    }
+
+    let api_config = resolve_selected_api_config(app_config, None)
+        .ok_or_else(|| "No API config available".to_string())?;
+    Ok(ensure_active_conversation_index(
+        data,
+        &api_config.id,
+        effective_agent_id,
+    ))
 }
 
 fn resolve_unarchived_conversation_messages_after(
@@ -2159,49 +2148,15 @@ fn get_active_conversation_messages_before(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let idx = if let Some(conversation_id) = requested_conversation_id {
-        if let Some(idx) = data.conversations
-            .iter()
-            .position(|item| {
-                item.id == conversation_id
-                    && item.summary.trim().is_empty()
-                    && conversation_visible_in_foreground_lists(item)
-            })
-        {
-            idx
-        } else if let Some(existing_idx) =
-            latest_active_conversation_index(&data, "", &effective_agent_id)
-        {
-            existing_idx
-        } else {
-            let api_config = resolve_selected_api_config(&app_config, None)
-                .ok_or_else(|| "No API config available".to_string())?;
-            ensure_active_conversation_index(&mut data, &api_config.id, &effective_agent_id)
-        }
-    } else if let Some(existing_idx) =
-        latest_active_conversation_index(&data, "", &effective_agent_id)
-    {
-        existing_idx
-    } else {
-        let api_config = resolve_selected_api_config(&app_config, None)
-            .ok_or_else(|| "No API config available".to_string())?;
-        ensure_active_conversation_index(&mut data, &api_config.id, &effective_agent_id)
-    };
-
-    let mut status_changed = false;
-    for (i, conversation) in data.conversations.iter_mut().enumerate() {
-        if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
-            continue;
-        }
-        let next_status = if i == idx { "active" } else { "inactive" };
-        if conversation.status.trim() != next_status {
-            conversation.status = next_status.to_string();
-            status_changed = true;
-        }
-    }
+    let idx = resolve_unarchived_conversation_index_with_fallback(
+        &mut data,
+        &app_config,
+        &effective_agent_id,
+        requested_conversation_id,
+    )?;
 
     let messages = data.conversations[idx].messages.clone();
-    if data.conversations.len() != before_len || status_changed {
+    if data.conversations.len() != before_len {
         state_write_app_data_cached(&state, &data)?;
     }
     drop(guard);
@@ -2278,49 +2233,15 @@ fn get_active_conversation_messages_after(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let idx = if let Some(conversation_id) = requested_conversation_id {
-        if let Some(idx) = data.conversations
-            .iter()
-            .position(|item| {
-                item.id == conversation_id
-                    && item.summary.trim().is_empty()
-                    && conversation_visible_in_foreground_lists(item)
-            })
-        {
-            idx
-        } else if let Some(existing_idx) =
-            latest_active_conversation_index(&data, "", &effective_agent_id)
-        {
-            existing_idx
-        } else {
-            let api_config = resolve_selected_api_config(&app_config, None)
-                .ok_or_else(|| "No API config available".to_string())?;
-            ensure_active_conversation_index(&mut data, &api_config.id, &effective_agent_id)
-        }
-    } else if let Some(existing_idx) =
-        latest_active_conversation_index(&data, "", &effective_agent_id)
-    {
-        existing_idx
-    } else {
-        let api_config = resolve_selected_api_config(&app_config, None)
-            .ok_or_else(|| "No API config available".to_string())?;
-        ensure_active_conversation_index(&mut data, &api_config.id, &effective_agent_id)
-    };
-
-    let mut status_changed = false;
-    for (i, conversation) in data.conversations.iter_mut().enumerate() {
-        if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
-            continue;
-        }
-        let next_status = if i == idx { "active" } else { "inactive" };
-        if conversation.status.trim() != next_status {
-            conversation.status = next_status.to_string();
-            status_changed = true;
-        }
-    }
+    let idx = resolve_unarchived_conversation_index_with_fallback(
+        &mut data,
+        &app_config,
+        &effective_agent_id,
+        requested_conversation_id,
+    )?;
 
     let messages = data.conversations[idx].messages.clone();
-    if data.conversations.len() != before_len || status_changed {
+    if data.conversations.len() != before_len {
         state_write_app_data_cached(&state, &data)?;
     }
     drop(guard);
@@ -2518,16 +2439,15 @@ fn rewind_conversation_from_message(
             .iter()
             .position(|item| {
                 item.id == conversation_id
-                    && item.status == "active"
                     && item.summary.trim().is_empty()
                     && conversation_visible_in_foreground_lists(item)
             })
             .ok_or_else(|| {
-                format!("Target active conversation not found, conversationId={conversation_id}")
+                format!("Target conversation not found or unavailable, conversationId={conversation_id}")
             })?
     } else {
         latest_active_conversation_index(&data, "", requested_agent_id)
-            .ok_or_else(|| "No active conversation found for current agent.".to_string())?
+            .ok_or_else(|| "No conversation found for current agent.".to_string())?
     };
     let conversation = data
         .conversations

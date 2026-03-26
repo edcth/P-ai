@@ -487,6 +487,7 @@ impl Tool for BuiltinApplyPatchTool {
 #[derive(Debug, Clone)]
 struct BuiltinTaskTool {
     app_state: AppState,
+    session_id: String,
 }
 
 impl Tool for BuiltinTaskTool {
@@ -533,7 +534,7 @@ impl Tool for BuiltinTaskTool {
             "[TOOL-DEBUG] execute_builtin_tool.start name=task args={}",
             debug_value_snippet(&serde_json::to_value(&args).unwrap_or(Value::Null), 240)
         );
-        let result = builtin_task(&self.app_state, args)
+        let result = builtin_task(&self.app_state, &self.session_id, args)
             .await
             .map_err(ToolInvokeError::from);
         match &result {

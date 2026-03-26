@@ -200,7 +200,7 @@ async fn call_model_openai_style(
         if prefer_non_stream {
             if selected_api.enable_tools {
                 runtime_log_info(format!(
-                    "[聊天] base_url={} 已永久禁用流式，当前回合跳过工具流式循环并改用非流式请求",
+                    "[聊天] base_url={} 已在本次运行内禁用流式，当前回合跳过工具流式循环并改用非流式请求",
                     api_config.base_url
                 ));
             }
@@ -242,12 +242,12 @@ async fn call_model_openai_style(
                         provider_mark_streaming_disabled(app_state, &api_config.base_url)
                     {
                         runtime_log_warn(format!(
-                            "[聊天] 持久化非流式 base_url 失败: base_url={}, err={}",
+                            "[聊天] 标记本次运行内非流式 base_url 失败: base_url={}, err={}",
                             api_config.base_url, mark_err
                         ));
                     }
                     runtime_log_info(format!(
-                        "[聊天] 流式失败，切换非流式重试: base_url={}, model={}, err={}",
+                        "[聊天] 流式失败，已在本次运行内切换非流式重试: base_url={}, model={}, err={}",
                         api_config.base_url, model_name, err
                     ));
                     if selected_api.enable_tools {
@@ -339,12 +339,12 @@ async fn call_model_openai_style(
                         provider_mark_streaming_disabled(app_state, &api_config.base_url)
                     {
                         runtime_log_warn(format!(
-                            "[聊天] 持久化非流式 base_url 失败: base_url={}, err={}",
+                            "[聊天] 标记本次运行内非流式 base_url 失败: base_url={}, err={}",
                             api_config.base_url, mark_err
                         ));
                     }
                     runtime_log_info(format!(
-                        "[聊天] 流式失败，切换非流式重试: base_url={}, model={}, err={}",
+                        "[聊天] 流式失败，已在本次运行内切换非流式重试: base_url={}, model={}, err={}",
                         api_config.base_url, model_name, err
                     ));
                     call_openai_style_non_stream_fallback(api_config, selected_api, model_name, prepared)

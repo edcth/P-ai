@@ -31,22 +31,8 @@ fn provider_streaming_disabled_cached(state: Option<&AppState>, base_url: &str) 
     cache.contains(&key)
 }
 
-fn provider_streaming_disabled_persisted(state: Option<&AppState>, base_url: &str) -> bool {
-    let Some(app_state) = state else {
-        return false;
-    };
-    let key = provider_streaming_cache_key(base_url);
-    let Ok(config) = state_read_config_cached(app_state) else {
-        return false;
-    };
-    config.provider_non_stream_base_urls.iter().any(|item| {
-        provider_streaming_cache_key(item) == key
-    })
-}
-
 fn provider_streaming_disabled(state: Option<&AppState>, base_url: &str) -> bool {
     provider_streaming_disabled_cached(state, base_url)
-        || provider_streaming_disabled_persisted(state, base_url)
 }
 
 fn provider_mark_streaming_disabled(state: Option<&AppState>, base_url: &str) -> Result<(), String> {
@@ -57,20 +43,8 @@ fn provider_mark_streaming_disabled(state: Option<&AppState>, base_url: &str) ->
     let Ok(mut cache) = app_state.provider_streaming_disabled_keys.lock() else {
         return Err("Failed to lock provider streaming disabled cache".to_string());
     };
-    cache.insert(key.clone());
-    drop(cache);
-
-    let mut config = state_read_config_cached(app_state)?;
-    if config
-        .provider_non_stream_base_urls
-        .iter()
-        .any(|item| provider_streaming_cache_key(item) == key)
-    {
-        return Ok(());
-    }
-    config.provider_non_stream_base_urls.push(key);
-    normalize_app_config(&mut config);
-    state_write_config_cached(app_state, &config)
+    cache.insert(key);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -224,12 +198,12 @@ async fn invoke_model_with_policy(
         {
             if let Err(mark_err) = provider_mark_streaming_disabled(app_state, &resolved_api.base_url) {
                 runtime_log_warn(format!(
-                    "[推理] 持久化非流式 base_url 失败: key={}, scene={}, err={}",
+                    "[推理] 标记本次运行内非流式 base_url 失败: key={}, scene={}, err={}",
                     stream_cache_key, policy.scene, mark_err
                 ));
             }
             runtime_log_info(format!(
-                "[推理] 流式失败并切换非流式: key={}, scene={}, err={}",
+                "[推理] 流式失败，已在本次运行内切换为非流式: key={}, scene={}, err={}",
                 stream_cache_key, policy.scene, err
             ));
             if let Some(timeout_secs) = policy.timeout_secs {

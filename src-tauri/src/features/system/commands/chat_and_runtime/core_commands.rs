@@ -64,9 +64,8 @@ async fn send_chat_message(
         {
             if data.conversations.iter().any(|conv| {
                 conv.id == cid
-                    && conv.status == "active"
                     && conv.summary.trim().is_empty()
-                    && !conversation_is_delegate(conv)
+                    && conversation_visible_in_foreground_lists(conv)
             }) {
                 cid.to_string()
             } else {
@@ -80,12 +79,10 @@ async fn send_chat_message(
                     .iter()
                     .find(|conv| conv.id == cid)
                     .map(|conv| {
-                        if conv.status != "active" {
-                            "inactive"
-                        } else if !conv.summary.trim().is_empty() {
+                        if !conv.summary.trim().is_empty() {
                             "summary_present"
-                        } else if conversation_is_delegate(conv) {
-                            "delegate_conversation"
+                        } else if !conversation_visible_in_foreground_lists(conv) {
+                            "background_conversation"
                         } else {
                             "unknown"
                         }

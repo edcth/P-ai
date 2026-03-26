@@ -475,28 +475,102 @@
     }
 
     #[test]
-    fn task_resolve_default_session_should_route_to_main_conversation() {
-        let state = test_chat_runtime_state();
-        write_config(&state.config_path, &AppConfig::default()).expect("write config");
+    fn normalize_single_active_main_conversation_should_keep_all_foreground_chats_active() {
+        let now = now_iso();
+        let later = (now_utc() + time::Duration::minutes(1))
+            .format(&Rfc3339)
+            .expect("format later");
+        let mut data = AppData::default();
+        data.main_conversation_id = Some("conversation-main".to_string());
+        data.conversations = vec![
+            test_chat_conversation("conversation-main", "inactive", &now),
+            test_chat_conversation("conversation-sub", "active", &later),
+        ];
 
-        let data = test_user_switched_to_sub_conversation_data();
-        state_write_app_data_cached(&state, &data).expect("write app data");
+        let changed = normalize_single_active_main_conversation(&mut data);
 
-        let (_, _, _, conversation_id, _) =
-            task_resolve_default_session(&state).expect("resolve task session");
-
-        assert_eq!(conversation_id, "conversation-main");
+        assert!(changed);
+        assert_eq!(data.conversations[0].status, "active");
+        assert_eq!(data.conversations[1].status, "active");
     }
 
     #[test]
-    fn task_should_still_route_to_main_after_user_switches_to_sub_conversation() {
+    fn task_resolve_dispatch_session_should_prefer_task_bound_conversation() {
+        let state = test_chat_runtime_state();
+        write_config(&state.config_path, &AppConfig::default()).expect("write config");
+
+        let data = test_user_switched_to_sub_conversation_data();
+        state_write_app_data_cached(&state, &data).expect("write app data");
+        let task = TaskEntry {
+            task_id: "task-a".to_string(),
+            conversation_id: Some("conversation-sub".to_string()),
+            order_index: 1,
+            title: "t".to_string(),
+            cause: String::new(),
+            goal: String::new(),
+            flow: String::new(),
+            todos: Vec::new(),
+            status_summary: String::new(),
+            completion_state: TASK_STATE_ACTIVE.to_string(),
+            completion_conclusion: String::new(),
+            progress_notes: Vec::new(),
+            stage_key: String::new(),
+            stage_updated_at: None,
+            trigger: TaskTrigger {
+                run_at: None,
+                every_minutes: None,
+                end_at: None,
+                next_run_at: None,
+            },
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            last_triggered_at: None,
+            completed_at: None,
+            current_tracked: false,
+        };
+
+        let (_, _, _, conversation_id, _) =
+            task_resolve_dispatch_session(&state, &task).expect("resolve task session");
+
+        assert_eq!(conversation_id, "conversation-sub");
+    }
+
+    #[test]
+    fn task_resolve_dispatch_session_should_fallback_to_main_when_bound_conversation_missing() {
         let state = test_chat_runtime_state();
         write_config(&state.config_path, &AppConfig::default()).expect("write config");
         let data = test_user_switched_to_sub_conversation_data();
         state_write_app_data_cached(&state, &data).expect("write app data");
+        let task = TaskEntry {
+            task_id: "task-b".to_string(),
+            conversation_id: Some("conversation-missing".to_string()),
+            order_index: 1,
+            title: "t".to_string(),
+            cause: String::new(),
+            goal: String::new(),
+            flow: String::new(),
+            todos: Vec::new(),
+            status_summary: String::new(),
+            completion_state: TASK_STATE_ACTIVE.to_string(),
+            completion_conclusion: String::new(),
+            progress_notes: Vec::new(),
+            stage_key: String::new(),
+            stage_updated_at: None,
+            trigger: TaskTrigger {
+                run_at: None,
+                every_minutes: None,
+                end_at: None,
+                next_run_at: None,
+            },
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            last_triggered_at: None,
+            completed_at: None,
+            current_tracked: false,
+        };
 
         let (_, _, _, conversation_id, _) =
-            task_resolve_default_session(&state).expect("resolve task session");
+            task_resolve_dispatch_session(&state, &task).expect("resolve task session");
         let updated = state_read_app_data_cached(&state).expect("read app data");
 
         assert_eq!(conversation_id, "conversation-main");
@@ -512,37 +586,31 @@
     }
 
     #[test]
-    fn resolve_system_main_conversation_id_should_ignore_active_sub_conversation() {
-        let state = test_chat_runtime_state();
+    fn resolve_unarchived_conversation_index_with_fallback_should_use_requested_conversation_when_available() {
         let data = test_user_switched_to_sub_conversation_data();
-        state_write_app_data_cached(&state, &data).expect("write app data");
+        let idx = resolve_unarchived_conversation_index_with_fallback(
+            &mut data.clone(),
+            &AppConfig::default(),
+            DEFAULT_AGENT_ID,
+            Some("conversation-main"),
+        )
+        .expect("resolve requested conversation");
 
-        let conversation_id =
-            resolve_system_main_conversation_id(&state, DEFAULT_AGENT_ID).expect("resolve main");
-
-        assert_eq!(conversation_id, "conversation-main");
+        assert_eq!(data.conversations[idx].id, "conversation-main");
     }
 
     #[test]
-    fn async_delegate_should_still_route_to_main_after_user_switches_to_sub_conversation() {
-        let state = test_chat_runtime_state();
-        let data = test_user_switched_to_sub_conversation_data();
-        state_write_app_data_cached(&state, &data).expect("write app data");
+    fn resolve_unarchived_conversation_index_with_fallback_should_fallback_to_latest_active_when_requested_missing() {
+        let mut data = test_user_switched_to_sub_conversation_data();
+        let idx = resolve_unarchived_conversation_index_with_fallback(
+            &mut data,
+            &AppConfig::default(),
+            DEFAULT_AGENT_ID,
+            Some("conversation-missing"),
+        )
+        .expect("fallback to latest active conversation");
 
-        let conversation_id =
-            resolve_system_main_conversation_id(&state, DEFAULT_AGENT_ID).expect("resolve main");
-        let updated = state_read_app_data_cached(&state).expect("read app data");
-
-        assert_eq!(conversation_id, "conversation-main");
-        assert_eq!(updated.main_conversation_id.as_deref(), Some("conversation-main"));
-        assert_eq!(
-            updated
-                .conversations
-                .iter()
-                .find(|item| item.id == "conversation-sub")
-                .map(|item| item.status.as_str()),
-            Some("active")
-        );
+        assert_eq!(data.conversations[idx].id, "conversation-sub");
     }
 
     #[test]

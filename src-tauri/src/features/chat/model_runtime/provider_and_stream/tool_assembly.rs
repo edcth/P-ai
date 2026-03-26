@@ -323,7 +323,10 @@ async fn assemble_runtime_tools(
         let state = app_state
             .ok_or_else(|| "task requires app state".to_string())?
             .clone();
-        tools.push(Box::new(BuiltinTaskTool { app_state: state }));
+        tools.push(Box::new(BuiltinTaskTool {
+            app_state: state,
+            session_id: tool_session_id.to_string(),
+        }));
         tool_manifest.push(tool_manifest_item("builtin", "task", true, true, None));
     } else {
         tool_manifest.push(tool_manifest_item(

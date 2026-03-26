@@ -8,7 +8,12 @@ where
         .map_err(|err| format!("task store worker join failed: {err}"))?
 }
 
-async fn builtin_task(app_state: &AppState, args: TaskToolArgsWire) -> Result<Value, String> {
+async fn builtin_task(
+    app_state: &AppState,
+    session_id: &str,
+    args: TaskToolArgsWire,
+) -> Result<Value, String> {
+    let (_, _, bound_conversation_id) = delegate_parse_session_parts(session_id);
     match args.action.trim() {
         "list" => {
             let data_path = app_state.data_path.clone();
@@ -28,6 +33,7 @@ async fn builtin_task(app_state: &AppState, args: TaskToolArgsWire) -> Result<Va
         "create" => {
             let create_input = TaskCreateInput {
                 title: args.title.unwrap_or_default(),
+                conversation_id: bound_conversation_id,
                 cause: args.cause.unwrap_or_default(),
                 goal: args.goal.unwrap_or_default(),
                 flow: args.flow.unwrap_or_default(),
@@ -38,8 +44,9 @@ async fn builtin_task(app_state: &AppState, args: TaskToolArgsWire) -> Result<Va
                     .ok_or_else(|| "task.trigger is required for action=create".to_string())?,
             };
             eprintln!(
-                "[任务] 状态=开始 action=create title={} trigger={} todos_count={}",
+                "[任务] 状态=开始 action=create title={} conversation_id={} trigger={} todos_count={}",
                 create_input.title.trim(),
+                create_input.conversation_id.as_deref().unwrap_or(""),
                 serde_json::to_string(&create_input.trigger)
                     .unwrap_or_else(|_| "<invalid trigger>".to_string()),
                 create_input.todos.len()
@@ -58,6 +65,7 @@ async fn builtin_task(app_state: &AppState, args: TaskToolArgsWire) -> Result<Va
                 .ok_or_else(|| "task.taskId is required for action=update".to_string())?;
             let update_input = TaskUpdateInput {
                 task_id,
+                conversation_id: None,
                 title: args.title,
                 cause: args.cause,
                 goal: args.goal,

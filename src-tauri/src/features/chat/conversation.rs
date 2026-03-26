@@ -7,8 +7,7 @@ fn latest_active_conversation_index(
         .iter()
         .enumerate()
         .filter(|(_, c)| {
-            c.status == "active"
-                && c.summary.trim().is_empty()
+            c.summary.trim().is_empty()
                 && conversation_visible_in_foreground_lists(c)
         })
         .max_by(|(idx_a, a), (idx_b, b)| {
@@ -82,11 +81,11 @@ fn normalize_single_active_main_conversation(data: &mut AppData) -> bool {
     };
 
     let mut changed = false;
-    for (idx, conversation) in data.conversations.iter_mut().enumerate() {
+    for (_idx, conversation) in data.conversations.iter_mut().enumerate() {
         if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
             continue;
         }
-        let target_status = if idx == keep_idx { "active" } else { "inactive" };
+        let target_status = "active";
         if conversation.status.trim() != target_status {
             conversation.status = target_status.to_string();
             changed = true;
@@ -204,15 +203,11 @@ fn ensure_active_conversation_index(
     }
 
     if let Some(idx) = latest_main_conversation_index(data, agent_id) {
-        for (i, conversation) in data.conversations.iter_mut().enumerate() {
+        for (_i, conversation) in data.conversations.iter_mut().enumerate() {
             if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
                 continue;
             }
-            conversation.status = if i == idx {
-                "active".to_string()
-            } else {
-                "inactive".to_string()
-            };
+            conversation.status = "active".to_string();
         }
         return idx;
     }
@@ -230,7 +225,7 @@ fn ensure_active_conversation_index(
         if !conversation_visible_in_foreground_lists(item) || !item.summary.trim().is_empty() {
             continue;
         }
-        item.status = "inactive".to_string();
+        item.status = "active".to_string();
     }
     data.conversations.push(conversation);
     if data

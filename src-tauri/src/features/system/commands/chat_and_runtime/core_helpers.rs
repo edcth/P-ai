@@ -159,8 +159,4 @@ fn estimate_prepared_prompt_tokens(
     total.ceil().max(0.0).min(u64::MAX as f64) as u64
 }
 
-fn is_retryable_model_error(error: &str) -> bool {
-    let normalized = error.trim().to_ascii_lowercase();
-    normalized.contains("429") || normalized.contains("too many requests")
-}
 

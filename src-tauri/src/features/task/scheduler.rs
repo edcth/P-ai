@@ -1,4 +1,41 @@
-fn task_resolve_default_session(state: &AppState) -> Result<(String, String, String, String, String), String> {
+fn task_conversation_available_for_dispatch(conversation: &Conversation) -> bool {
+    conversation.summary.trim().is_empty()
+        && conversation_visible_in_foreground_lists(conversation)
+}
+
+fn task_resolve_dispatch_conversation_id(
+    data: &mut AppData,
+    api_config_id: &str,
+    agent_id: &str,
+    requested_conversation_id: Option<&str>,
+) -> Result<(String, bool), String> {
+    if let Some(requested) = requested_conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(conversation) = data
+            .conversations
+            .iter()
+            .find(|item| item.id == requested && task_conversation_available_for_dispatch(item))
+        {
+            return Ok((conversation.id.clone(), false));
+        }
+    }
+
+    let conversation_idx = ensure_main_conversation_index(data, api_config_id, agent_id);
+    let conversation_id = data
+        .conversations
+        .get(conversation_idx)
+        .map(|item| item.id.clone())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "No active main conversation configured for task dispatch.".to_string())?;
+    Ok((conversation_id, true))
+}
+
+fn task_resolve_dispatch_session(
+    state: &AppState,
+    task: &TaskEntry,
+) -> Result<(String, String, String, String, String), String> {
     let guard = state
         .state_lock
         .lock()
@@ -22,13 +59,17 @@ fn task_resolve_default_session(state: &AppState) -> Result<(String, String, Str
             .map(|a| a.id.clone())
             .ok_or_else(|| "No assistant agent configured for task dispatch.".to_string())?
     };
-    let conversation_idx = ensure_main_conversation_index(&mut data, &selected_api.id, &agent_id);
-    let conversation_id = data
-        .conversations
-        .get(conversation_idx)
-        .map(|item| item.id.clone())
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "No active main conversation configured for task dispatch.".to_string())?;
+    let requested_conversation_id = task
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let (conversation_id, fallback_to_main) = task_resolve_dispatch_conversation_id(
+        &mut data,
+        &selected_api.id,
+        &agent_id,
+        requested_conversation_id,
+    )?;
     changed = changed || data.conversations.len() != before_conversation_count;
     let department_id = department_for_agent_id(&app_config, &agent_id)
         .map(|item| item.id.clone())
@@ -37,6 +78,22 @@ fn task_resolve_default_session(state: &AppState) -> Result<(String, String, Str
         state_write_app_data_cached(state, &data)?;
     }
     drop(guard);
+    if let Some(requested) = requested_conversation_id {
+        if fallback_to_main {
+            eprintln!(
+                "[任务调度] 原会话不可用，回退到主会话: task_id={}, requested_conversation_id={}, fallback_conversation_id={}",
+                task.task_id,
+                requested,
+                conversation_id
+            );
+        } else {
+            eprintln!(
+                "[任务调度] 使用任务绑定会话: task_id={}, conversation_id={}",
+                task.task_id,
+                conversation_id
+            );
+        }
+    }
     Ok((
         selected_api.id.clone(),
         department_id,
@@ -82,7 +139,7 @@ fn task_dequeue_dispatch(state: &AppState, chat_key: &str) -> Result<Option<Task
 
 async fn task_try_dispatch_or_enqueue(state: &AppState, task: &TaskEntry) -> Result<(), String> {
     let (_api_id, _department_id, _agent_id, _conversation_id, chat_key) =
-        task_resolve_default_session(state)?;
+        task_resolve_dispatch_session(state, task)?;
     if task_is_chat_busy(state, &chat_key)? {
         let queued = task_enqueue_dispatch(state, &task.task_id)?;
         if queued {
@@ -104,15 +161,32 @@ async fn task_try_dispatch_or_enqueue(state: &AppState, task: &TaskEntry) -> Res
 }
 
 pub(crate) async fn task_process_dispatch_queue(state: &AppState) -> Result<(), String> {
-    let (_api_id, _department_id, _agent_id, _conversation_id, chat_key) =
-        task_resolve_default_session(state)?;
-    let Some(item) = task_dequeue_dispatch(state, &chat_key)? else {
+    let head = {
+        let queue = state
+            .task_dispatch_queue
+            .lock()
+            .map_err(|err| format!("Failed to lock task dispatch queue: {err:?}"))?;
+        queue.front().cloned()
+    };
+    let Some(item) = head else {
         return Ok(());
     };
     let task = task_store_get_task(&state.data_path, &item.task_id)?;
     if task.completion_state != TASK_STATE_ACTIVE {
+        let mut queue = state
+            .task_dispatch_queue
+            .lock()
+            .map_err(|err| format!("Failed to lock task dispatch queue: {err:?}"))?;
+        if queue.front().map(|queued| queued.task_id.as_str()) == Some(task.task_id.as_str()) {
+            queue.pop_front();
+        }
         return Ok(());
     }
+    let (_api_id, _department_id, _agent_id, _conversation_id, chat_key) =
+        task_resolve_dispatch_session(state, &task)?;
+    let Some(item) = task_dequeue_dispatch(state, &chat_key)? else {
+        return Ok(());
+    };
     task_store_insert_run_log(
         &state.data_path,
         &task.task_id,
@@ -318,7 +392,8 @@ async fn task_dispatch_due_task(state: &AppState, task: &TaskEntry) -> Result<()
     task_store_mark_triggered(&state.data_path, &task.task_id)?;
 
     // 获取会话信息
-    let (_api_id, department_id, agent_id, conversation_id, _) = task_resolve_default_session(state)?;
+    let (_api_id, department_id, agent_id, conversation_id, _) =
+        task_resolve_dispatch_session(state, task)?;
 
     // 构造任务消息
     let task_message = ChatMessage {

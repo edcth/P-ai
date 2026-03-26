@@ -42,6 +42,8 @@ struct TaskProgressNote {
 #[serde(rename_all = "camelCase")]
 struct TaskEntry {
     task_id: String,
+    #[serde(default)]
+    conversation_id: Option<String>,
     order_index: i64,
     title: String,
     cause: String,
@@ -108,6 +110,8 @@ struct TaskRunLogListInput {
 struct TaskCreateInput {
     title: String,
     #[serde(default)]
+    conversation_id: Option<String>,
+    #[serde(default)]
     cause: String,
     #[serde(default)]
     goal: String,
@@ -124,6 +128,8 @@ struct TaskCreateInput {
 #[serde(rename_all = "camelCase")]
 struct TaskUpdateInput {
     task_id: String,
+    #[serde(default)]
+    conversation_id: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]

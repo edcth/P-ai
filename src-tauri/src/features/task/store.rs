@@ -19,6 +19,7 @@ fn task_store_init(conn: &Connection) -> Result<(), String> {
         "BEGIN;
         CREATE TABLE IF NOT EXISTS task_record (
             task_id TEXT PRIMARY KEY,
+            conversation_id TEXT,
             order_index INTEGER NOT NULL,
             title TEXT NOT NULL,
             cause TEXT NOT NULL,
@@ -57,6 +58,10 @@ fn task_store_init(conn: &Connection) -> Result<(), String> {
     .map_err(|err| format!("Init task db failed: {err}"))?;
     let _ = conn.execute(
         "ALTER TABLE task_record ADD COLUMN end_at TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE task_record ADD COLUMN conversation_id TEXT",
         [],
     );
     Ok(())
@@ -244,6 +249,7 @@ fn task_row_to_entry(row: &rusqlite::Row<'_>, current_tracked_task_id: Option<&s
     let last_triggered_at: Option<String> = row.get("last_triggered_at")?;
     Ok(TaskEntry {
         task_id: task_id.clone(),
+        conversation_id: row.get("conversation_id")?,
         order_index: row.get("order_index")?,
         title: row.get("title")?,
         cause: row.get("cause")?,
@@ -323,6 +329,12 @@ fn task_store_create_task(data_path: &PathBuf, input: &TaskCreateInput) -> Resul
     let task_id = format!("task-{}", Uuid::new_v4());
     let now = now_iso();
     let order_index = task_store_next_order_index(&conn)?;
+    let conversation_id = input
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let todos = input
         .todos
         .iter()
@@ -331,12 +343,13 @@ fn task_store_create_task(data_path: &PathBuf, input: &TaskCreateInput) -> Resul
         .collect::<Vec<_>>();
     conn.execute(
         "INSERT INTO task_record (
-            task_id, order_index, title, cause, goal, flow, todos_json, status_summary,
+            task_id, conversation_id, order_index, title, cause, goal, flow, todos_json, status_summary,
             completion_state, completion_conclusion, progress_notes_json, stage_key, stage_updated_at,
             trigger_kind, run_at, every_minutes, end_at, created_at, updated_at, last_triggered_at, completed_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '', ?10, '', NULL, ?11, ?12, ?13, ?14, ?15, ?16, NULL, NULL)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '', ?11, '', NULL, ?12, ?13, ?14, ?15, ?16, ?17, NULL, NULL)",
         params![
             task_id,
+            conversation_id,
             order_index,
             title,
             input.cause.trim(),
@@ -395,26 +408,35 @@ fn task_store_update_task(data_path: &PathBuf, input: &TaskUpdateInput) -> Resul
     } else {
         existing.stage_updated_at.clone()
     };
+    let conversation_id = input
+        .conversation_id
+        .as_ref()
+        .or(existing.conversation_id.as_ref())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let conn = task_store_open(data_path)?;
     conn.execute(
         "UPDATE task_record SET
-            title = ?2,
-            cause = ?3,
-            goal = ?4,
-            flow = ?5,
-            todos_json = ?6,
-            status_summary = ?7,
-            progress_notes_json = ?8,
-            stage_key = ?9,
-            stage_updated_at = ?10,
-            trigger_kind = ?11,
-            run_at = ?12,
-            every_minutes = ?13,
-            end_at = ?14,
-            updated_at = ?15
+            conversation_id = ?2,
+            title = ?3,
+            cause = ?4,
+            goal = ?5,
+            flow = ?6,
+            todos_json = ?7,
+            status_summary = ?8,
+            progress_notes_json = ?9,
+            stage_key = ?10,
+            stage_updated_at = ?11,
+            trigger_kind = ?12,
+            run_at = ?13,
+            every_minutes = ?14,
+            end_at = ?15,
+            updated_at = ?16
          WHERE task_id = ?1",
         params![
             input.task_id,
+            conversation_id,
             title,
             input.cause.as_deref().unwrap_or(&existing.cause).trim(),
             input.goal.as_deref().unwrap_or(&existing.goal).trim(),

@@ -38,12 +38,12 @@ async fn describe_image_with_vision_api(
                             provider_mark_streaming_disabled(Some(state), &vision_resolved.base_url)
                         {
                             runtime_log_warn(format!(
-                                "[视觉] 持久化非流式 base_url 失败: base_url={}, err={}",
+                                "[视觉] 标记本次运行内非流式 base_url 失败: base_url={}, err={}",
                                 vision_resolved.base_url, mark_err
                             ));
                         }
                         runtime_log_info(format!(
-                            "[视觉] 流式失败，切换非流式重试: base_url={}, model={}, err={}",
+                            "[视觉] 流式失败，已在本次运行内切换非流式重试: base_url={}, model={}, err={}",
                             vision_resolved.base_url, vision_api.model, err
                         ));
                         call_model_openai_non_stream_rig_style(

@@ -62,20 +62,47 @@ fn delegate_enqueue_result_message(
     provider_meta: Value,
     notify_assistant: bool,
 ) -> Result<(), String> {
-    // 获取会话信息
-    let (department_id, agent_id) = {
+    // 优先回发原始会话；若原会话已归档/消失，则回退到主会话。
+    let (department_id, agent_id, target_conversation_id) = {
         let guard = app_state
             .state_lock
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
         let config = read_config(&app_state.config_path)?;
+        let mut data = state_read_app_data_cached(app_state)?;
+        let before_len = data.conversations.len();
+        let before_main_id = data.main_conversation_id.clone();
         let assistant_agent_id = assistant_department_agent_id(&config)
             .ok_or_else(|| "未找到助理部门委任人".to_string())?;
         let department_id = department_for_agent_id(&config, &assistant_agent_id)
             .map(|item| item.id.clone())
             .unwrap_or_else(|| ASSISTANT_DEPARTMENT_ID.to_string());
+        let target_conversation_id = if data.conversations.iter().any(|item| {
+            item.id == root_conversation_id
+                && item.summary.trim().is_empty()
+                && !conversation_is_delegate(item)
+        }) {
+            root_conversation_id.to_string()
+        } else {
+            let main_idx = ensure_main_conversation_index(&mut data, "", &assistant_agent_id);
+            let conversation_id = data
+                .conversations
+                .get(main_idx)
+                .map(|item| item.id.clone())
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "未找到可用主会话，无法回发委托结果".to_string())?;
+            eprintln!(
+                "[委托线程] 原始会话不可用，委托结果回退到主会话: requested_conversation_id={}, fallback_conversation_id={}",
+                root_conversation_id,
+                conversation_id
+            );
+            conversation_id
+        };
+        if data.conversations.len() != before_len || data.main_conversation_id != before_main_id {
+            state_write_app_data_cached(app_state, &data)?;
+        }
         drop(guard);
-        (department_id, assistant_agent_id)
+        (department_id, assistant_agent_id, target_conversation_id)
     };
 
     // 构造委托结果消息
@@ -96,7 +123,7 @@ fn delegate_enqueue_result_message(
     // 创建事件并入队
     let event = ChatPendingEvent {
         id: Uuid::new_v4().to_string(),
-        conversation_id: root_conversation_id.to_string(),
+        conversation_id: target_conversation_id,
         created_at: now_iso(),
         source: ChatEventSource::Delegate,
         messages: vec![delegate_message],
