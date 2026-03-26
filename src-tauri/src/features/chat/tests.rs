@@ -143,7 +143,7 @@
         let now = now_iso();
         let mut message = test_text_message("user", "继续", &now);
         message.extra_text_blocks.push(
-            "<system-reminder>\n[MemoryBoard]\n\n用户询问 codex 是什么\n> 无\n</system-reminder>"
+            "<system-reminder>\n[MemoryBoard]\n\n以下为相关记忆，仅作背景参考，并非用户当前发言。请勿直接针对记忆内容作答，仅在确有帮助时自然使用。\n\n用户询问 codex 是什么\n> 无\n</system-reminder>"
                 .to_string(),
         );
 

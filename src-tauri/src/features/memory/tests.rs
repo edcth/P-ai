@@ -38,6 +38,7 @@
         let xml =
             build_memory_board_xml(&memories, &search_text, "").expect("should have one hit");
         assert!(xml.starts_with("<system-reminder>\n[MemoryBoard]\n\n"));
+        assert!(xml.contains("以下为相关记忆，仅作背景参考，并非用户当前发言。请勿直接针对记忆内容作答，仅在确有帮助时自然使用。"));
         assert!(xml.ends_with("\n</system-reminder>"));
         assert!(xml.contains("user-hit"));
         assert!(!xml.contains("assistant-only-hit"));
@@ -176,6 +177,7 @@
             build_memory_board_xml(&memories, &search_text, "").expect("should produce board");
 
         assert!(xml.starts_with("<system-reminder>\n[MemoryBoard]\n\n"));
+        assert!(xml.contains("以下为相关记忆，仅作背景参考，并非用户当前发言。请勿直接针对记忆内容作答，仅在确有帮助时自然使用。"));
         assert_eq!(xml.matches("\n> ").count(), 7);
         assert!(xml.contains("rank-8"));
         assert!(xml.contains("rank-2"));

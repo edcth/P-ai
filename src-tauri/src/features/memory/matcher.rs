@@ -914,6 +914,7 @@ fn build_memory_board_xml_from_recall_ids(
     let mut out = String::new();
     out.push_str("<system-reminder>\n");
     out.push_str("[MemoryBoard]\n\n");
+    out.push_str("以下为相关记忆，仅作背景参考，并非用户当前发言。请勿直接针对记忆内容作答，仅在确有帮助时自然使用。\n\n");
     for memory in ordered_memories {
         out.push_str(memory.judgment.trim());
         out.push('\n');
