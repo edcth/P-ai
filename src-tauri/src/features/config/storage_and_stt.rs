@@ -445,7 +445,11 @@ fn normalize_departments(config: &mut AppConfig) {
             scope: if raw.scope.trim().is_empty() { default_global_scope() } else { raw.scope.trim().to_string() },
         };
         if item.name.is_empty() {
-            item.name = if item.is_built_in_assistant {
+            item.name = if item.id == DEPUTY_DEPARTMENT_ID {
+                "副手".to_string()
+            } else if item.id == FRONT_DESK_DEPARTMENT_ID {
+                "前台".to_string()
+            } else if item.is_built_in_assistant {
                 default_assistant_department_name(&config.ui_language)
             } else {
                 format!("部门 {}", out.len() + 1)
@@ -461,7 +465,13 @@ fn normalize_departments(config: &mut AppConfig) {
     }
 
     if !out.iter().any(|item| item.is_built_in_assistant || item.id == ASSISTANT_DEPARTMENT_ID) {
-        out.insert(0, default_assistant_department(&fallback_api_id));
+        out.push(default_assistant_department(&fallback_api_id));
+    }
+    if !out.iter().any(|item| item.id == DEPUTY_DEPARTMENT_ID) {
+        out.push(default_deputy_department(&fallback_api_id));
+    }
+    if !out.iter().any(|item| item.id == FRONT_DESK_DEPARTMENT_ID) {
+        out.push(default_front_desk_department(&fallback_api_id));
     }
 
     for (idx, item) in out.iter_mut().enumerate() {
@@ -494,10 +504,59 @@ fn normalize_departments(config: &mut AppConfig) {
             if item.agent_ids.is_empty() {
                 item.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
             }
+        } else if item.id == DEPUTY_DEPARTMENT_ID {
+            if item.name.trim().is_empty() {
+                item.name = "副手".to_string();
+            }
+            if item.summary.trim().is_empty() {
+                item.summary = "负责快速执行上级派发的明确任务，强调最小行动与严格边界。".to_string();
+            }
+            if item.guide.trim().is_empty() {
+                item.guide = "你是副手部门。你的核心原则是严格不越权、不擅自扩展需求、不多想。收到上级派发的任务后，用最少的工具调用、最快的速度完成明确目标；若信息不足或任务超出指令边界，就直接说明缺口并等待主部门继续决策。".to_string();
+            }
+            if item.api_config_id.trim().is_empty()
+                || !valid_text_chat_api_ids.contains(&item.api_config_id)
+            {
+                item.api_config_ids = if fallback_api_id.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![fallback_api_id.clone()]
+                };
+                item.api_config_id = fallback_api_id.clone();
+            }
+            if item.agent_ids.is_empty() {
+                item.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
+            }
+        } else if item.id == FRONT_DESK_DEPARTMENT_ID {
+            if item.name.trim().is_empty() {
+                item.name = "前台".to_string();
+            }
+            if item.summary.trim().is_empty() {
+                item.summary = "负责承接远程 IM 消息，简短友好应答，并把复杂任务转交主部门。".to_string();
+            }
+            if item.guide.trim().is_empty() {
+                item.guide = "你是前台部门，专门负责承接各个远程 IM 联系人的消息。说话必须简短、友好、有耐心，优先直接回答简单问题；遇到复杂任务、涉及多步骤分析、需要明显调度或你无法稳妥处理的需求时，应明确告知将转交主部门处理，不要自己展开复杂推理。".to_string();
+            }
+            if item.api_config_id.trim().is_empty()
+                || !valid_text_chat_api_ids.contains(&item.api_config_id)
+            {
+                item.api_config_ids = if fallback_api_id.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![fallback_api_id.clone()]
+                };
+                item.api_config_id = fallback_api_id.clone();
+            }
+            if item.agent_ids.is_empty() {
+                item.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
+            }
         }
     }
 
-    out.sort_by_key(|item| (if item.is_built_in_assistant { 0 } else { 1 }, item.order_index));
+    out.sort_by_key(|item| (built_in_department_rank(&item.id), item.order_index));
+    for (idx, item) in out.iter_mut().enumerate() {
+        item.order_index = (idx as i64) + 1;
+    }
     config.departments = out;
     if let Some(dept) = assistant_department(config) {
         config.assistant_department_api_config_id = department_primary_api_config_id(dept);

@@ -13,9 +13,9 @@
         </button>
         <button
           class="btn btn-sm btn-square"
-          :class="!selectedDepartment || !!selectedDepartment.isBuiltInAssistant || selectedDepartmentIsPrivateWorkspace ? 'text-base-content/30 bg-base-100 cursor-not-allowed' : 'bg-base-100'"
+          :class="!selectedDepartment || isNonRemovableDepartment(selectedDepartment) || selectedDepartmentIsPrivateWorkspace ? 'text-base-content/30 bg-base-100 cursor-not-allowed' : 'bg-base-100'"
           :title="t('config.department.remove')"
-          :disabled="!selectedDepartment || !!selectedDepartment.isBuiltInAssistant || selectedDepartmentIsPrivateWorkspace || savingConfig"
+          :disabled="!selectedDepartment || isNonRemovableDepartment(selectedDepartment) || selectedDepartmentIsPrivateWorkspace || savingConfig"
           @click="removeSelectedDepartment"
         >
           <Trash2 class="h-3.5 w-3.5" />
@@ -44,7 +44,7 @@
           </div>
           <button
             class="btn btn-sm btn-ghost"
-            :disabled="!!selectedDepartment.isBuiltInAssistant || selectedDepartmentIsPrivateWorkspace || savingConfig"
+            :disabled="isNonRemovableDepartment(selectedDepartment) || selectedDepartmentIsPrivateWorkspace || savingConfig"
             @click="removeSelectedDepartment"
           >
             {{ t("config.department.remove") }}
@@ -179,11 +179,19 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const selectedDepartmentId = ref("assistant-department");
+const NON_REMOVABLE_DEPARTMENT_IDS = new Set(["assistant-department", "deputy-department", "front-desk-department"]);
+
+function isNonRemovableDepartment(department: DepartmentConfig | null | undefined) {
+  if (!department) return false;
+  const id = String(department.id || "").trim();
+  return NON_REMOVABLE_DEPARTMENT_IDS.has(id) || !!department.isBuiltInAssistant;
+}
 
 const sortedDepartments = computed(() =>
   [...(props.config.departments || [])].sort((a, b) => {
-    const aRank = a.isBuiltInAssistant || a.id === "assistant-department" ? 0 : 1;
-    const bRank = b.isBuiltInAssistant || b.id === "assistant-department" ? 0 : 1;
+    const rank = (id: string) => id === "assistant-department" ? 0 : id === "deputy-department" ? 1 : id === "front-desk-department" ? 2 : 3;
+    const aRank = rank(String(a.id || "").trim());
+    const bRank = rank(String(b.id || "").trim());
     return aRank - bRank || a.orderIndex - b.orderIndex;
   }),
 );
@@ -296,7 +304,7 @@ function addDepartment() {
 
 function nextDepartmentName() {
   const base = t("config.department.newName");
-  let index = props.config.departments.filter((item) => !item.isBuiltInAssistant).length + 1;
+  let index = props.config.departments.filter((item) => !isNonRemovableDepartment(item)).length + 1;
   while (true) {
     const name = `${base} ${index}`;
     const exists = props.config.departments.some(
@@ -309,7 +317,7 @@ function nextDepartmentName() {
 
 function removeSelectedDepartment() {
   const target = selectedDepartment.value;
-  if (!target || target.isBuiltInAssistant) return;
+  if (!target || isNonRemovableDepartment(target)) return;
   const idx = props.config.departments.findIndex((item) => item.id === target.id);
   if (idx >= 0) {
     props.config.departments.splice(idx, 1);

@@ -3,6 +3,10 @@ import { normalizeLocale } from "../../../i18n";
 import type { ApiConfigItem, AppConfig, DepartmentConfig, RemoteImChannelConfig, RemoteImPlatform } from "../../../types/app";
 import { defaultToolBindings, normalizeToolBindings } from "../utils/builtin-tools";
 
+const ASSISTANT_DEPARTMENT_ID = "assistant-department";
+const DEPUTY_DEPARTMENT_ID = "deputy-department";
+const FRONT_DESK_DEPARTMENT_ID = "front-desk-department";
+
 function defaultAssistantDepartmentName(uiLanguage: string): string {
   if (uiLanguage === "en-US") return "Assistant Department";
   if (uiLanguage === "zh-TW") return "助理部門";
@@ -19,6 +23,49 @@ function defaultAssistantDepartmentGuide(uiLanguage: string): string {
   if (uiLanguage === "en-US") return "You are the assistant department. Your job is to understand user needs, decide whether delegation is needed, summarize results, and continue the main conversation.";
   if (uiLanguage === "zh-TW") return "你是助理部門，負責作為主負責人理解使用者需求、決定是否需要委派、彙總結果並繼續推進主對話。";
   return "你是助理部门，负责作为主负责人理解用户需求、决定是否需要委派、汇总结果并继续推进主对话。";
+}
+
+function defaultDeputyDepartmentName(uiLanguage: string): string {
+  if (uiLanguage === "en-US") return "Deputy";
+  if (uiLanguage === "zh-TW") return "副手";
+  return "副手";
+}
+
+function defaultDeputyDepartmentSummary(uiLanguage: string): string {
+  if (uiLanguage === "en-US") return "Executes explicit tasks from the main department with minimal action and strict scope.";
+  if (uiLanguage === "zh-TW") return "負責快速執行上級派發的明確任務，強調最小行動與嚴格邊界。";
+  return "负责快速执行上级派发的明确任务，强调最小行动与严格边界。";
+}
+
+function defaultDeputyDepartmentGuide(uiLanguage: string): string {
+  if (uiLanguage === "en-US") return "You are the deputy department. Stay strictly within scope, do not overreach, and do not expand requirements on your own. Use the fewest tool calls and finish explicit tasks quickly. If information is missing or the task goes beyond the assigned boundary, state that directly and wait for the main department to decide.";
+  if (uiLanguage === "zh-TW") return "你是副手部門。核心原則是嚴格不越權、不自行擴展需求、不多想。收到上級派發的任務後，用最少的工具調用、最快的速度完成明確目標；若資訊不足或任務超出指令邊界，就直接說明缺口並等待主部門繼續決策。";
+  return "你是副手部门。核心原则是严格不越权、不擅自扩展需求、不多想。收到上级派发的任务后，用最少的工具调用、最快的速度完成明确目标；若信息不足或任务超出指令边界，就直接说明缺口并等待主部门继续决策。";
+}
+
+function defaultFrontDeskDepartmentName(uiLanguage: string): string {
+  if (uiLanguage === "en-US") return "Front Desk";
+  if (uiLanguage === "zh-TW") return "前台";
+  return "前台";
+}
+
+function defaultFrontDeskDepartmentSummary(uiLanguage: string): string {
+  if (uiLanguage === "en-US") return "Handles remote IM conversations with short, friendly replies and hands complex work back to the main department.";
+  if (uiLanguage === "zh-TW") return "負責承接遠端 IM 訊息，簡短友好應答，並把複雜任務轉交主部門。";
+  return "负责承接远程 IM 消息，简短友好应答，并把复杂任务转交主部门。";
+}
+
+function defaultFrontDeskDepartmentGuide(uiLanguage: string): string {
+  if (uiLanguage === "en-US") return "You are the front desk department for remote IM contacts. Replies must be short, friendly, and patient. Answer simple questions directly. If a request is complex, multi-step, requires deeper analysis, or cannot be handled safely, clearly say it will be handed to the main department instead of expanding on it yourself.";
+  if (uiLanguage === "zh-TW") return "你是前台部門，專門負責承接各個遠端 IM 聯絡人的訊息。說話必須簡短、友好、有耐心，優先直接回答簡單問題；遇到複雜任務、涉及多步分析、需要明顯調度或你無法穩妥處理的需求時，應明確告知將轉交主部門處理，不要自己展開複雜推理。";
+  return "你是前台部门，专门负责承接各个远程 IM 联系人的消息。说话必须简短、友好、有耐心，优先直接回答简单问题；遇到复杂任务、涉及多步骤分析、需要明显调度或你无法稳妥处理的需求时，应明确告知将转交主部门处理，不要自己展开复杂推理。";
+}
+
+function builtInDepartmentRank(id: string): number {
+  if (id === ASSISTANT_DEPARTMENT_ID) return 0;
+  if (id === DEPUTY_DEPARTMENT_ID) return 1;
+  if (id === FRONT_DESK_DEPARTMENT_ID) return 2;
+  return 3;
 }
 
 function isTextRequestFormat(format: string): boolean {
@@ -264,7 +311,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
     const assistantSummary = defaultAssistantDepartmentSummary(options.config.uiLanguage);
     const assistantGuide = defaultAssistantDepartmentGuide(options.config.uiLanguage);
     const defaultAssistantDepartment: DepartmentConfig = {
-      id: "assistant-department",
+      id: ASSISTANT_DEPARTMENT_ID,
       name: assistantName,
       summary: assistantSummary,
       guide: assistantGuide,
@@ -275,6 +322,36 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       updatedAt: new Date().toISOString(),
       orderIndex: 1,
       isBuiltInAssistant: true,
+      source: "main_config",
+      scope: "global",
+    };
+    const defaultDeputyDepartment: DepartmentConfig = {
+      id: DEPUTY_DEPARTMENT_ID,
+      name: defaultDeputyDepartmentName(options.config.uiLanguage),
+      summary: defaultDeputyDepartmentSummary(options.config.uiLanguage),
+      guide: defaultDeputyDepartmentGuide(options.config.uiLanguage),
+      apiConfigId: defaultAssistantDepartmentApiId,
+      apiConfigIds: defaultAssistantDepartmentApiId ? [defaultAssistantDepartmentApiId] : [],
+      agentIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      orderIndex: 2,
+      isBuiltInAssistant: false,
+      source: "main_config",
+      scope: "global",
+    };
+    const defaultFrontDeskDepartment: DepartmentConfig = {
+      id: FRONT_DESK_DEPARTMENT_ID,
+      name: defaultFrontDeskDepartmentName(options.config.uiLanguage),
+      summary: defaultFrontDeskDepartmentSummary(options.config.uiLanguage),
+      guide: defaultFrontDeskDepartmentGuide(options.config.uiLanguage),
+      apiConfigId: defaultAssistantDepartmentApiId,
+      apiConfigIds: defaultAssistantDepartmentApiId ? [defaultAssistantDepartmentApiId] : [],
+      agentIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      orderIndex: 3,
+      isBuiltInAssistant: false,
       source: "main_config",
       scope: "global",
     };
@@ -306,23 +383,34 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         createdAt: String(item?.createdAt || "").trim() || new Date().toISOString(),
         updatedAt: String(item?.updatedAt || "").trim() || new Date().toISOString(),
         orderIndex: Math.max(1, Number(item?.orderIndex || normalizedDepartments.length + 1)),
-        isBuiltInAssistant: !!item?.isBuiltInAssistant || id === "assistant-department",
+        isBuiltInAssistant: !!item?.isBuiltInAssistant || id === ASSISTANT_DEPARTMENT_ID,
         source: String(item?.source || "").trim() || "main_config",
         scope: String(item?.scope || "").trim() || "global",
       });
     }
-    if (!normalizedDepartments.some((item) => item.id === "assistant-department" || item.isBuiltInAssistant)) {
-      normalizedDepartments.unshift(defaultAssistantDepartment);
+    if (!normalizedDepartments.some((item) => item.id === ASSISTANT_DEPARTMENT_ID || item.isBuiltInAssistant)) {
+      normalizedDepartments.push(defaultAssistantDepartment);
+    }
+    if (!normalizedDepartments.some((item) => item.id === DEPUTY_DEPARTMENT_ID)) {
+      normalizedDepartments.push(defaultDeputyDepartment);
+    }
+    if (!normalizedDepartments.some((item) => item.id === FRONT_DESK_DEPARTMENT_ID)) {
+      normalizedDepartments.push(defaultFrontDeskDepartment);
     }
     normalizedDepartments.sort((a, b) => {
-      const aRank = a.isBuiltInAssistant || a.id === "assistant-department" ? 0 : 1;
-      const bRank = b.isBuiltInAssistant || b.id === "assistant-department" ? 0 : 1;
-      return aRank - bRank || a.orderIndex - b.orderIndex;
+      return builtInDepartmentRank(a.id) - builtInDepartmentRank(b.id) || a.orderIndex - b.orderIndex;
     });
     const finalDepartments = normalizedDepartments.map((item, idx) => ({
       ...item,
-      id: item.isBuiltInAssistant || item.id === "assistant-department" ? "assistant-department" : item.id,
-      name: String(item.name || "").trim() || (item.isBuiltInAssistant || item.id === "assistant-department" ? assistantName : `部门 ${idx + 1}`),
+      id: item.isBuiltInAssistant || item.id === ASSISTANT_DEPARTMENT_ID ? ASSISTANT_DEPARTMENT_ID : item.id,
+      name: String(item.name || "").trim()
+        || (item.id === ASSISTANT_DEPARTMENT_ID || item.isBuiltInAssistant
+          ? assistantName
+          : item.id === DEPUTY_DEPARTMENT_ID
+            ? defaultDeputyDepartmentName(options.config.uiLanguage)
+            : item.id === FRONT_DESK_DEPARTMENT_ID
+              ? defaultFrontDeskDepartmentName(options.config.uiLanguage)
+              : `部门 ${idx + 1}`),
       apiConfigIds: Array.from(new Set(
         (Array.isArray(item.apiConfigIds) ? item.apiConfigIds : [])
           .map((id) => String(id || "").trim())
@@ -330,7 +418,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       )),
       apiConfigId: "",
       orderIndex: idx + 1,
-      isBuiltInAssistant: item.isBuiltInAssistant || item.id === "assistant-department",
+      isBuiltInAssistant: item.isBuiltInAssistant || item.id === ASSISTANT_DEPARTMENT_ID,
       source: item.source || "main_config",
       scope: item.scope || "global",
     })).map((item) => ({
@@ -340,7 +428,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
     }));
 
     options.config.departments = finalDepartments;
-    const assistantDept = options.config.departments.find((item) => item.id === "assistant-department" || item.isBuiltInAssistant);
+    const assistantDept = options.config.departments.find((item) => item.id === ASSISTANT_DEPARTMENT_ID || item.isBuiltInAssistant);
     if (assistantDept) {
       options.config.assistantDepartmentApiConfigId = assistantDept.apiConfigId || defaultAssistantDepartmentApiId;
     }

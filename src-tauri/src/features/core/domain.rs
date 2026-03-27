@@ -5,6 +5,8 @@ const DEFAULT_AGENT_ID: &str = "default-agent";
 const USER_PERSONA_ID: &str = "user-persona";
 const SYSTEM_PERSONA_ID: &str = "system-persona";
 const ASSISTANT_DEPARTMENT_ID: &str = "assistant-department";
+const DEPUTY_DEPARTMENT_ID: &str = "deputy-department";
+const FRONT_DESK_DEPARTMENT_ID: &str = "front-desk-department";
 const DELEGATE_TOOL_KIND_DELEGATE: &str = "delegate";
 const CONVERSATION_KIND_CHAT: &str = "chat";
 const CONVERSATION_KIND_DELEGATE: &str = "delegate";
@@ -470,6 +472,46 @@ fn default_assistant_department(api_config_id: &str) -> DepartmentConfig {
     }
 }
 
+fn default_deputy_department(api_config_id: &str) -> DepartmentConfig {
+    let now = now_iso();
+    let api_config_id = api_config_id.trim().to_string();
+    DepartmentConfig {
+        id: DEPUTY_DEPARTMENT_ID.to_string(),
+        name: "副手".to_string(),
+        summary: "负责快速执行上级派发的明确任务，强调最小行动与严格边界。".to_string(),
+        guide: "你是副手部门。你的核心原则是严格不越权、不擅自扩展需求、不多想。收到上级派发的任务后，用最少的工具调用、最快的速度完成明确目标；若信息不足或任务超出指令边界，就直接说明缺口并等待主部门继续决策。".to_string(),
+        api_config_ids: if api_config_id.is_empty() { Vec::new() } else { vec![api_config_id.clone()] },
+        api_config_id,
+        agent_ids: vec![DEFAULT_AGENT_ID.to_string()],
+        created_at: now.clone(),
+        updated_at: now,
+        order_index: 2,
+        is_built_in_assistant: false,
+        source: default_main_source(),
+        scope: default_global_scope(),
+    }
+}
+
+fn default_front_desk_department(api_config_id: &str) -> DepartmentConfig {
+    let now = now_iso();
+    let api_config_id = api_config_id.trim().to_string();
+    DepartmentConfig {
+        id: FRONT_DESK_DEPARTMENT_ID.to_string(),
+        name: "前台".to_string(),
+        summary: "负责承接远程 IM 消息，简短友好应答，并把复杂任务转交主部门。".to_string(),
+        guide: "你是前台部门，专门负责承接各个远程 IM 联系人的消息。说话必须简短、友好、有耐心，优先直接回答简单问题；遇到复杂任务、涉及多步骤分析、需要明显调度或你无法稳妥处理的需求时，应明确告知将转交主部门处理，不要自己展开复杂推理。".to_string(),
+        api_config_ids: if api_config_id.is_empty() { Vec::new() } else { vec![api_config_id.clone()] },
+        api_config_id,
+        agent_ids: vec![DEFAULT_AGENT_ID.to_string()],
+        created_at: now.clone(),
+        updated_at: now,
+        order_index: 3,
+        is_built_in_assistant: false,
+        source: default_main_source(),
+        scope: default_global_scope(),
+    }
+}
+
 fn default_assistant_department_name(ui_language: &str) -> String {
     match ui_language.trim() {
         "en-US" => "Assistant Department".to_string(),
@@ -478,8 +520,21 @@ fn default_assistant_department_name(ui_language: &str) -> String {
     }
 }
 
+fn built_in_department_rank(id: &str) -> i32 {
+    match id.trim() {
+        ASSISTANT_DEPARTMENT_ID => 0,
+        DEPUTY_DEPARTMENT_ID => 1,
+        FRONT_DESK_DEPARTMENT_ID => 2,
+        _ => 3,
+    }
+}
+
 fn default_departments(api_config_id: &str) -> Vec<DepartmentConfig> {
-    vec![default_assistant_department(api_config_id)]
+    vec![
+        default_assistant_department(api_config_id),
+        default_deputy_department(api_config_id),
+        default_front_desk_department(api_config_id),
+    ]
 }
 
 fn department_api_config_ids(department: &DepartmentConfig) -> Vec<String> {
