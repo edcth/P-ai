@@ -2,6 +2,12 @@
 
 ## 未发布
 
+- 修复（remote-im-snake-case-and-async-decision）：统一远程 IM 联系人字段命名并修正异步发送决策
+  - 远程 IM 会话 origin、`remote_im_send` 工具结果与联系人列表统一收口为 `snake_case` 字段，避免 `channelId/contactId` 与实际远端标识混淆
+  - 联系人会话 prompt 与工具规则明确要求发送时使用 `action=list` 返回的 `contact_id`，不再误用联系人记录 UUID
+  - 联系人会话兜底自动发送改为先标记 `send_async`，后台成功后再回写为 `send`，失败则落库为 `send_failed`
+  - DeepSeek 工具循环补齐 `stop_tool_loop` 判定，远程 IM 完成发送后可及时结束后续工具链
+
 - 修复（remote-im-channel-create-and-weixin-login-save-flow）：优化渠道创建交互与微信扫码前保存流程
   - 配置页“新增渠道”改为先弹出平台列表，由用户直接选择 OneBot v11、飞书、钉钉或个人微信后再创建对应渠道
   - 新建渠道时按所选平台填充默认名称，并自动打开该渠道配置弹窗，减少后续切换步骤

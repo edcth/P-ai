@@ -305,7 +305,65 @@
     }
 
     #[test]
-    fn conversation_has_remote_im_platform_message_should_match_existing_origin_meta() {
+    fn conversation_has_remote_im_platform_message_should_match_snake_case_origin_meta() {
+        let conversation = Conversation {
+            id: "conv-1".to_string(),
+            title: "联系人".to_string(),
+            agent_id: DEFAULT_AGENT_ID.to_string(),
+            conversation_kind: CONVERSATION_KIND_REMOTE_IM_CONTACT.to_string(),
+            root_conversation_id: None,
+            delegate_id: None,
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            last_user_at: None,
+            last_assistant_at: None,
+            last_context_usage_ratio: 0.0,
+            last_effective_prompt_tokens: 0,
+            status: "inactive".to_string(),
+            summary: String::new(),
+            archived_at: None,
+            messages: vec![ChatMessage {
+                id: "msg-1".to_string(),
+                role: "user".to_string(),
+                created_at: now_iso(),
+                speaker_agent_id: None,
+                parts: vec![MessagePart::Text {
+                    text: "hello".to_string(),
+                }],
+                extra_text_blocks: Vec::new(),
+                provider_meta: Some(serde_json::json!({
+                    "origin": {
+                        "kind": "remote_im",
+                        "channel_id": "c1",
+                        "contact_type": "private",
+                        "contact_id": "u1",
+                        "platform_message_id": "m1"
+                    }
+                })),
+                tool_call: None,
+                mcp_call: None,
+            }],
+            memory_recall_table: Vec::new(),
+        };
+
+        assert!(conversation_has_remote_im_platform_message(
+            &conversation,
+            "c1",
+            "private",
+            "u1",
+            "m1",
+        ));
+        assert!(!conversation_has_remote_im_platform_message(
+            &conversation,
+            "c1",
+            "private",
+            "u1",
+            "m2",
+        ));
+    }
+
+    #[test]
+    fn conversation_has_remote_im_platform_message_should_ignore_legacy_origin_meta() {
         let conversation = Conversation {
             id: "conv-1".to_string(),
             title: "联系人".to_string(),
@@ -346,20 +404,59 @@
             memory_recall_table: Vec::new(),
         };
 
-        assert!(conversation_has_remote_im_platform_message(
+        assert!(!conversation_has_remote_im_platform_message(
             &conversation,
             "c1",
             "private",
             "u1",
             "m1",
         ));
-        assert!(!conversation_has_remote_im_platform_message(
-            &conversation,
-            "c1",
-            "private",
-            "u1",
-            "m2",
-        ));
+    }
+
+    #[test]
+    fn remote_im_set_sender_origin_meta_should_write_snake_case_remote_identity() {
+        let input = RemoteImEnqueueInput {
+            channel_id: "channel-a".to_string(),
+            platform: RemoteImPlatform::OnebotV11,
+            im_name: "qq".to_string(),
+            remote_contact_type: "private".to_string(),
+            remote_contact_id: "remote-user-1".to_string(),
+            remote_contact_name: Some("张三".to_string()),
+            sender_id: "remote-user-1".to_string(),
+            sender_name: "张三".to_string(),
+            sender_avatar_url: Some("https://example.com/avatar.png".to_string()),
+            platform_message_id: Some("msg-1".to_string()),
+            dingtalk_session_webhook: None,
+            dingtalk_session_webhook_expired_time: None,
+            activate_assistant: Some(true),
+            session: SessionSelector {
+                api_config_id: None,
+                department_id: None,
+                agent_id: String::new(),
+                conversation_id: None,
+            },
+            payload: ChatInputPayload {
+                text: Some("hello".to_string()),
+                display_text: None,
+                images: None,
+                audios: None,
+                attachments: None,
+                model: None,
+                extra_text_blocks: None,
+                provider_meta: None,
+            },
+        };
+
+        let value = remote_im_set_sender_origin_meta(&input, "conversation-1", "record-1");
+        let origin = value.get("origin").expect("origin");
+
+        assert_eq!(origin.get("channel_id").and_then(Value::as_str), Some("channel-a"));
+        assert_eq!(origin.get("contact_id").and_then(Value::as_str), Some("remote-user-1"));
+        assert_eq!(origin.get("contact_record_id").and_then(Value::as_str), Some("record-1"));
+        assert_eq!(origin.get("sender_name").and_then(Value::as_str), Some("张三"));
+        assert_eq!(origin.get("platform_message_id").and_then(Value::as_str), Some("msg-1"));
+        assert!(origin.get("channelId").is_none());
+        assert!(origin.get("contactId").is_none());
     }
 
     #[test]

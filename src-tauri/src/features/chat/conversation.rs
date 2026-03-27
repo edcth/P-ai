@@ -644,18 +644,9 @@ fn prompt_speaker_label(
     if let Some(meta) = &message.provider_meta {
         if let Some(origin) = meta.get("origin") {
             if origin.get("kind").and_then(|v| v.as_str()) == Some("remote_im") {
-                let sender = origin
-                    .get("senderName")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let contact = origin
-                    .get("remoteContactName")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let contact_type = origin
-                    .get("remoteContactType")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let sender = remote_im_origin_string(origin, "sender_name").unwrap_or("");
+                let contact = remote_im_origin_string(origin, "contact_name").unwrap_or("");
+                let contact_type = remote_im_origin_string(origin, "contact_type").unwrap_or("");
                 if contact_type == "group" && !contact.is_empty() && !sender.is_empty() {
                     return format!("{} ({})", sender, contact);
                 }
@@ -724,24 +715,15 @@ fn build_prompt_user_meta_text(
     let mut tags = Vec::<String>::new();
     if include_remote_identity {
         if let Some(origin) = remote_im_origin_from_message(message) {
-        let channel_id = origin
-            .get("channelId")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or("");
-        let contact_id = origin
-            .get("remoteContactId")
-            .and_then(Value::as_str)
-            .or_else(|| origin.get("contactId").and_then(Value::as_str))
-            .map(str::trim)
-            .unwrap_or("");
-        if !channel_id.is_empty() {
-            tags.push(format!("channelId={}", channel_id));
+            let channel_id = remote_im_origin_string(origin, "channel_id").unwrap_or("");
+            let contact_id = remote_im_origin_string(origin, "contact_id").unwrap_or("");
+            if !channel_id.is_empty() {
+                tags.push(format!("channel_id={}", channel_id));
+            }
+            if !contact_id.is_empty() {
+                tags.push(format!("contact_id={}", contact_id));
+            }
         }
-        if !contact_id.is_empty() {
-            tags.push(format!("contactId={}", contact_id));
-        }
-    }
     }
     if let Some(memory_ids) = message
         .provider_meta
@@ -843,19 +825,18 @@ fn remote_im_origin_from_message(message: &ChatMessage) -> Option<&Value> {
     Some(origin)
 }
 
+fn remote_im_origin_string<'a>(origin: &'a Value, key: &str) -> Option<&'a str> {
+    origin
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn remote_im_contact_key_from_message(message: &ChatMessage) -> Option<String> {
     let origin = remote_im_origin_from_message(message)?;
-    let channel_id = origin
-        .get("channelId")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("");
-    let contact_id = origin
-        .get("remoteContactId")
-        .and_then(Value::as_str)
-        .or_else(|| origin.get("contactId").and_then(Value::as_str))
-        .map(str::trim)
-        .unwrap_or("");
+    let channel_id = remote_im_origin_string(origin, "channel_id").unwrap_or("");
+    let contact_id = remote_im_origin_string(origin, "contact_id").unwrap_or("");
     if channel_id.is_empty() || contact_id.is_empty() {
         return None;
     }
@@ -1645,9 +1626,9 @@ fn build_prompt_with_mode(
         ),
     };
     let remote_im_rules_block = match ui_language.trim() {
-        "en-US" => "## Remote IM Contact Tool Rules\n- For messages from a remote contact, reply decisions must only be made through `remote_im_send`.\n- Do not output a direct reply message as a substitute for the tool.\n- If needed, first call `remote_im_send` with `action=list` to get available contacts.\n- To reply, call `remote_im_send` with `action=send` and exact `channel_id` + `contact_id` from context/list.\n- If you decide not to reply, you must still call `remote_im_send` with `action=no_reply`.\n- `status` must be lowercase `continue` or `done`.\n- Use `continue` for intermediate sends and `done` for the final decision in this round.",
-        "zh-TW" => "## 遠端 IM 聯絡人工具規則\n- 來自聯絡人的訊息，回覆決策必須且只能透過 `remote_im_send` 完成。\n- 不要直接輸出要發給聯絡人的回覆文字來取代工具呼叫。\n- 需要時先呼叫 `remote_im_send`，`action=list` 取得可用聯絡人。\n- 要回覆時呼叫 `remote_im_send`，`action=send`，並使用上下文/清單中的精確 `channel_id` + `contact_id`。\n- 若決定不回覆，也必須呼叫 `remote_im_send`，`action=no_reply`。\n- `status` 必須是小寫 `continue` 或 `done`。\n- 中間調用 `continue`，本輪最後一個決策用 `done`。",
-        _ => "## 远程 IM 联系人工具规则\n- 来自联系人的消息，回复决策必须且只能通过 `remote_im_send` 完成。\n- 不要直接输出要发给联系人的回复文字来代替工具调用。\n- 需要时先调用 `remote_im_send`，`action=list` 获取可用联系人。\n- 要回复时调用 `remote_im_send`，`action=send`，并使用上下文/列表中的精确 `channel_id` + `contact_id`。\n- 若决定不回复，也必须调用 `remote_im_send`，`action=no_reply`。\n- `status` 必须是小写 `continue` 或 `done`。\n- 中间调用 `continue`，本轮最后一个决策用 `done`。",
+        "en-US" => "## Remote IM Contact Tool Rules\n- For messages from a remote contact, reply decisions must only be made through `remote_im_send`.\n- Do not output a direct reply message as a substitute for the tool.\n- If needed, first call `remote_im_send` with `action=list` to get available contacts.\n- For `action=send`, use exact `channel_id` + `contact_id` from list/context.\n- `contact_id` must be the `contact_id` returned by `action=list`; do not use internal record ids (UUID).\n- If you decide not to reply, you must still call `remote_im_send` with `action=no_reply`.\n- `status` must be lowercase `continue` or `done`.\n- Use `continue` for intermediate sends and `done` for the final decision in this round.",
+        "zh-TW" => "## 遠端 IM 聯絡人工具規則\n- 來自聯絡人的訊息，回覆決策必須且只能透過 `remote_im_send` 完成。\n- 不要直接輸出要發給聯絡人的回覆文字來取代工具呼叫。\n- 需要時先呼叫 `remote_im_send`，`action=list` 取得可用聯絡人。\n- `action=send` 時，必須使用上下文/清單中的精確 `channel_id` + `contact_id`。\n- `contact_id` 必須是 `action=list` 返回的 `contact_id`；不要使用內部記錄 id（UUID）。\n- 若決定不回覆，也必須呼叫 `remote_im_send`，`action=no_reply`。\n- `status` 必須是小寫 `continue` 或 `done`。\n- 中間調用 `continue`，本輪最後一個決策用 `done`。",
+        _ => "## 远程 IM 联系人工具规则\n- 来自联系人的消息，回复决策必须且只能通过 `remote_im_send` 完成。\n- 不要直接输出要发给联系人的回复文字来代替工具调用。\n- 需要时先调用 `remote_im_send`，`action=list` 获取可用联系人。\n- `action=send` 时，必须使用上下文/列表中的精确 `channel_id` + `contact_id`。\n- `contact_id` 必须是 `action=list` 返回的 `contact_id`；不要使用内部记录 id（UUID）。\n- 若决定不回复，也必须调用 `remote_im_send`，`action=no_reply`。\n- `status` 必须是小写 `continue` 或 `done`。\n- 中间调用 `continue`，本轮最后一个决策用 `done`。",
     };
     let departments_block = build_departments_prompt_block(conversation, agent, departments, ui_language);
     let mut preamble = if let Some((user_name, user_intro)) = user_profile {

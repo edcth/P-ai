@@ -18,7 +18,7 @@ impl Tool for BuiltinRemoteImSendTool {
               "properties": {
                 "action": { "type": "string", "enum": ["list", "send", "no_reply"], "description": "动作。list=列出可用联系人；send=向联系人发送消息；no_reply=本轮决定不回复。对于联系人消息，最终必须使用 send 或 no_reply 做出决策。", "default": "send" },
                 "channel_id": { "type": "string", "description": "action=send 时必填；action=list 时可选（用于按渠道过滤）" },
-                "contact_id": { "type": "string", "description": "action=send 时必填；远程联系人 ID（contactId，即QQ号或群号）" },
+                "contact_id": { "type": "string", "description": "action=send 时必填；必须使用 action=list 返回的 contact_id。不要使用联系人记录主键（UUID）" },
                 "text": { "type": "string", "description": "action=send 时可选；要发送的文本内容（当传入 file_paths 时可为空）" },
                 "status": { "type": "string", "enum": ["continue", "done"], "description": "发送后状态。continue=还需继续下一步；done=本轮已完成并停止后续工具链。大小写不敏感，内部统一转小写。", "default": "done" },
                 "file_paths": {
@@ -142,16 +142,17 @@ async fn builtin_remote_im_send(
                     continue;
                 }
                 contacts.push(serde_json::json!({
-                    "channelId": contact.channel_id,
-                    "channelName": channel.name,
+                    "channel_id": contact.channel_id,
+                    "channel_name": channel.name,
                     "platform": contact.platform,
-                    "contactId": contact.remote_contact_id,
-                    "contactName": contact.remote_contact_name,
-                    "remarkName": contact.remark_name,
-                    "contactType": contact.remote_contact_type,
-                    "allowSend": contact.allow_send,
-                    "allowReceive": contact.allow_receive,
-                    "activationMode": contact.activation_mode,
+                    "contact_id": contact.remote_contact_id,
+                    "contact_record_id": contact.id,
+                    "contact_name": contact.remote_contact_name,
+                    "remark_name": contact.remark_name,
+                    "contact_type": contact.remote_contact_type,
+                    "allow_send": contact.allow_send,
+                    "allow_receive": contact.allow_receive,
+                    "activation_mode": contact.activation_mode,
                 }));
             }
             return Ok(serde_json::json!({
@@ -179,8 +180,8 @@ async fn builtin_remote_im_send(
                 "status": status,
                 "done": stop_tool_loop,
                 "continue": !stop_tool_loop,
-                "stopToolLoop": stop_tool_loop,
-                "noReply": true
+                "stop_tool_loop": stop_tool_loop,
+                "no_reply": true
             }));
         }
         other => {
@@ -231,7 +232,7 @@ async fn builtin_remote_im_send(
         .remote_im_contacts
         .iter()
         .find(|c| c.channel_id == channel_id && c.remote_contact_id == contact_id_input)
-        .ok_or_else(|| format!("未找到匹配的远程联系人: channel_id={channel_id}, contact_id={contact_id_input}"))?
+        .ok_or_else(|| format!("未找到匹配的远程联系人: channel_id={channel_id}, contact_id={contact_id_input}。请先 action=list，并使用返回的 contact_id"))?
         .clone();
 
     if !contact.allow_send {
@@ -263,11 +264,11 @@ async fn builtin_remote_im_send(
     }
 
     let payload = serde_json::json!({
-        "channelId": contact.channel_id,
-        "contactId": contact.id,
+        "channel_id": contact.channel_id,
+        "contact_record_id": contact.id,
         "platform": channel.platform,
-        "remoteContactType": contact.remote_contact_type,
-        "remoteContactId": contact.remote_contact_id,
+        "contact_type": contact.remote_contact_type,
+        "contact_id": contact.remote_contact_id,
         "content": content,
     });
 
@@ -290,11 +291,11 @@ async fn builtin_remote_im_send(
         "status": status,
         "done": stop_tool_loop,
         "continue": !stop_tool_loop,
-        "stopToolLoop": stop_tool_loop,
-        "channelId": channel_id,
-        "contactId": contact_id_input,
-        "contactName": contact.remote_contact_name,
-        "contactType": contact.remote_contact_type,
-        "platformMessageId": platform_message_id
+        "stop_tool_loop": stop_tool_loop,
+        "channel_id": channel_id,
+        "contact_id": contact_id_input,
+        "contact_name": contact.remote_contact_name,
+        "contact_type": contact.remote_contact_type,
+        "platform_message_id": platform_message_id
     }))
 }

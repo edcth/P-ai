@@ -70,7 +70,7 @@ fn should_stop_after_remote_im_send(tool_name: &str, tool_result: &str) -> bool 
         }
     }
     value
-        .get("stopToolLoop")
+        .get("stop_tool_loop")
         .and_then(Value::as_bool)
         .or_else(|| value.get("done").and_then(Value::as_bool))
         .unwrap_or(false)
@@ -536,5 +536,17 @@ mod tool_loop_tests {
         let chat_history = vec![user_text("first question"), assistant_with_tool_only()];
         let chosen = resolve_reasoning_for_tool_history("   ", &chat_history);
         assert_eq!(chosen, " ");
+    }
+
+    #[test]
+    fn remote_im_send_should_stop_on_snake_case_stop_tool_loop() {
+        let tool_result = serde_json::json!({
+            "ok": true,
+            "action": "send",
+            "stop_tool_loop": true
+        })
+        .to_string();
+
+        assert!(should_stop_after_remote_im_send("remote_im_send", &tool_result));
     }
 }

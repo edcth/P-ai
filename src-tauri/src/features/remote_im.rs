@@ -401,23 +401,23 @@ fn ensure_remote_im_contact_conversation_id(
 fn remote_im_set_sender_origin_meta(
     input: &RemoteImEnqueueInput,
     conversation_id: &str,
-    contact_id: &str,
+    contact_record_id: &str,
 ) -> Value {
     serde_json::json!({
         "origin": {
             "kind": "remote_im",
-            "channelId": input.channel_id,
+            "channel_id": input.channel_id,
             "platform": input.platform,
-            "imName": input.im_name,
-            "remoteContactType": input.remote_contact_type,
-            "remoteContactId": input.remote_contact_id,
-            "remoteContactName": input.remote_contact_name,
-            "senderId": input.sender_id,
-            "senderName": input.sender_name,
-            "senderAvatarUrl": input.sender_avatar_url,
-            "platformMessageId": input.platform_message_id,
-            "contactId": contact_id,
-            "conversationId": conversation_id
+            "im_name": input.im_name,
+            "contact_type": input.remote_contact_type,
+            "contact_id": input.remote_contact_id,
+            "contact_name": input.remote_contact_name,
+            "contact_record_id": contact_record_id,
+            "sender_id": input.sender_id,
+            "sender_name": input.sender_name,
+            "sender_avatar_url": input.sender_avatar_url,
+            "platform_message_id": input.platform_message_id,
+            "conversation_id": conversation_id
         }
     })
 }
@@ -429,15 +429,17 @@ fn remote_im_resolve_inbound_activate(
     message_flag.unwrap_or(channel.activate_assistant)
 }
 
-fn message_origin_string<'a>(message: &'a ChatMessage, key: &str) -> Option<&'a str> {
-    message
-        .provider_meta
-        .as_ref()?
-        .get("origin")?
+fn origin_value_string<'a>(origin: &'a Value, key: &str) -> Option<&'a str> {
+    origin
         .get(key)?
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn message_origin_string<'a>(message: &'a ChatMessage, key: &str) -> Option<&'a str> {
+    let origin = message.provider_meta.as_ref()?.get("origin")?;
+    origin_value_string(origin, key)
 }
 
 fn conversation_has_remote_im_platform_message(
@@ -449,10 +451,10 @@ fn conversation_has_remote_im_platform_message(
 ) -> bool {
     conversation.messages.iter().any(|message| {
         message_origin_string(message, "kind") == Some("remote_im")
-            && message_origin_string(message, "channelId") == Some(channel_id)
-            && message_origin_string(message, "remoteContactType") == Some(remote_contact_type)
-            && message_origin_string(message, "remoteContactId") == Some(remote_contact_id)
-            && message_origin_string(message, "platformMessageId") == Some(platform_message_id)
+            && message_origin_string(message, "channel_id") == Some(channel_id)
+            && message_origin_string(message, "contact_type") == Some(remote_contact_type)
+            && message_origin_string(message, "contact_id") == Some(remote_contact_id)
+            && message_origin_string(message, "platform_message_id") == Some(platform_message_id)
     })
 }
 
@@ -549,7 +551,7 @@ fn resolve_channel_config(
 ) -> Result<(String, RemoteImChannelConfig), String> {
     let channel_id = input.channel_id.trim().to_string();
     if channel_id.is_empty() {
-        return Err("channelId 不能为空".to_string());
+        return Err("channel_id 不能为空".to_string());
     }
     let channel = remote_im_channel_by_id(config, &channel_id)
         .ok_or_else(|| format!("远程IM渠道不存在: {channel_id}"))?
@@ -1038,7 +1040,7 @@ fn remote_im_get_contact_conversation_messages(
 ) -> Result<Vec<ChatMessage>, String> {
     let contact_id = input.contact_id.trim();
     if contact_id.is_empty() {
-        return Err("contactId is required.".to_string());
+        return Err("contact_id 为必填项。".to_string());
     }
     let started_at = std::time::Instant::now();
     eprintln!(
@@ -1091,7 +1093,7 @@ fn remote_im_delete_contact(
 ) -> Result<bool, String> {
     let contact_id = input.contact_id.trim();
     if contact_id.is_empty() {
-        return Err("contactId is required.".to_string());
+        return Err("contact_id 为必填项。".to_string());
     }
     let guard = state
         .state_lock
@@ -1116,7 +1118,7 @@ fn remote_im_clear_contact_conversation(
 ) -> Result<bool, String> {
     let contact_id = input.contact_id.trim();
     if contact_id.is_empty() {
-        return Err("contactId is required.".to_string());
+        return Err("contact_id 为必填项。".to_string());
     }
     let started_at = std::time::Instant::now();
     eprintln!(

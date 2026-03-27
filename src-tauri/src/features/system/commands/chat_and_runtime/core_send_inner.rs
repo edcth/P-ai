@@ -20,7 +20,10 @@ fn remote_im_extract_action_from_tool_arguments(raw: &Value) -> Option<String> {
 }
 
 fn remote_im_is_reply_decision_action(action: &str) -> bool {
-    matches!(action.trim().to_ascii_lowercase().as_str(), "send" | "no_reply")
+    matches!(
+        action.trim().to_ascii_lowercase().as_str(),
+        "send" | "send_async" | "no_reply"
+    )
 }
 
 fn remote_im_extract_reply_decision_from_tool_history(events: &[Value]) -> Option<String> {
@@ -184,6 +187,7 @@ fn spawn_remote_im_auto_send_contact_assistant_reply(
     state: AppState,
     conversation_id: String,
     assistant_text: String,
+    assistant_message_id: Option<String>,
 ) {
     tauri::async_runtime::spawn(async move {
         let started = std::time::Instant::now();
@@ -194,6 +198,13 @@ fn spawn_remote_im_auto_send_contact_assistant_reply(
         );
         match remote_im_auto_send_contact_assistant_reply(&state, &conversation_id, &assistant_text).await {
             Ok(Some((action, _))) => {
+                let _ = update_remote_im_reply_decision_for_message(
+                    &state,
+                    &conversation_id,
+                    assistant_message_id.as_deref(),
+                    &action,
+                    None,
+                );
                 eprintln!(
                     "[远程IM][自动发送] 完成: conversation_id={}, action={}, elapsed_ms={}",
                     conversation_id,
@@ -209,6 +220,13 @@ fn spawn_remote_im_auto_send_contact_assistant_reply(
                 );
             }
             Err(err) => {
+                let _ = update_remote_im_reply_decision_for_message(
+                    &state,
+                    &conversation_id,
+                    assistant_message_id.as_deref(),
+                    "send_failed",
+                    Some(err.as_str()),
+                );
                 eprintln!(
                     "[远程IM][自动发送] 失败: conversation_id={}, error={}, elapsed_ms={}",
                     conversation_id,
@@ -218,6 +236,77 @@ fn spawn_remote_im_auto_send_contact_assistant_reply(
             }
         }
     });
+}
+
+fn update_remote_im_reply_decision_for_message(
+    state: &AppState,
+    conversation_id: &str,
+    assistant_message_id: Option<&str>,
+    action: &str,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let assistant_message_id = assistant_message_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let guard = state
+        .state_lock
+        .lock()
+        .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
+    let mut data = state_read_app_data_cached(state)?;
+
+    let update_message = |message: &mut ChatMessage| {
+        let mut meta = message
+            .provider_meta
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !meta.is_object() {
+            meta = serde_json::json!({});
+        }
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert(
+                "remoteImDecision".to_string(),
+                serde_json::json!({
+                    "action": action,
+                    "processingMode": "continuous",
+                    "conversationKind": "remote_im_contact",
+                    "error": error.unwrap_or("")
+                }),
+            );
+        }
+        message.provider_meta = Some(meta);
+    };
+
+    if let Some(conversation) = data
+        .conversations
+        .iter_mut()
+        .find(|item| item.id == conversation_id && item.summary.trim().is_empty())
+    {
+        if let Some(message) = conversation.messages.iter_mut().rev().find(|message| {
+            message.role.trim() == "assistant"
+                && assistant_message_id
+                    .map(|target_id| message.id == target_id)
+                    .unwrap_or(true)
+        }) {
+            update_message(message);
+            state_write_app_data_cached(state, &data)?;
+            drop(guard);
+            return Ok(());
+        }
+    }
+    drop(guard);
+
+    if let Some(mut conversation) = delegate_runtime_thread_conversation_get(state, conversation_id)? {
+        if let Some(message) = conversation.messages.iter_mut().rev().find(|message| {
+            message.role.trim() == "assistant"
+                && assistant_message_id
+                    .map(|target_id| message.id == target_id)
+                    .unwrap_or(true)
+        }) {
+            update_message(message);
+            delegate_runtime_thread_conversation_update(state, conversation_id, conversation)?;
+        }
+    }
+    Ok(())
 }
 
 fn prioritize_requested_chat_api_id(
@@ -1084,29 +1173,6 @@ async fn send_chat_message_inner(
                 memory_board_xml.as_deref().unwrap_or("")
             ));
         }
-        let latest_user_meta_text = conversation
-            .messages
-            .last()
-            .map(|message| {
-                let speaker_block = build_prompt_speaker_block(
-                    message,
-                    &data.agents,
-                    &user_name,
-                    &app_config.ui_language,
-                );
-                let time_text = if is_delegate_conversation {
-                    message.created_at.trim().to_string()
-                } else {
-                    format_message_time_rfc3339_local(&message.created_at)
-                };
-                match (speaker_block.trim().is_empty(), time_text.trim().is_empty()) {
-                    (false, false) => format!("{speaker_block} {time_text}"),
-                    (false, true) => speaker_block,
-                    (true, false) => time_text,
-                    (true, true) => String::new(),
-                }
-            })
-            .unwrap_or_default();
         let mut chat_overrides = ChatPromptOverrides::default();
         chat_overrides
             .system_preamble_blocks
@@ -1116,7 +1182,6 @@ async fn send_chat_message_inner(
             .push(build_hidden_skill_usage_block());
         if !trigger_only {
             chat_overrides.latest_user_text = Some(latest_user_text.clone());
-            chat_overrides.latest_user_meta_text = Some(latest_user_meta_text);
             if !is_delegate_conversation {
                 if let Some(task_board) = build_hidden_task_board_block(&state) {
                     chat_overrides.latest_user_extra_blocks.push(task_board);
@@ -1358,15 +1423,12 @@ async fn send_chat_message_inner(
     let suppress_assistant_message = model_reply.suppress_assistant_message;
     let mut remote_im_reply_decision =
         remote_im_extract_reply_decision_from_tool_history(&tool_history_events);
+    let mut pending_remote_im_auto_send = false;
     if is_remote_im_contact_conversation && remote_im_reply_decision.is_none() {
         if !assistant_text.trim().is_empty() {
-            // 联系人会话兜底自动发送改为后台异步派发，避免阻塞本轮收尾与前端结束状态。
-            spawn_remote_im_auto_send_contact_assistant_reply(
-                state.clone(),
-                conversation_id.clone(),
-                assistant_text.clone(),
-            );
-            remote_im_reply_decision = Some("send".to_string());
+            // 联系人会话兜底自动发送改为后台异步派发，先标记为 send_async，完成后再回写最终状态。
+            remote_im_reply_decision = Some("send_async".to_string());
+            pending_remote_im_auto_send = true;
         }
     }
     if is_remote_im_contact_conversation && remote_im_reply_decision.is_none() {
@@ -1503,6 +1565,15 @@ async fn send_chat_message_inner(
         drop(guard);
     }
     log_run_stage("assistant_message_persisted");
+
+    if pending_remote_im_auto_send {
+        spawn_remote_im_auto_send_contact_assistant_reply(
+            state.clone(),
+            conversation_id.clone(),
+            assistant_text.clone(),
+            persisted_assistant_message.as_ref().map(|message| message.id.clone()),
+        );
+    }
 
     if let Some(source) = post_reply_forced_archive_source {
         let _ = on_delta.send(AssistantDeltaEvent {

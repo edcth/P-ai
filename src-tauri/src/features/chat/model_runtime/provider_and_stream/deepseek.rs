@@ -589,6 +589,29 @@ async fn call_model_deepseek_with_tools(
                     "screenshotHeight": cached.height
                 }));
             }
+
+            if should_stop_after_remote_im_send(&tool_name, &tool_result) {
+                eprintln!(
+                    "[聊天] DeepSeek remote_im_send done=true，立即停止后续工具调用 (session={})",
+                    chat_session_key
+                );
+                let final_text = if full_assistant_text.trim().is_empty() {
+                    match remote_im_result_action(&tool_result).as_deref() {
+                        Some("no_reply") => "本轮决定不回复。".to_string(),
+                        _ => "已发送完成。".to_string(),
+                    }
+                } else {
+                    full_assistant_text.clone()
+                };
+                return Ok(ModelReply {
+                    assistant_text: final_text,
+                    reasoning_standard: full_reasoning_standard,
+                    reasoning_inline: String::new(),
+                    tool_history_events,
+                    suppress_assistant_message: false,
+                    trusted_input_tokens,
+                });
+            }
         }
     }
 
