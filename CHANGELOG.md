@@ -2,6 +2,12 @@
 
 ## 未发布
 
+- 调整（remote-im-channel-logic-reshape-and-onebot-naming）：远程 IM 渠道代码按业务重组并统一 OneBot v11 命名
+  - 将 OneBot v11 渠道主实现从 `napcat_ws` 命名统一收口为 `onebot_v11_ws`，避免把 NapCat 实现名误当成协议口径
+  - OneBot v11 转发节点发送者名提取改为统一 helper，按 `nickname -> card -> user_id` 顺序解析，并补充对应测试
+  - `dingtalk_stream`、`onebot_v11_ws`、`weixin_oc` 三个超大渠道文件改为按业务职责拆分，区分运行时、登录/生命周期、消息解析、媒体处理等模块
+  - 飞书适配器从 `remote_im_adapters.rs` 独立抽出为单独文件，收敛到 `remote_im/` 目录下，统一各平台代码归位方式
+
 - 修复（weixin-oc-multimedia-ingest-and-archive-links）：收口个人微信多媒体入站、去重与归档展示
   - 个人微信入站补齐图片、语音、文件、视频的媒体下载与解密流程，统一先作为附件入队；图片与语音继续额外作为多模态输入提供给模型
   - 个人微信长轮询改为每轮重新读取最新渠道凭证并按 `platform_message_id` 去重，修复重复拉取导致的消息洪泛

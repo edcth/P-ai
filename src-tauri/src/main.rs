@@ -55,7 +55,7 @@ include!("features/config/app_data_layout.rs");
 include!("features/chat/conversation.rs");
 include!("features/chat/model_runtime.rs");
 include!("features/chat/scheduler.rs");
-include!("features/remote_im/napcat_ws.rs");
+include!("features/remote_im/onebot_v11_ws.rs");
 include!("features/remote_im/dingtalk_stream.rs");
 include!("features/remote_im/weixin_oc.rs");
 include!("features/remote_im.rs");
@@ -134,7 +134,7 @@ async fn remote_im_restart_channel(
     state: State<'_, AppState>,
 ) -> Result<ChannelConnectionStatus, String> {
     eprintln!("[远程IM] 重启渠道: {}", channel_id);
-    napcat_ws_manager()
+    onebot_v11_ws_manager()
         .add_log(&channel_id, "info", "[远程IM] 收到渠道重启请求")
         .await;
     let config = state_read_config_cached(&state)
@@ -143,7 +143,7 @@ async fn remote_im_restart_channel(
         .find(|ch| ch.id == channel_id)
         .ok_or_else(|| format!("渠道 {} 未找到", channel_id))?
         .clone();
-    napcat_ws_manager()
+    onebot_v11_ws_manager()
         .add_log(
             &channel_id,
             "info",
@@ -154,7 +154,7 @@ async fn remote_im_restart_channel(
         )
         .await;
 
-    let manager = napcat_ws_manager();
+    let manager = onebot_v11_ws_manager();
     manager
         .reconcile_channel_runtime(&channel)
         .await
@@ -365,7 +365,7 @@ fn main() {
                 }
             });
 
-            // 启动 NapCat WebSocket 服务
+            // 启动 OneBot v11 WebSocket 服务
             {
                 let config = match state_read_config_cached(&app_handle.state::<AppState>()) {
                     Ok(config) => config,
@@ -380,8 +380,8 @@ fn main() {
                     .filter(|ch| ch.enabled && ch.platform == RemoteImPlatform::OnebotV11)
                     .collect();
                 for channel in &napcat_channels {
-                    if let Err(err) = napcat_ws_server_start((*channel).clone(), app_handle.clone()) {
-                        eprintln!("[启动] 启动 NapCat WS 服务失败，渠道 {}: {}", channel.id, err);
+                    if let Err(err) = onebot_v11_ws_server_start((*channel).clone(), app_handle.clone()) {
+                        eprintln!("[启动] 启动 OneBot v11 WS 服务失败，渠道 {}: {}", channel.id, err);
                     }
                 }
 
@@ -618,3 +618,4 @@ fn main() {
 mod tests {
     include!("features/tests.rs");
 }
+

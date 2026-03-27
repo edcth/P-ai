@@ -1088,7 +1088,7 @@ fn log_remote_im_activation_decision(
         "[激活判定] contactId={}, action={}, reason={}",
         remote_contact_id, action, reason
     );
-    let manager = napcat_ws_manager();
+    let manager = onebot_v11_ws_manager();
     tauri::async_runtime::spawn(async move {
         manager
             .add_log(&channel_id_owned, "info", &message)
@@ -1434,3 +1434,4 @@ fn complete_pending_chat_events_with_error(
     }
     Ok(())
 }
+

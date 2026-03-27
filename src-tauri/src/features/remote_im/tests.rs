@@ -398,3 +398,100 @@
         let decrypted = weixin_oc_decrypt_media_ecb(&encrypted, &key).expect("decrypt");
         assert_eq!(decrypted, plain);
     }
+
+    #[test]
+    fn onebot_cq_string_should_extract_group_image_media_refs() {
+        let (text, media_refs, embedded_refs) = parse_onebot_cq_string(
+            "看看这个[CQ:image,file=https://example.com/a.png,file_id=img-1]图片",
+        );
+        assert_eq!(text, "看看这个图片");
+        assert_eq!(media_refs.len(), 1);
+        assert!(embedded_refs.is_empty());
+        assert!(matches!(media_refs[0].kind, OnebotInboundMediaKind::Image));
+        assert_eq!(media_refs[0].file_ref, "https://example.com/a.png");
+        assert_eq!(media_refs[0].file_id.as_deref(), Some("img-1"));
+    }
+
+    #[test]
+    fn extract_message_content_should_keep_media_when_message_is_cq_string() {
+        let event = serde_json::json!({
+            "message": "你好[CQ:image,file=base64://YWJj,file_id=image-2]"
+        });
+        let (text, media_refs, embedded_refs) = extract_message_content(&event);
+        assert_eq!(text, "你好");
+        assert_eq!(media_refs.len(), 1);
+        assert!(embedded_refs.is_empty());
+        assert!(matches!(media_refs[0].kind, OnebotInboundMediaKind::Image));
+        assert_eq!(media_refs[0].file_ref, "base64://YWJj");
+        assert_eq!(media_refs[0].file_id.as_deref(), Some("image-2"));
+    }
+
+    #[test]
+    fn onebot_message_array_should_extract_forward_and_reply_refs() {
+        let payload = serde_json::json!([
+            { "type": "reply", "data": { "id": "123" } },
+            { "type": "forward", "data": { "id": "456" } }
+        ]);
+        let (text, media_refs, embedded_refs) =
+            parse_onebot_message_array(payload.as_array().expect("array"));
+        assert!(text.is_empty());
+        assert!(media_refs.is_empty());
+        assert_eq!(embedded_refs.len(), 2);
+        assert!(matches!(embedded_refs[0].kind, OnebotEmbeddedRefKind::Reply));
+        assert_eq!(embedded_refs[0].id, "123");
+        assert!(matches!(embedded_refs[1].kind, OnebotEmbeddedRefKind::Forward));
+        assert_eq!(embedded_refs[1].id, "456");
+    }
+
+    #[test]
+    fn onebot_forward_payload_should_prefer_sender_nickname_then_card_then_user_id() {
+        let payload = serde_json::json!({
+            "messages": [
+                {
+                    "sender": {
+                        "nickname": "昵称甲",
+                        "card": "群名片甲",
+                        "user_id": "10001"
+                    },
+                    "message": [{ "type": "text", "data": { "text": "第一条" } }]
+                },
+                {
+                    "sender": {
+                        "card": "群名片乙",
+                        "user_id": "10002"
+                    },
+                    "message": [{ "type": "text", "data": { "text": "第二条" } }]
+                },
+                {
+                    "sender": {
+                        "user_id": "10003"
+                    },
+                    "message": [{ "type": "text", "data": { "text": "第三条" } }]
+                }
+            ]
+        });
+
+        let (text, media_refs) = onebot_parse_forward_payload(&payload);
+
+        assert!(media_refs.is_empty());
+        assert_eq!(text, "昵称甲：第一条\n群名片乙：第二条\n10003：第三条");
+    }
+
+    #[test]
+    fn onebot_forward_payload_should_fallback_to_node_name_when_sender_missing() {
+        let payload = serde_json::json!({
+            "messages": [
+                {
+                    "data": {
+                        "name": "节点名称",
+                        "content": [{ "type": "text", "data": { "text": "转发内容" } }]
+                    }
+                }
+            ]
+        });
+
+        let (text, media_refs) = onebot_parse_forward_payload(&payload);
+
+        assert!(media_refs.is_empty());
+        assert_eq!(text, "节点名称：转发内容");
+    }
