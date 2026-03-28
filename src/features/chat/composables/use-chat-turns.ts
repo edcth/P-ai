@@ -9,8 +9,6 @@ import {
 
 type UseChatMessageBlocksOptions = {
   allMessages: ShallowRef<ChatMessage[]>;
-  visibleMessageBlockCount: Ref<number>;
-  hasMoreBackendHistory: Ref<boolean>;
   activeChatApiConfig: ComputedRef<ApiConfigItem | null>;
   perfDebug: boolean;
   perfNow: () => number;
@@ -100,7 +98,6 @@ export function useChatMessageBlocks(options: UseChatMessageBlocksOptions) {
   }
 
   const allMessageBlocks = computed<ChatMessageBlock[]>(() => {
-    const startedAt = options.perfNow();
     const messages = options.allMessages.value;
     const signature = messages.map((message) => messageSignature(message)).join("||");
     if (signature === lastMessageBlockSignature) {
@@ -109,21 +106,12 @@ export function useChatMessageBlocks(options: UseChatMessageBlocksOptions) {
     const blocks = messages
       .map((message) => buildMessageBlock(message))
       .filter((block): block is ChatMessageBlock => !!block);
-
-    if (options.perfDebug) {
-      const cost = Math.round((options.perfNow() - startedAt) * 10) / 10;
-      console.log(`【性能】构建消息块 messages=${messages.length} blocks=${blocks.length} 完成 耗时=${cost}ms`);
-    }
     lastMessageBlockSignature = signature;
     lastMessageBlocks = blocks;
     return blocks;
   });
 
-  // 无窗口模式：渲染层直接消费当前持有的全量消息块，不再做本地 slice。
   const visibleMessageBlocks = computed(() => allMessageBlocks.value);
-
-  // 是否还能继续加载更早消息，交由后端游标标志（hasMoreBackendHistory）控制。
-  const hasMoreMessageBlocks = computed(() => !!options.hasMoreBackendHistory.value);
 
   const chatContextUsageRatio = computed(() => {
     const backendPercent = latestBackendContextUsagePercent(options.allMessages.value);
@@ -142,7 +130,6 @@ export function useChatMessageBlocks(options: UseChatMessageBlocksOptions) {
   return {
     allMessageBlocks,
     visibleMessageBlocks,
-    hasMoreMessageBlocks,
     chatContextUsageRatio,
     chatUsagePercent,
   };

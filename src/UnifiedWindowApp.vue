@@ -100,7 +100,7 @@
       :chatting="chatting"
       :forcing-archive="forcingArchive"
       :visible-message-blocks="displayMessageBlocks"
-      :has-more-message-blocks="displayHasMoreMessageBlocks"
+      :latest-own-message-align-request="latestOwnMessageAlignRequest"
       :current-chat-conversation-id="currentChatConversationId"
       :chat-unarchived-conversation-items="chatUnarchivedConversationItems"
       :archives="archives"
@@ -172,7 +172,7 @@
       :stop-recording="() => stopRecording(false)"
       :send-chat="chatFlow.sendChat"
       :stop-chat="chatFlow.stopChat"
-      :load-more-message-blocks="loadMoreMessageBlocks"
+      :on-reached-chat-bottom="trimForegroundMessagesToRecentLimit"
       :on-recall-turn="handleRecallTurn"
       :on-regenerate-turn="handleRegenerateTurn"
       :on-lock-chat-workspace="lockChatWorkspaceFromPicker"
@@ -453,7 +453,9 @@ const props = withDefaults(defineProps<{ fixedViewMode?: "chat" | "archives" | "
 });
 
 const DRAFT_ASSISTANT_ID_PREFIX = "__draft_assistant__:";
-const BACKGROUND_CONVERSATION_CACHE_LIMIT = 5;
+const FOREGROUND_RECENT_MESSAGE_LIMIT = 50;
+const FOREGROUND_MESSAGE_TRIM_THRESHOLD = 80;
+const BACKGROUND_CONVERSATION_CACHE_LIMIT = FOREGROUND_RECENT_MESSAGE_LIMIT;
 type BackgroundConversationBadgeState = "completed" | "failed";
 type ForegroundPaintTrace = {
   id: number;
@@ -554,6 +556,7 @@ const latestUserImages = ref<Array<{ mime: string; bytesBase64: string }>>([]);
 const latestAssistantText = ref("");
 const latestReasoningStandardText = ref("");
 const latestReasoningInlineText = ref("");
+const latestOwnMessageAlignRequest = ref(0);
 const toolStatusText = ref("");
 const toolStatusState = ref<"running" | "done" | "failed" | "">("");
 const streamToolCalls = ref<Array<{ name: string; argsText: string }>>([]);
@@ -562,7 +565,6 @@ const clipboardImages = ref<Array<{ mime: string; bytesBase64: string; savedPath
 const queuedAttachmentNotices = ref<Array<{ id: string; fileName: string; relativePath: string; mime: string }>>([]);
 
 const allMessages = shallowRef<ChatMessage[]>([]);
-const visibleMessageBlockCount = ref(1);
 
 const status = ref("Ready.");
 const runtimeLogsDialogOpen = ref(false);
@@ -922,7 +924,7 @@ function handleVisibilityForStateSync() {
   clearChatWindowActiveSyncTimer();
   clearChatMicPrewarmTimer();
   if (isChatTauriWindow.value && document.visibilityState !== "visible") {
-    clearForegroundConversation("window_hidden");
+    freezeForegroundConversation("window_hidden");
   }
   syncChatWindowActiveState("visibilitychange");
 }
@@ -1220,17 +1222,13 @@ const { resolveAvatarUrl, ensureAvatarCached, preloadPersonaAvatars } = useAvata
 const configDirty = computed(() => buildConfigSnapshotJson() !== lastSavedConfigJson.value);
 const personaDirty = computed(() => buildPersonasSnapshotJson() !== lastSavedPersonasJson.value);
 const responseStyleIds = computed(() => responseStyleOptions.map((item) => item.id));
-const { visibleMessageBlocks, hasMoreMessageBlocks, chatContextUsageRatio, chatUsagePercent } = useChatMessageBlocks({
+const { visibleMessageBlocks, chatContextUsageRatio, chatUsagePercent } = useChatMessageBlocks({
   allMessages,
-  visibleMessageBlockCount,
-  hasMoreBackendHistory,
   activeChatApiConfig: assistantDepartmentApiConfig,
   perfDebug: PERF_DEBUG,
   perfNow,
 });
-const DEFAULT_CHAT_VISIBLE_COUNT = 5;
 const displayMessageBlocks = computed(() => visibleMessageBlocks.value);
-const displayHasMoreMessageBlocks = computed(() => hasMoreMessageBlocks.value || hasMoreBackendHistory.value);
 const {
   terminalApprovalDialogOpen,
   terminalApprovalDialogTitle,
@@ -1250,13 +1248,31 @@ function syncUserAliasFromPersona() {
   }
 }
 
-function resetVisibleMessageBlocksByCurrentMessages() {
-  const total = allMessages.value.length;
-  if (total <= 0) {
-    visibleMessageBlockCount.value = 1;
-    return;
+function trimForegroundMessagesToRecentLimit() {
+  if (chatting.value) return;
+  if (allMessages.value.length <= FOREGROUND_MESSAGE_TRIM_THRESHOLD) return;
+  allMessages.value = allMessages.value.slice(-FOREGROUND_RECENT_MESSAGE_LIMIT);
+  hasMoreBackendHistory.value = false;
+  const currentConversationId = String(currentChatConversationId.value || "").trim();
+  if (currentConversationId) {
+    cacheConversationMessages(currentConversationId, allMessages.value);
   }
-  visibleMessageBlockCount.value = Math.min(DEFAULT_CHAT_VISIBLE_COUNT, total);
+  console.warn("[聊天追踪][前台会话] 已裁剪到最近消息", {
+    windowLabel: tauriWindowLabel.value,
+    currentConversationId,
+    trimThreshold: FOREGROUND_MESSAGE_TRIM_THRESHOLD,
+    recentLimit: FOREGROUND_RECENT_MESSAGE_LIMIT,
+    finalMessageCount: allMessages.value.length,
+  });
+}
+
+function isLocalOwnUserMessage(message?: ChatMessage | null): boolean {
+  if (!message || message.role !== "user") return false;
+  const meta = (message.providerMeta || {}) as Record<string, unknown>;
+  const origin = meta.origin as Record<string, unknown> | undefined;
+  if (origin && origin.kind === "remote_im") return false;
+  const speakerAgentId = String(message.speakerAgentId || meta.speakerAgentId || meta.speaker_agent_id || "").trim();
+  return !speakerAgentId || speakerAgentId === "user-persona";
 }
 
 function updatePersonaEditorIdWithNotice(value: string) {
@@ -1496,8 +1512,6 @@ const chatRuntime = useChatRuntime({
   chatting,
   forcingArchive,
   allMessages,
-  visibleMessageBlockCount,
-  hasMoreBackendHistory,
   perfNow,
   perfLog,
   perfDebug: PERF_DEBUG,
@@ -1506,17 +1520,13 @@ const {
   refreshConversationHistory,
   forceArchiveNow,
   loadAllMessages,
-  loadMoreMessageBlocks,
 } = chatRuntime;
 
 async function refreshChatUnarchivedConversations() {
   await loadUnarchivedConversationListOnly();
   const candidates = unarchivedConversations.value;
   const current = String(currentChatConversationId.value || "").trim();
-  if (current && !candidates.some((item) => String(item.conversationId || "").trim() === current)) {
-    currentChatConversationId.value = "";
-  }
-  if (!String(currentChatConversationId.value || "").trim()) {
+  if (!current || !candidates.some((item) => String(item.conversationId || "").trim() === current)) {
     await ensureForegroundConversation("refresh_unarchived_list");
   }
 }
@@ -1534,9 +1544,12 @@ async function ensureForegroundConversation(reason: string) {
   const currentConversationId = String(currentChatConversationId.value || "").trim();
   const candidates = unarchivedConversations.value;
   if (candidates.length === 0) {
-    if (currentConversationId) {
-      clearForegroundConversation(`${reason}_empty_list`);
-    }
+    console.warn("[聊天追踪][前台会话] 候选列表为空，保留当前前台", {
+      windowLabel: tauriWindowLabel.value,
+      reason,
+      currentConversationId,
+      currentMessageCount: allMessages.value.length,
+    });
     return;
   }
   if (currentConversationId && candidates.some((item) => String(item.conversationId || "").trim() === currentConversationId)) {
@@ -1559,13 +1572,26 @@ function clearForegroundConversation(reason: string) {
   cacheConversationMessages(previousConversationId, allMessages.value);
   currentChatConversationId.value = "";
   allMessages.value = [];
-  visibleMessageBlockCount.value = 1;
   hasMoreBackendHistory.value = false;
   chatFlow.freezeForegroundRoundState();
   console.warn("[聊天追踪][前台会话] 已清空", {
     windowLabel: tauriWindowLabel.value,
     reason,
     previousConversationId,
+  });
+}
+
+function freezeForegroundConversation(reason: string) {
+  const currentConversationId = String(currentChatConversationId.value || "").trim();
+  if (currentConversationId) {
+    cacheConversationMessages(currentConversationId, allMessages.value);
+  }
+  chatFlow.freezeForegroundRoundState();
+  console.warn("[聊天追踪][前台会话] 已冻结", {
+    windowLabel: tauriWindowLabel.value,
+    reason,
+    currentConversationId,
+    messageCount: allMessages.value.length,
   });
 }
 
@@ -1769,7 +1795,6 @@ async function applyConversationMessagesAfterSynced(payload: ConversationMessage
     if (!areMessagesEquivalent(allMessages.value, nextMessages)) {
       allMessages.value = nextMessages;
     }
-    visibleMessageBlockCount.value = Math.max(1, nextMessages.length || 1);
     await nextTick();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
@@ -1789,7 +1814,6 @@ async function switchUnarchivedConversation(conversationId: string) {
     currentChatConversationId.value = cid;
     const cachedDisplay = freezeConversationMessages(conversationMessageCache.value[cid] || []);
     allMessages.value = cachedDisplay;
-    visibleMessageBlockCount.value = Math.max(1, cachedDisplay.length || 1);
     hasMoreBackendHistory.value = inferHasMoreHistoryFromSnapshot(cachedDisplay);
     clearConversationBadge(cid);
     const trace = beginForegroundPaintTrace(cid);
@@ -1889,7 +1913,6 @@ async function confirmDiscardConversationAction() {
       cacheConversationMessages(activeConversationId, allMessages.value);
     } else {
       allMessages.value = [];
-      visibleMessageBlockCount.value = 1;
       hasMoreBackendHistory.value = false;
     }
     setStatus("当前会话已抛弃。");
@@ -1930,9 +1953,7 @@ const { suppressChatReloadWatch, refreshAllViewData } = useViewRefresh({
   refreshConversationHistory,
   loadDelegateConversations,
   loadArchives,
-  resetVisibleTurnCount: () => {
-    resetVisibleMessageBlocksByCurrentMessages();
-  },
+  resetVisibleTurnCount: () => {},
   perfNow,
   perfLog,
 });
@@ -1970,7 +1991,6 @@ const appBootstrap = useAppBootstrap({
     }
     if (viewMode.value === "chat") {
       await refreshConversationHistory();
-      resetVisibleMessageBlocksByCurrentMessages();
     }
   },
   onChatSettingsUpdated: async (payload) => {
@@ -1992,7 +2012,6 @@ const appBootstrap = useAppBootstrap({
       payload.backgroundVoiceScreenshotMode === "focused_window" ? "focused_window" : "desktop";
     if (viewMode.value === "chat") {
       await refreshConversationHistory();
-      resetVisibleMessageBlocksByCurrentMessages();
     }
   },
   onConfigUpdated: (payload) => {
@@ -2420,21 +2439,21 @@ async function clearRuntimeLogs() {
 
 function summonChatWindowFromConfig() {
   if (isChatTauriWindow.value) {
-    clearForegroundConversation("before_manual_summon");
+    freezeForegroundConversation("before_manual_summon");
   }
   void invokeTauri("show_chat_window");
 }
 
 async function closeWindowAndClearForeground() {
   if (isChatTauriWindow.value) {
-    clearForegroundConversation("close_window");
+    freezeForegroundConversation("close_window");
   }
   await closeWindow();
 }
 
 async function minimizeWindowAndClearForeground() {
   if (isChatTauriWindow.value) {
-    clearForegroundConversation("minimize_window");
+    freezeForegroundConversation("minimize_window");
   }
   await minimizeWindow();
 }
@@ -2518,7 +2537,6 @@ const chatFlow = useChatFlow({
   streamToolCalls,
   chatErrorText,
   allMessages,
-  visibleMessageBlockCount,
   t: tr,
   formatRequestFailed: (error) => formatI18nError(tr, "status.requestFailed", error),
   removeBinaryPlaceholders,
@@ -2582,19 +2600,9 @@ const chatFlow = useChatFlow({
     if (flushedConversationId && isChatWindowActiveNow()) {
       currentChatConversationId.value = flushedConversationId;
     }
-    // 激活助理的批次：清屏并原子重放；非激活批次：仅顺序追加，不清屏。
+    // 激活助理的批次也只做去重合并，避免清空重建打断滚动与分页状态。
     const queueMessages = Array.isArray(pendingMessages) ? pendingMessages : [];
-    if (activateAssistant) {
-      allMessages.value = [];
-      await nextTick();
-      allMessages.value = [...queueMessages];
-      hasMoreBackendHistory.value = false;
-      console.warn("[聊天追踪][历史刷写处理] 激活替换完成", {
-        windowLabel: tauriWindowLabel.value,
-        replacedCount: queueMessages.length,
-        finalMessageCount: allMessages.value.length,
-      });
-    } else if (queueMessages.length > 0) {
+    if (queueMessages.length > 0) {
       const existing = allMessages.value;
       const dedup = new Set(existing.map((m) => String(m.id || "").trim()).filter((id) => !!id));
       const beforeDedupCount = queueMessages.length;
@@ -2606,9 +2614,35 @@ const chatFlow = useChatFlow({
         return true;
       });
       allMessages.value = [...existing, ...appended];
-      hasMoreBackendHistory.value = false;
-      console.warn("[聊天追踪][历史刷写处理] 追加完成", {
+      const appendedSummary = appended.map((message) => {
+        const meta = (message.providerMeta || {}) as Record<string, unknown>;
+        const origin = meta.origin as Record<string, unknown> | undefined;
+        return {
+          id: String(message.id || "").trim(),
+          role: String(message.role || "").trim(),
+          speakerAgentId: String(message.speakerAgentId || meta.speakerAgentId || meta.speaker_agent_id || "").trim(),
+          originKind: String(origin?.kind || "").trim(),
+          messageKind: String(meta.messageKind || "").trim(),
+          textPreview: Array.isArray(message.parts)
+            ? message.parts
+              .filter((part) => part?.type === "text")
+              .map((part) => String((part as { text?: string }).text || "").trim())
+              .filter(Boolean)
+              .join(" | ")
+              .slice(0, 80)
+            : "",
+        };
+      });
+      console.warn(`[聊天追踪][前台追加消息] 明细 ${JSON.stringify({
         windowLabel: tauriWindowLabel.value,
+        appended: appendedSummary,
+      })}`);
+      if (appended.some((message) => isLocalOwnUserMessage(message))) {
+        latestOwnMessageAlignRequest.value += 1;
+      }
+      console.warn("[聊天追踪][历史刷写处理] 合并完成", {
+        windowLabel: tauriWindowLabel.value,
+        activateAssistant,
         beforeDedupCount,
         appendedCount: appended.length,
         droppedAsDuplicate: beforeDedupCount - appended.length,
@@ -2685,10 +2719,6 @@ watch(
   },
 );
 
-function clearStreamBuffer() {
-  chatFlow.clearStreamBuffer();
-}
-
 function buildPersonasSnapshotJson() {
   return JSON.stringify(
     personas.value.map((item) => ({
@@ -2721,7 +2751,6 @@ const {
   activeAgentId: activeAssistantAgentId,
   currentConversationId: currentChatConversationId,
   allMessages,
-  visibleMessageBlockCount,
   chatting,
   forcingArchive,
   chatInput,
@@ -2783,7 +2812,6 @@ useAppLifecycle({
   refreshAllViewData,
   viewMode,
   syncWindowControlsState,
-  clearStreamBuffer,
   stopRecording,
   cleanupSpeechRecording,
   cleanupChatMedia,
@@ -2821,8 +2849,6 @@ useAppWatchers({
   refreshToolsStatus,
   refreshImageCacheStats,
   refreshConversationHistory,
-  resetVisibleTurnCount: () => {
-    resetVisibleMessageBlocksByCurrentMessages();
-  },
+  resetVisibleTurnCount: () => {},
 });
 </script>

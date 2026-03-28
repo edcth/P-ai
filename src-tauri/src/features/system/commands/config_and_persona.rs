@@ -1487,7 +1487,7 @@ fn switch_active_conversation_snapshot(
     input: SwitchActiveConversationSnapshotInput,
     state: State<'_, AppState>,
 ) -> Result<SwitchActiveConversationSnapshotOutput, String> {
-    const SWITCH_SNAPSHOT_RECENT_LIMIT: usize = 5;
+    const SWITCH_SNAPSHOT_RECENT_LIMIT: usize = 50;
     let target_conversation_id = input.conversation_id.trim();
     if target_conversation_id.is_empty() {
         return Err("conversationId is required.".to_string());

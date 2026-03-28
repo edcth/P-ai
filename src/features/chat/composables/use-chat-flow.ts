@@ -54,7 +54,6 @@ type UseChatFlowOptions = {
   streamToolCalls?: Ref<Array<{ name: string; argsText: string }>>;
   chatErrorText: Ref<string>;
   allMessages: Ref<ChatMessage[]>;
-  visibleMessageBlockCount: Ref<number>;
   t: (key: string, params?: Record<string, unknown>) => string;
   formatRequestFailed: (error: unknown) => string;
   removeBinaryPlaceholders: (text: string) => string;
@@ -382,10 +381,11 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const agentId = String(options.getSession()?.agentId || "").trim();
     const nextStreamSegments = streamSegments || readDraftStreamSegments(draftId);
     const nextStreamTail = streamTail ?? readDraftStreamTail(draftId);
+    const existingDraft = options.allMessages.value.find((item) => item.id === draftId);
     const msg: ChatMessage = {
       id: draftId,
       role: "assistant",
-      createdAt: new Date().toISOString(),
+      createdAt: String(existingDraft?.createdAt || new Date().toISOString()),
       speakerAgentId: agentId || "assistant-draft",
       parts: [{ type: "text", text: String(options.latestAssistantText.value || "") }],
       providerMeta: {
@@ -436,10 +436,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
   // 流式输出
   // =========================================================================
 
-  function clearStreamBuffer() {
-    // 兼容保留：当前改为“delta 直写”，无额外缓冲需要清理。
-  }
-
   function enqueueStreamDelta(gen: number, delta: string) {
     if (round.phase !== "streaming" || round.gen !== gen || !delta) return;
     options.latestAssistantText.value += delta;
@@ -457,7 +453,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
   // =========================================================================
 
   function resetDisplayState() {
-    clearStreamBuffer();
     streamToolCallCount = 0;
     streamLastToolName = "";
     options.latestUserText.value = "";
@@ -473,7 +468,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
   function clearForegroundRoundState() {
     ++generation;
     sendChatActiveGen = 0;
-    clearStreamBuffer();
     if (round.phase === "streaming") {
       removeDraft(round.draftId);
     }
@@ -497,7 +491,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
   function freezeForegroundRoundState() {
     ++generation;
     sendChatActiveGen = 0;
-    clearStreamBuffer();
     if (round.phase === "streaming") {
       finalizeDraft(round.draftId);
     }
@@ -527,7 +520,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     if (existingDraftId) {
       updateDraftText(draftId);
     }
-    options.visibleMessageBlockCount.value = Math.max(1, activeHistoryMessageCount + 1);
     round = { phase: "streaming", gen, draftId };
     options.chatting.value = true;
     return gen;
@@ -542,9 +534,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
   // =========================================================================
 
   /**
-   * history_flushed：唯一做 allMessages 大规模变更的地方。
-   * 1. 移除旧 draft   2. reload / onHistoryFlushed   3. 插入新 draft
-   * 之后不再碰 allMessages（除了 updateDraftText）。
+ * history_flushed：唯一做 allMessages 大规模合并的地方。
+ * 1. 移除旧 draft   2. reload / onHistoryFlushed   3. 插入新 draft
+ * 之后不再碰 allMessages（除了 updateDraftText）。
    */
   async function handleHistoryFlushed(
     gen: number,
@@ -588,8 +580,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const batchVisibleCount = Math.max(1, replayMessages.length, payloadMessageCount);
     activeHistoryMessageCount = batchVisibleCount;
     if (shouldActivate) {
-      options.visibleMessageBlockCount.value = batchVisibleCount;
-      // 仅激活助理时清屏，非激活批次保持当前视图并顺序追加历史。
+      // 激活助理时重置显示态，但消息数组由外层做去重合并，不再清空重建。
       const oldDraftId = round.phase === "streaming" ? round.draftId : "";
       resetDisplayState();
       if (oldDraftId) removeDraft(oldDraftId);
@@ -638,8 +629,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
     // ── 插 draft / 进入 streaming ──
     const draftId = insertDraft(gen);
-    // 流式进行中保持历史可见窗口稳定，待 round_completed 再按最终可见输出结算。
-    options.visibleMessageBlockCount.value = batchVisibleCount;
     round = { phase: "streaming", gen, draftId };
     options.chatting.value = true;
     applyPendingTerminalEvent(gen);
@@ -679,13 +668,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
       options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallDone");
     }
 
-    options.visibleMessageBlockCount.value =
-      activeHistoryMessageCount + (hasAssistantVisibleOutput(result) ? 1 : 0);
-
     updateDraftText(draftId);
     finalizeDraft(draftId, result.assistantMessage);
     round = { phase: "idle" };
-    clearStreamBuffer();
     options.chatting.value = false;
     reasoningStartedAtMs.value = 0;
   }
@@ -694,7 +679,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     if (round.phase !== "streaming" || round.gen !== gen) return;
     const { draftId } = round;
 
-    clearStreamBuffer();
     options.latestAssistantText.value = "";
     options.latestReasoningStandardText.value = "";
     options.latestReasoningInlineText.value = "";
@@ -703,7 +687,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
       options.toolStatusState.value = "failed";
       options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallFailed");
     }
-    options.visibleMessageBlockCount.value = activeHistoryMessageCount;
     removeDraft(draftId);
     round = { phase: "idle" };
     options.chatting.value = false;
@@ -955,7 +938,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
       return;
     }
     if (round.phase !== "streaming") {
-      clearStreamBuffer();
       options.latestAssistantText.value = "";
       options.latestReasoningStandardText.value = "";
       options.latestReasoningInlineText.value = "";
@@ -1084,7 +1066,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
         return;
       }
 
-      clearStreamBuffer();
       options.latestAssistantText.value = "";
       options.latestReasoningStandardText.value = "";
       options.latestReasoningInlineText.value = "";
@@ -1101,7 +1082,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
         round = { phase: "idle" };
         options.chatting.value = false;
         reasoningStartedAtMs.value = 0;
-        options.visibleMessageBlockCount.value = activeHistoryMessageCount;
       }
     } finally {
       if (sendChatActiveGen === gen) sendChatActiveGen = 0;
@@ -1131,7 +1111,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
       ++generation;
       sendChatActiveGen = 0;
       pendingTerminalEvent = null;
-      clearStreamBuffer();
       round = { phase: "idle" };
       options.chatting.value = false;
       reasoningStartedAtMs.value = 0;
@@ -1194,7 +1173,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     // stop 失败时，回退本地中断，避免 UI 挂在 streaming 态。
     ++generation;
     sendChatActiveGen = 0;
-    clearStreamBuffer();
     if (round.phase === "streaming") {
       removeDraft(round.draftId);
     }
@@ -1216,7 +1194,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     handleExternalRoundCompleted,
     handleExternalRoundFailed,
     handleExternalAssistantDelta,
-    clearStreamBuffer,
     reasoningStartedAtMs,
   };
 }

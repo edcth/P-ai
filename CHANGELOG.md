@@ -2,6 +2,11 @@
 
 ## 未发布
 
+- 修复（chat-stream-render-isolation-and-jump-button-anchor）：切分消息渲染热路径并修正滚到底按钮定位
+  - 聊天消息列表改为由独立 `ChatMessageItem` 子组件承接单条消息渲染，配合父层 `v-memo`，避免流式输出时整列表陪跑重渲染
+  - 单条消息渲染补齐时间格式化器复用与流式 Markdown 解析节流，显著降低长输出时的主线程压力
+  - “滚到最下”按钮改为根据输入面板高度动态上浮，并修正底部状态响应式更新，避免按钮常驻与遮挡输入区
+
 - 调整（skill-setup-trigger-clarification）：收紧 skill-setup 的触发规则
   - `skill-setup` 的描述与规则改为“显式 skill 查询触发 + 能力缺口触发”的双触发口径
   - 当用户明确询问 skill/技能/插件/扩展/市场/热门 skill 等意图时，模型应优先读取 `skill-setup`，避免先直接搜索网页或直接回答

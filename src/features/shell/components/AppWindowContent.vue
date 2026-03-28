@@ -121,7 +121,7 @@
         :chatting="chatting"
         :frozen="forcingArchive"
         :message-blocks="visibleMessageBlocks"
-        :has-more-message-blocks="hasMoreMessageBlocks"
+        :latest-own-message-align-request="latestOwnMessageAlignRequest"
         :current-workspace-name="currentChatWorkspaceName"
         :workspace-locked="chatWorkspaceLocked"
         :active-conversation-id="currentChatConversationId"
@@ -135,7 +135,7 @@
         @stop-recording="stopRecording"
         @send-chat="sendChat"
         @stop-chat="stopChat"
-        @load-more-message-blocks="loadMoreMessageBlocks"
+        @reached-bottom="onReachedChatBottom"
         @recall-turn="onRecallTurn"
         @regenerate-turn="onRegenerateTurn"
         @lock-workspace="onLockChatWorkspace"
@@ -330,7 +330,7 @@ const props = defineProps<{
   chatting: boolean;
   forcingArchive: boolean;
   visibleMessageBlocks: ChatMessageBlock[];
-  hasMoreMessageBlocks: boolean;
+  latestOwnMessageAlignRequest: number;
   currentChatWorkspaceName: string;
   chatWorkspaceLocked: boolean;
   currentChatConversationId: string;
@@ -413,7 +413,7 @@ const props = defineProps<{
   stopRecording: () => void;
   sendChat: () => void;
   stopChat: () => void;
-  loadMoreMessageBlocks: () => void;
+  onReachedChatBottom: () => void;
   onRecallTurn: (payload: { turnId: string }) => void;
   onRegenerateTurn: (payload: { turnId: string }) => void;
   onLockChatWorkspace: () => void;

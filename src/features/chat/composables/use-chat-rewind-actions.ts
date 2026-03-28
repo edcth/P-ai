@@ -15,7 +15,6 @@ type UseChatRewindActionsOptions = {
   activeAgentId: Ref<string>;
   currentConversationId: Ref<string>;
   allMessages: ShallowRef<ChatMessage[]>;
-  visibleMessageBlockCount: Ref<number>;
   chatting: Ref<boolean>;
   forcingArchive: Ref<boolean>;
   chatInput: Ref<string>;
@@ -65,19 +64,6 @@ export function useChatRewindActions(options: UseChatRewindActionsOptions) {
       }
     }
     return null;
-  }
-
-  function resetVisibleBlocksAfterRewind(nextMessages: ChatMessage[]) {
-    const assistantIndices: number[] = [];
-    for (let i = 0; i < nextMessages.length; i += 1) {
-      if (nextMessages[i]?.role === "assistant") assistantIndices.push(i);
-    }
-    if (assistantIndices.length < 2) {
-      options.visibleMessageBlockCount.value = Math.max(1, nextMessages.length || 1);
-      return;
-    }
-    const startIndex = assistantIndices[assistantIndices.length - 2];
-    options.visibleMessageBlockCount.value = Math.max(1, nextMessages.length - startIndex);
   }
 
   async function rewindConversationFromTurn(turnId: string, undoApplyPatch: boolean): Promise<ChatMessage | null> {
@@ -131,7 +117,6 @@ export function useChatRewindActions(options: UseChatRewindActionsOptions) {
       const keepCount = keepCountFromLocal >= 0 ? keepCountFromLocal : keepCountFromBackend;
       const nextMessages = currentMessages.slice(0, keepCount);
       options.allMessages.value = nextMessages;
-      resetVisibleBlocksAfterRewind(nextMessages);
       console.info("[会话撤回] 完成", {
         removedCount: Number(result.removedCount) || 0,
         remainingCount: Number(result.remainingCount) || nextMessages.length,
@@ -164,7 +149,6 @@ export function useChatRewindActions(options: UseChatRewindActionsOptions) {
     if (String(options.currentConversationId.value || "").trim() === String(conversationId || "").trim()) {
       options.currentConversationId.value = "";
       options.allMessages.value = [];
-      options.visibleMessageBlockCount.value = 1;
     }
   }
 

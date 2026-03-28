@@ -10,281 +10,46 @@
     </div>
     <div
       ref="scrollContainer"
-      class="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col scrollbar-gutter-stable"
+      class="ecall-chat-scroll-container relative flex-1 min-h-0 overflow-y-auto p-3 flex flex-col scrollbar-gutter-stable"
       @scroll="onScroll"
-      @wheel.passive="onWheel"
-      @pointerdown.passive="markManualScrollIntent"
     >
       <!-- 历史对话 -->
       <template v-for="(block, blockIndex) in messageBlocks" :key="block.id">
         <div
           v-if="isCompactionBlock(block)"
-          :class="['mt-4 flex items-center gap-3 text-[11px] text-base-content/45', shouldAnimateMessage(block, blockIndex) ? 'ecall-message-enter-up' : '']"
+          class="mt-4 flex items-center gap-3 text-[11px] text-base-content/45"
         >
           <div class="h-px flex-1 bg-base-300/80"></div>
           <span class="shrink-0 tracking-[0.2em]">上文已压缩</span>
           <div class="h-px flex-1 bg-base-300/80"></div>
         </div>
-        <div v-else :class="['chat group/user-turn mt-3', isOwnMessage(block) ? 'chat-end' : 'chat-start', shouldAnimateMessage(block, blockIndex) ? 'ecall-message-enter-up' : '']">
-          <div class="chat-image self-start ecall-chat-avatar-col">
-            <div class="flex w-7 flex-col items-center gap-2">
-              <div class="avatar">
-                <div class="w-7 rounded-full">
-                  <img
-                    v-if="messageAvatarUrl(block)"
-                    :src="messageAvatarUrl(block)"
-                    :alt="messageName(block)"
-                    class="w-7 h-7 rounded-full object-cover"
-                  />
-                  <div v-else class="bg-neutral text-neutral-content w-7 h-7 rounded-full flex items-center justify-center text-xs">
-                    {{ avatarInitial(messageName(block)) }}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="chat-header mb-1 flex items-center gap-2">
-            <button
-              v-if="isOwnMessage(block)"
-              type="button"
-              :class="[
-                'inline-flex h-5 w-5 items-center justify-center rounded text-base-content/40 hover:text-base-content opacity-0 pointer-events-none transition-opacity',
-                !chatting && !frozen ? 'group-hover/user-turn:opacity-100 group-hover/user-turn:pointer-events-auto' : '',
-              ]"
-              :title="t('chat.recall')"
-              :disabled="chatting || frozen"
-              @click="$emit('recallTurn', { turnId: block.id })"
-            >
-              <Undo2 class="h-3 w-3" />
-            </button>
-            <span v-if="isOwnMessage(block)" class="inline-flex h-4 items-center text-[10px] leading-none">
-              <span v-if="block.isStreaming" class="ecall-time-loading opacity-70">
-                <span class="loading loading-infinity loading-sm"></span>
-              </span>
-              <time v-else-if="formattedBlockTime(block.createdAt)" class="opacity-50 leading-none">{{ formattedBlockTime(block.createdAt) }}</time>
-            </span>
-            <span class="text-xs text-base-content">{{ messageName(block) }}</span>
-            <span v-if="!isOwnMessage(block)" class="inline-flex h-4 items-center text-[10px] leading-none">
-              <span v-if="block.isStreaming" class="ecall-time-loading opacity-70">
-                <span class="loading loading-infinity loading-sm"></span>
-              </span>
-              <time v-else-if="formattedBlockTime(block.createdAt)" class="opacity-50 leading-none">{{ formattedBlockTime(block.createdAt) }}</time>
-            </span>
-          </div>
-          <div :class="[
-            'chat-bubble',
-            isOwnMessage(block)
-              ? ''
-              : [
-                'bg-base-100 text-base-content border border-base-300/70 assistant-markdown ecall-assistant-bubble max-w-full',
-                blockHasMermaid(block) ? 'ecall-assistant-bubble-wide' : '',
-              ],
-          ]">
-            <div v-if="block.taskTrigger" class="space-y-2">
-              <div class="flex items-center gap-2">
-                <span class="badge badge-sm badge-outline">{{ t("chat.taskTrigger.badge") }}</span>
-              </div>
-              <div class="text-base font-medium leading-6">{{ block.taskTrigger.title }}</div>
-              <div v-if="block.taskTrigger.cause" class="space-y-0.5">
-                <div class="text-[11px] opacity-55">{{ t("config.task.fields.cause") }}</div>
-                <div class="text-sm leading-6 whitespace-pre-wrap">{{ block.taskTrigger.cause }}</div>
-              </div>
-              <div v-if="block.taskTrigger.goal" class="space-y-0.5">
-                <div class="text-[11px] opacity-55">{{ t("config.task.fields.goal") }}</div>
-                <div class="text-sm leading-6 whitespace-pre-wrap">{{ block.taskTrigger.goal }}</div>
-              </div>
-              <div v-if="block.taskTrigger.flow" class="space-y-0.5">
-                <div class="text-[11px] opacity-55">{{ t("config.task.fields.flow") }}</div>
-                <div class="text-sm leading-6 whitespace-pre-wrap">{{ block.taskTrigger.flow }}</div>
-              </div>
-              <div v-if="block.taskTrigger.statusSummary" class="space-y-0.5">
-                <div class="text-[11px] opacity-55">{{ t("config.task.fields.statusSummary") }}</div>
-                <div class="text-sm leading-6 whitespace-pre-wrap">{{ block.taskTrigger.statusSummary }}</div>
-              </div>
-              <div v-if="block.taskTrigger.runAt || block.taskTrigger.endAt || block.taskTrigger.everyMinutes" class="grid gap-1 text-sm leading-6">
-                <div v-if="block.taskTrigger.runAt">
-                  <span class="text-[11px] opacity-55">{{ t("config.task.fields.runAt") }}</span>
-                  <span class="ml-2">{{ formattedBlockTime(block.taskTrigger.runAt) }}</span>
-                </div>
-                <div v-if="block.taskTrigger.endAt">
-                  <span class="text-[11px] opacity-55">{{ t("config.task.fields.endAt") }}</span>
-                  <span class="ml-2">{{ formattedBlockTime(block.taskTrigger.endAt) }}</span>
-                </div>
-                <div v-if="block.taskTrigger.everyMinutes">
-                  <span class="text-[11px] opacity-55">{{ t("config.task.fields.everyMinutes") }}</span>
-                  <span class="ml-2">{{ block.taskTrigger.everyMinutes }}</span>
-                </div>
-              </div>
-              <div v-if="(block.taskTrigger?.todos ?? []).length > 0" class="space-y-1">
-                <div class="text-[11px] opacity-55">{{ t("config.task.fields.todos") }}</div>
-                <ul class="space-y-1 text-sm leading-6">
-                  <li v-for="(todo, todoIdx) in block.taskTrigger?.todos ?? []" :key="`${block.id}-todo-${todoIdx}`" class="flex items-start gap-2">
-                    <span class="mt-2 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60"></span>
-                    <span class="min-w-0 whitespace-pre-wrap">{{ todo }}</span>
-                  </li>
-                </ul>
-              </div>
-            </div>
-            <details
-              v-if="!isOwnMessage(block) && block.reasoningStandard"
-              class="collapse mb-2 border-l-2 border-base-content/20 pl-3 rounded-none min-w-55"
-            >
-              <summary class="collapse-title py-0 px-0 min-h-0 text-xs flex items-center gap-1 text-base-content/80">
-                <span
-                  :class="['block min-w-0 flex-1 truncate ecall-shimmer-text', reasoningSummaryClass(block)]"
-                  :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
-                >
-                  {{ reasoningSummaryLabel(block) }}
-                </span>
-              </summary>
-              <div class="collapse-content px-0 py-2 whitespace-pre-wrap text-[11px] leading-relaxed text-base-content/70">
-                {{ block.reasoningStandard }}
-              </div>
-            </details>
-            <details
-              v-if="!isOwnMessage(block) && resolvedInlineReasoning(block)"
-              class="collapse mb-2 border-l-2 border-base-content/20 pl-3 rounded-none min-w-55"
-            >
-              <summary class="collapse-title py-0 px-0 min-h-0 text-[10px] flex items-center gap-1 text-base-content/60 cursor-pointer">
-                <span
-                  :class="['block min-w-0 flex-1 truncate ecall-shimmer-text', reasoningSummaryClass(block)]"
-                  :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
-                >
-                  {{ reasoningSummaryLabel(block) }}
-                </span>
-              </summary>
-              <div class="collapse-content max-w-full px-0 py-2 whitespace-pre-wrap wrap-break-word text-[10px] leading-relaxed text-base-content/60" style="overflow-wrap: anywhere;">
-                {{ resolvedInlineReasoning(block) }}
-              </div>
-            </details>
-            <div v-if="toolCallsForBlock(block).length > 0" class="mb-2 flex flex-col gap-1 text-[11px] opacity-90">
-              <details class="collapse bg-base-200 border-base-300 border">
-                <summary class="collapse-title py-2 px-3 min-h-0 text-[11px] font-semibold flex items-center gap-1.5">
-                  <span class="inline-block h-2 w-2 rounded-full bg-success"></span>
-                  <span
-                    :class="['ecall-shimmer-text font-medium', toolSummaryClass(block)]"
-                    :data-shimmer-text="showStreamingUi(block) ? '工具执行中' : ''"
-                  >{{ toolStatusLabel(block) }}</span>
-                  <span v-if="toolNamesLabel(block)" class="truncate">{{ ` · ${toolNamesLabel(block)}` }}</span>
-                </summary>
-                <div class="collapse-content px-3 pb-2 pt-0 text-[10px] text-base-content/70">
-                  <div
-                    v-for="(toolCall, idx) in toolCallsForBlock(block)"
-                    :key="`${block.id}-tool-${idx}`"
-                    class="mb-2 last:mb-0"
-                  >
-                    <div class="mb-1 font-semibold opacity-80">#{{ idx + 1 }} {{ toolCall.name }}</div>
-                    <pre class="whitespace-pre-wrap break-all">{{ toolCall.argsText }}</pre>
-                  </div>
-                </div>
-              </details>
-            </div>
-            <div v-if="block.text" :class="block.taskTrigger ? 'mt-3' : ''">
-              <div
-                v-if="isOwnMessage(block)"
-                class="whitespace-pre-wrap"
-              >{{ block.text }}</div>
-              <MarkdownRender
-                v-else
-                :class="[
-                  'ecall-markdown-content max-w-none',
-                  block.isStreaming ? 'ecall-stream-content' : 'ecall-stream-content-done',
-                ]"
-                custom-id="chat-markstream"
-                :nodes="markdownNodesForBlock(block)"
-                :is-dark="markdownIsDark"
-                :final="!block.isStreaming"
-                :max-live-nodes="0"
-                :batch-rendering="true"
-                :render-batch-size="16"
-                :render-batch-delay="8"
-                :code-block-props="markdownCodeBlockProps"
-                :mermaid-props="markdownMermaidProps"
-                :typewriter="false"
-                @click="handleAssistantLinkClick"
-              />
-            </div>
-            <div v-if="block.images.length > 0" :class="block.taskTrigger || block.text ? 'mt-2 grid gap-1' : 'grid gap-1'">
-              <template v-for="(img, idx) in block.images" :key="`${block.id}-img-${idx}`">
-                <img
-                  v-if="isImageMime(img.mime)"
-                  :src="`data:${img.mime};base64,${img.bytesBase64}`"
-                  loading="lazy"
-                  decoding="async"
-                  class="rounded max-h-28 object-contain bg-base-100/40 cursor-zoom-in"
-                  @dblclick.stop="openImagePreview(img)"
-                />
-                <div v-else-if="isPdfMime(img.mime)" class="badge badge-outline gap-1 py-3 w-fit">
-                  <FileText class="h-3.5 w-3.5" />
-                  <span class="text-[11px]">PDF</span>
-                </div>
-              </template>
-            </div>
-            <div v-if="block.audios.length > 0" :class="block.taskTrigger || block.text || block.images.length > 0 ? 'mt-2 flex flex-col gap-1' : 'flex flex-col gap-1'">
-              <button
-                v-for="(aud, idx) in block.audios"
-                :key="`${block.id}-aud-${idx}`"
-                class="btn btn-sm bg-base-100/70 w-fit"
-                @click="toggleAudioPlayback(`${block.id}-aud-${idx}`, aud)"
-              >
-                <Pause v-if="playingAudioId === `${block.id}-aud-${idx}`" class="h-3 w-3" />
-                <Play v-else class="h-3 w-3" />
-                <span>{{ t("chat.voice", { index: idx + 1 }) }}</span>
-              </button>
-            </div>
-            <div
-              v-if="block.attachmentFiles.length > 0"
-              :class="block.taskTrigger || block.text || block.images.length > 0 || block.audios.length > 0 ? 'mt-2 flex flex-wrap gap-1' : 'flex flex-wrap gap-1'"
-            >
-              <div
-                v-for="(file, idx) in block.attachmentFiles"
-                :key="`${block.id}-file-${idx}`"
-                class="badge badge-outline gap-1 py-3"
-                :title="file.relativePath"
-              >
-                <FileText class="h-3.5 w-3.5" />
-                <span class="text-[11px]">{{ file.fileName }}</span>
-              </div>
-            </div>
-          </div>
-          <div
-            v-if="!isOwnMessage(block)"
-            :class="[
-              'chat-footer mt-1 flex h-6 items-center gap-1.5 transition-opacity',
-              canRegenerateBlock(block, blockIndex)
-                ? 'opacity-100 pointer-events-auto'
-                : !chatting && !frozen
-                  ? 'opacity-0 pointer-events-none group-hover/user-turn:opacity-100 group-hover/user-turn:pointer-events-auto'
-                  : 'opacity-0 pointer-events-none',
-            ]"
-          >
-            <button
-              type="button"
-              class="inline-flex h-6 w-6 items-center justify-center rounded text-base-content/55 hover:text-base-content"
-              :title="t('chat.copy')"
-              :class="!block.isStreaming && !chatting && !frozen ? '' : 'opacity-0 pointer-events-none'"
-              :disabled="block.isStreaming || chatting || frozen"
-              @click="copyMessage(block)"
-            >
-              <Copy class="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              class="inline-flex h-6 w-6 items-center justify-center rounded text-base-content/55 hover:text-base-content"
-              :title="t('chat.regenerate')"
-              :class="!block.isStreaming && !chatting && !frozen && canRegenerateBlock(block, blockIndex) ? '' : 'opacity-0 pointer-events-none'"
-              :disabled="block.isStreaming || chatting || frozen || !canRegenerateBlock(block, blockIndex)"
-              @click="$emit('regenerateTurn', { turnId: block.id })"
-            >
-              <RotateCcw class="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
+        <ChatMessageItem
+          v-else
+          v-memo="[block, chatting, frozen, markdownIsDark, latestOwnMessageBlockId, latestMessageBlockId, latestMessageMinHeight, playingAudioId, userAlias, userAvatarUrl, personaNameMap, personaAvatarUrlMap]"
+          :block="block"
+          :chatting="chatting"
+          :frozen="frozen"
+          :user-alias="userAlias"
+          :user-avatar-url="userAvatarUrl"
+          :persona-name-map="personaNameMap"
+          :persona-avatar-url-map="personaAvatarUrlMap"
+          :stream-tool-calls="streamToolCalls"
+          :markdown-is-dark="markdownIsDark"
+          :playing-audio-id="playingAudioId"
+          :latest-own-message="isLatestOwnMessage(block)"
+          :latest-message="isLatestMessage(block)"
+          :latest-message-min-height="latestMessageMinHeight"
+          :can-regenerate="canRegenerateBlock(block, blockIndex)"
+          @recall-turn="$emit('recallTurn', $event)"
+          @regenerate-turn="$emit('regenerateTurn', $event)"
+          @copy-message="copyMessage"
+          @open-image-preview="openImagePreview"
+          @toggle-audio-playback="toggleAudioPlayback($event.id, $event.audio)"
+          @assistant-link-click="handleAssistantLinkClick"
+        />
       </template>
 
-      <div class="flex-1 min-h-3"></div>
-
-      <div class="pt-1 pb-2">
+      <div ref="toolbarContainer" class="pt-1 pb-2">
         <div class="rounded-box border border-base-300 bg-base-100/70 px-2 py-1.5 flex items-center gap-2 text-[11px]">
           <button
             class="btn btn-sm bg-base-100"
@@ -338,7 +103,11 @@
       </div>
     </div>
 
-    <div v-show="showJumpToBottom" class="pointer-events-none absolute inset-x-0 bottom-20 z-30 flex justify-center">
+    <div
+      v-show="showJumpToBottom"
+      class="pointer-events-none absolute inset-x-0 z-30 flex justify-center"
+      :style="jumpToBottomStyle"
+    >
       <button
         class="btn btn-sm btn-circle btn-primary pointer-events-auto shadow-md"
         :title="t('chat.jumpToBottom')"
@@ -348,7 +117,7 @@
       </button>
     </div>
 
-    <div class="shrink-0 border-t border-base-300 bg-base-100 p-2">
+    <div ref="composerContainer" class="shrink-0 border-t border-base-300 bg-base-100 p-2">
       <!-- 队列预览 -->
       <ChatQueuePreview
         :queue-events="queueEvents"
@@ -561,38 +330,13 @@
 import { computed, ref, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { isDarkAppTheme } from "../../shell/composables/use-app-theme";
-import { ArrowDown, ArrowUp, Copy, FileText, Image as ImageIcon, Lock, LockOpen, MessageCircle, Mic, Minus, Paperclip, Pause, Play, Plus, RotateCcw, Send, Square, Undo2, X } from "lucide-vue-next";
-import MarkdownRender, { enableKatex, enableMermaid, getMarkdown, parseMarkdownToStructure } from "markstream-vue";
+import { ArrowDown, FileText, Image as ImageIcon, Lock, LockOpen, Mic, Minus, Paperclip, Plus, Send, Square, X } from "lucide-vue-next";
 import "markstream-vue/index.css";
 import { invokeTauri } from "../../../services/tauri-api";
 import type { ChatMessageBlock, ChatPersonaPresenceChip } from "../../../types/app";
+import ChatMessageItem from "../components/ChatMessageItem.vue";
 import ChatQueuePreview from "../components/ChatQueuePreview.vue";
 import { useChatQueue } from "../composables/use-chat-queue";
-
-enableMermaid();
-enableKatex();
-const markstreamMarkdown = getMarkdown();
-const markdownNodeCache = new Map<string, { text: string; final: boolean; nodes: any[] }>();
-const markdownCodeBlockProps = {
-  showHeader: true,
-  showCopyButton: true,
-  showPreviewButton: false,
-  showExpandButton: false,
-  showCollapseButton: false,
-  showFontSizeButtons: false,
-  enableFontSizeControl: false,
-  isShowPreview: false,
-};
-const markdownMermaidProps = {
-  showHeader: true,
-  showCopyButton: true,
-  showExportButton: false,
-  showFullscreenButton: false,
-  showCollapseButton: false,
-  showZoomControls: false,
-  showModeToggle: false,
-  enableWheelZoom: false,
-};
 
 const props = defineProps<{
   userAlias: string;
@@ -624,7 +368,7 @@ const props = defineProps<{
   chatting: boolean;
   frozen: boolean;
   messageBlocks: ChatMessageBlock[];
-  hasMoreMessageBlocks: boolean;
+  latestOwnMessageAlignRequest: number;
   currentWorkspaceName: string;
   workspaceLocked: boolean;
   activeConversationId: string;
@@ -655,6 +399,14 @@ const canCreateConversation = computed(
 );
 
 const markdownIsDark = computed(() => isDarkAppTheme(props.currentTheme));
+const latestOwnMessageBlockId = computed(() => {
+  for (let idx = props.messageBlocks.length - 1; idx >= 0; idx -= 1) {
+    const block = props.messageBlocks[idx];
+    if (isOwnMessage(block)) return String(block.id || "").trim();
+  }
+  return "";
+});
+const latestMessageBlockId = computed(() => String(props.messageBlocks[props.messageBlocks.length - 1]?.id || "").trim());
 
 const emit = defineEmits<{
   (e: "update:chatInput", value: string): void;
@@ -665,13 +417,13 @@ const emit = defineEmits<{
   (e: "pickAttachments"): void;
   (e: "sendChat"): void;
   (e: "stopChat"): void;
-  (e: "loadMoreMessageBlocks"): void;
   (e: "recallTurn", payload: { turnId: string }): void;
   (e: "regenerateTurn", payload: { turnId: string }): void;
   (e: "lockWorkspace"): void;
   (e: "unlockWorkspace"): void;
   (e: "switchConversation", conversationId: string): void;
   (e: "createConversation"): void;
+  (e: "reachedBottom"): void;
 }>();
 const { t } = useI18n();
 
@@ -819,36 +571,23 @@ function handleChatInputKeydown(event: KeyboardEvent) {
 }
 
 const scrollContainer = ref<HTMLElement | null>(null);
+const composerContainer = ref<HTMLElement | null>(null);
+const toolbarContainer = ref<HTMLElement | null>(null);
 const chatInputRef = ref<HTMLTextAreaElement | null>(null);
-const autoFollowOutput = ref(true);
 const playingAudioId = ref("");
 const linkOpenErrorText = ref("");
+const latestMessageMinHeight = ref(0);
+const jumpToBottomOffset = ref(96);
 let activeAudio: HTMLAudioElement | null = null;
-let followScrollRaf = 0;
 let resizeInputRaf = 0;
+let pendingAlignOnLatestContainerReady = false;
+let composerResizeObserver: ResizeObserver | null = null;
+let latestMessageLayoutObserver: ResizeObserver | null = null;
 
 function avatarInitial(name: string): string {
   const text = (name || "").trim();
   if (!text) return "?";
   return text[0].toUpperCase();
-}
-
-function messageName(block: ChatMessageBlock): string {
-  if (block.remoteImOrigin) {
-    return block.remoteImOrigin.senderName || block.remoteImOrigin.remoteContactName || "IM";
-  }
-  const id = String(block.speakerAgentId || "").trim();
-  if (id && props.personaNameMap[id]) return props.personaNameMap[id];
-  if (!id || id === "user-persona") return props.userAlias || t("archives.roleUser");
-  return id;
-}
-
-function messageAvatarUrl(block: ChatMessageBlock): string {
-  if (block.remoteImOrigin) return "";
-  const id = String(block.speakerAgentId || "").trim();
-  if (id && props.personaAvatarUrlMap[id]) return props.personaAvatarUrlMap[id];
-  if (!id || id === "user-persona") return props.userAvatarUrl || "";
-  return "";
 }
 
 function isOwnMessage(block: ChatMessageBlock): boolean {
@@ -864,70 +603,17 @@ function isCompactionBlock(block: ChatMessageBlock): boolean {
   return text.startsWith("[上下文整理]") || text.startsWith("[上下文压缩]");
 }
 
-function showStreamingUi(block: ChatMessageBlock): boolean {
-  return !!block.isStreaming && !isOwnMessage(block);
-}
-
-function toolCallsForBlock(block: ChatMessageBlock): Array<{ name: string; argsText: string }> {
-  if (showStreamingUi(block) && props.streamToolCalls.length > 0) {
-    return props.streamToolCalls;
-  }
-  return block.toolCalls;
-}
-
-function mergedToolSummaryLabel(block: ChatMessageBlock): string {
-  const statusLabel = showStreamingUi(block) ? "工具执行中" : "工具执行毕";
-  const names = toolNamesLabel(block);
-  if (!names) return statusLabel;
-  return `${statusLabel} · ${names}`;
-}
-
-function toolStatusLabel(block: ChatMessageBlock): string {
-  return showStreamingUi(block) ? "工具执行中" : "工具执行毕";
-}
-
-function toolNamesLabel(block: ChatMessageBlock): string {
-  const calls = toolCallsForBlock(block);
-  if (calls.length === 0) return "";
-  const counts = new Map<string, number>();
-  const order: string[] = [];
-  for (const call of calls) {
-    const name = String(call.name || "").trim() || "未知工具";
-    if (!counts.has(name)) {
-      counts.set(name, 0);
-      order.push(name);
-    }
-    counts.set(name, (counts.get(name) || 0) + 1);
-  }
-  const merged = order.map((name) => {
-    const total = counts.get(name) || 0;
-    return total > 1 ? `${name}（+${total - 1}）` : name;
-  });
-  return merged.join("，");
-}
-
 function canRegenerateBlock(block: ChatMessageBlock, blockIndex: number): boolean {
   if (block.role !== "assistant") return false;
   return blockIndex === props.messageBlocks.length - 1;
 }
 
-function shouldAnimateMessage(block: ChatMessageBlock, blockIndex: number): boolean {
-  if (blockIndex !== props.messageBlocks.length - 1) return false;
-  return animatedMessageIds.value.has(String(block.id || ""));
+function isLatestOwnMessage(block: ChatMessageBlock): boolean {
+  return isOwnMessage(block) && String(block.id || "").trim() === latestOwnMessageBlockId.value;
 }
 
-function formattedBlockTime(value?: string): string {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return raw;
-  const parts = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(parsed);
-  const pick = (type: string) => parts.find((part) => part.type === type)?.value || "00";
-  return `${pick("hour")}:${pick("minute")}`;
+function isLatestMessage(block: ChatMessageBlock): boolean {
+  return String(block.id || "").trim() === latestMessageBlockId.value;
 }
 
 function splitThinkText(raw: string): { visible: string; inline: string } {
@@ -966,28 +652,6 @@ function splitThinkText(raw: string): { visible: string; inline: string } {
   };
 }
 
-function markdownNodesForBlock(block: ChatMessageBlock): any[] {
-  const text = splitThinkText(block.text).visible;
-  const final = !block.isStreaming;
-  const cacheKey = String(block.id || "");
-  const cached = markdownNodeCache.get(cacheKey);
-  if (cached && cached.text === text && cached.final === final) {
-    return cached.nodes;
-  }
-  const nodes = parseMarkdownToStructure(text, markstreamMarkdown, { final });
-  markdownNodeCache.set(cacheKey, { text, final, nodes });
-  return nodes;
-}
-
-function blockHasMermaid(block: ChatMessageBlock): boolean {
-  const text = splitThinkText(block.text).visible;
-  return /```(?:\s*)mermaid\b/i.test(text);
-}
-
-function resolvedInlineReasoning(block: ChatMessageBlock): string {
-  return splitThinkText(block.text).inline || block.reasoningInline || "";
-}
-
 async function copyMessage(block: ChatMessageBlock) {
   const copyText = splitThinkText(block.text).visible || block.text || "";
   if (!copyText) return;
@@ -996,31 +660,6 @@ async function copyMessage(block: ChatMessageBlock) {
   } catch {
     // Ignore clipboard failures to avoid interrupting chat flow.
   }
-}
-
-function firstLinePreview(raw: string): string {
-  if (!raw) return "";
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  return lines.length ? lines[lines.length - 1] : raw.trim();
-}
-
-function reasoningSummaryLabel(block: ChatMessageBlock): string {
-  if (block.isStreaming) return "正在思考中";
-  const elapsedMs = Number((block as ChatMessageBlock & { reasoningElapsedMs?: number }).reasoningElapsedMs ?? 0);
-  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return "思考完成";
-  const elapsedSeconds = Math.max(1, Math.round(elapsedMs / 1000));
-  return `思考了${elapsedSeconds}秒`;
-}
-
-function reasoningSummaryClass(block: ChatMessageBlock): string {
-  return block.isStreaming ? "ecall-reasoning-shimmer" : "";
-}
-
-function toolSummaryClass(block: ChatMessageBlock): string {
-  return showStreamingUi(block) ? "ecall-reasoning-shimmer" : "";
 }
 
 function buildAudioDataUrl(audio: { mime: string; bytesBase64: string }): string {
@@ -1067,11 +706,10 @@ function toggleAudioPlayback(id: string, audio: { mime: string; bytesBase64: str
   });
 }
 
-function scrollToBottom(behavior: ScrollBehavior = "auto") {
+function scrollToBottom(behavior: ScrollBehavior = "smooth") {
   const el = scrollContainer.value;
-  if (el) {
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }
+  if (!el) return;
+  el.scrollTo({ top: el.scrollHeight, behavior });
 }
 
 function resizeChatInput() {
@@ -1089,17 +727,11 @@ function scheduleResizeChatInput() {
   if (resizeInputRaf) cancelAnimationFrame(resizeInputRaf);
   resizeInputRaf = requestAnimationFrame(() => {
     resizeChatInput();
+    updateJumpToBottomOffset();
     resizeInputRaf = 0;
   });
 }
 
-function isNearBottom(el: HTMLElement): boolean {
-  const threshold = 24;
-  const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
-  return distance <= threshold;
-}
-
-const showJumpToBottom = computed(() => !autoFollowOutput.value);
 const imagePreviewOpen = ref(false);
 const imagePreviewDataUrl = ref("");
 const imagePreviewZoom = ref(1);
@@ -1145,9 +777,13 @@ function onPreviewWheel(event: WheelEvent) {
   }
 }
 
+const showJumpToBottom = computed(() => !lastBottomState.value);
+const jumpToBottomStyle = computed(() => ({
+  bottom: `${jumpToBottomOffset.value}px`,
+}));
+
 function jumpToBottom() {
-  autoFollowOutput.value = true;
-  nextTick(() => scrollToBottom("smooth"));
+  scrollToBottom("smooth");
 }
 
 function openImagePreview(image: { mime: string; bytesBase64: string }) {
@@ -1207,90 +843,124 @@ function onConversationItemClick(item: { conversationId: string; isActive?: bool
   emit("switchConversation", conversationId);
 }
 
-let loadingMore = false;
-let loadingMoreOldHeight = 0;
-let lastScrollTop = 0;
-let loadingMoreResetTimer: ReturnType<typeof setTimeout> | null = null;
-let manualScrollIntentUntil = 0;
-const DRAFT_ASSISTANT_ID_PREFIX = "__draft_assistant__:";
-const seenMessageIds = new Set<string>();
-const animatedMessageIds = ref(new Set<string>());
-let messageListInitialized = false;
+const lastBottomState = ref(false);
 
-function markManualScrollIntent() {
-  manualScrollIntentUntil = Date.now() + 1200;
+function updateJumpToBottomOffset() {
+  const composerHeight = composerContainer.value?.offsetHeight ?? 0;
+  jumpToBottomOffset.value = Math.max(16, composerHeight + 12);
 }
 
-function hasManualScrollIntent(): boolean {
-  return Date.now() <= manualScrollIntentUntil;
-}
-
-function clearLoadingMoreTimer() {
-  if (!loadingMoreResetTimer) return;
-  clearTimeout(loadingMoreResetTimer);
-  loadingMoreResetTimer = null;
-}
-
-function requestLoadMore() {
-  if (!props.hasMoreMessageBlocks) return;
-  if (loadingMore) return;
-  loadingMore = true;
-  loadingMoreOldHeight = scrollContainer.value?.scrollHeight || 0;
-  clearLoadingMoreTimer();
-  // 防止异常情况下 loadingMore 卡死，确保随时可再次上拉。
-  loadingMoreResetTimer = setTimeout(() => {
-    loadingMore = false;
-    loadingMoreResetTimer = null;
-  }, 900);
-  emit("loadMoreMessageBlocks");
-}
-
-function evaluateFollowState(el: HTMLElement) {
-  // Hysteresis: avoid jitter around the boundary during streaming updates.
-  const enterFollowThreshold = 24;
-  const leaveFollowThreshold = 72;
+function isNearBottom(el: HTMLElement): boolean {
+  const threshold = 24;
   const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
-  if (autoFollowOutput.value) {
-    if (distance > leaveFollowThreshold) {
-      autoFollowOutput.value = false;
-    }
-    return;
-  }
-  if (distance <= enterFollowThreshold) {
-    autoFollowOutput.value = true;
-  }
+  return distance <= threshold;
 }
 
 function onScroll() {
   const el = scrollContainer.value;
   if (!el) return;
-  const scrollingUp = el.scrollTop < lastScrollTop;
-  if (scrollingUp) {
-    autoFollowOutput.value = false;
+  const nearBottom = isNearBottom(el);
+  if (nearBottom && !lastBottomState.value) {
+    emit("reachedBottom");
   }
-  lastScrollTop = el.scrollTop;
-  if (followScrollRaf) cancelAnimationFrame(followScrollRaf);
-  followScrollRaf = requestAnimationFrame(() => {
-    evaluateFollowState(el);
-    followScrollRaf = 0;
-  });
-  // 只在用户手势触发的上滚中请求，避免布局变化/程序滚动引发自动加载更多。
-  if (scrollingUp && el.scrollTop <= 20 && hasManualScrollIntent()) {
-    requestLoadMore();
+  lastBottomState.value = nearBottom;
+}
+
+function latestOwnMessageElement(): HTMLElement | null {
+  const el = scrollContainer.value;
+  if (!el) return null;
+  return el.querySelector<HTMLElement>("[data-latest-own-message='true'][data-message-id]");
+}
+
+function latestMessageElement(): HTMLElement | null {
+  const el = scrollContainer.value;
+  if (!el) return null;
+  return el.querySelector<HTMLElement>("[data-latest-message='true'][data-message-id]");
+}
+
+function latestAssistantContentElement(): HTMLElement | null {
+  const el = scrollContainer.value;
+  if (!el) return null;
+  return el.querySelector<HTMLElement>("[data-latest-assistant-content='true']");
+}
+
+function outerHeightWithMargins(el: HTMLElement | null): number {
+  if (!el) return 0;
+  const styles = window.getComputedStyle(el);
+  return el.getBoundingClientRect().height
+    + parseFloat(styles.marginTop || "0")
+    + parseFloat(styles.marginBottom || "0");
+}
+
+function latestOwnMessageOuterHeight(): number {
+  return outerHeightWithMargins(latestOwnMessageElement());
+}
+
+function latestAssistantContentHeight(): number {
+  return outerHeightWithMargins(latestAssistantContentElement());
+}
+
+function updateLatestMessageMinHeight() {
+  const scrollEl = scrollContainer.value;
+  const latestMessageEl = latestMessageElement();
+  const latestOwnEl = latestOwnMessageElement();
+  if (!scrollEl || !latestMessageEl || !latestOwnEl || latestMessageEl === latestOwnEl) {
+    latestMessageMinHeight.value = 0;
+    return;
+  }
+  if (latestMessageEl.getAttribute("data-message-role") !== "assistant") {
+    latestMessageMinHeight.value = 0;
+    return;
+  }
+  const scrollStyles = window.getComputedStyle(scrollEl);
+  const scrollViewportHeight =
+    scrollEl.clientHeight
+    - parseFloat(scrollStyles.paddingTop || "0")
+    - parseFloat(scrollStyles.paddingBottom || "0");
+  const toolbarHeight = toolbarContainer.value?.offsetHeight ?? 0;
+  const availableHeight = Math.max(0, scrollViewportHeight - latestOwnMessageOuterHeight() - toolbarHeight);
+  const contentHeight = latestAssistantContentHeight();
+  const nextMinHeight = Math.max(availableHeight, contentHeight);
+  if (Math.abs(latestMessageMinHeight.value - nextMinHeight) > 0.5) {
+    latestMessageMinHeight.value = nextMinHeight;
+  }
+  if (pendingAlignOnLatestContainerReady) {
+    pendingAlignOnLatestContainerReady = false;
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        alignLatestOwnMessageToTop();
+      });
+    });
   }
 }
 
-function onWheel(event: WheelEvent) {
-  const el = scrollContainer.value;
-  if (!el) return;
-  if (event.deltaY < 0) {
-    markManualScrollIntent();
-    autoFollowOutput.value = false;
+function alignLatestOwnMessageToTop(): boolean {
+  const latestOwnMessage = latestOwnMessageElement();
+  if (!latestOwnMessage) return false;
+  latestOwnMessage.scrollIntoView({
+    block: "start",
+    behavior: "smooth",
+  });
+  return true;
+}
+
+function syncLatestMessageLayoutObserver() {
+  if (latestMessageLayoutObserver) {
+    latestMessageLayoutObserver.disconnect();
+    latestMessageLayoutObserver = null;
   }
-  const pushingUpAtTop = event.deltaY < 0 && el.scrollTop <= 20;
-  if (pushingUpAtTop) {
-    requestLoadMore();
-  }
+  if (typeof ResizeObserver === "undefined") return;
+  latestMessageLayoutObserver = new ResizeObserver(() => {
+    updateLatestMessageMinHeight();
+  });
+  const scrollEl = scrollContainer.value;
+  const latestOwnEl = latestOwnMessageElement();
+  const contentEl = latestAssistantContentElement();
+  const toolbarEl = toolbarContainer.value;
+  if (scrollEl) latestMessageLayoutObserver.observe(scrollEl);
+  if (latestOwnEl) latestMessageLayoutObserver.observe(latestOwnEl);
+  if (contentEl) latestMessageLayoutObserver.observe(contentEl);
+  if (toolbarEl) latestMessageLayoutObserver.observe(toolbarEl);
 }
 
 async function handleAssistantLinkClick(event: MouseEvent) {
@@ -1312,22 +982,36 @@ async function handleAssistantLinkClick(event: MouseEvent) {
 onMounted(() => {
   loadChatInputHistory();
   nextTick(() => {
-    scrollToBottom();
-    autoFollowOutput.value = true;
     resizeChatInput();
+    updateJumpToBottomOffset();
+    if (composerContainer.value && typeof ResizeObserver !== "undefined") {
+      composerResizeObserver = new ResizeObserver(() => {
+        updateJumpToBottomOffset();
+      });
+      composerResizeObserver.observe(composerContainer.value);
+    }
+    updateLatestMessageMinHeight();
+    syncLatestMessageLayoutObserver();
+    const el = scrollContainer.value;
+    if (el) {
+      lastBottomState.value = isNearBottom(el);
+    }
   });
 });
 
 onBeforeUnmount(() => {
-  if (followScrollRaf) {
-    cancelAnimationFrame(followScrollRaf);
-    followScrollRaf = 0;
-  }
   if (resizeInputRaf) {
     cancelAnimationFrame(resizeInputRaf);
     resizeInputRaf = 0;
   }
-  clearLoadingMoreTimer();
+  if (composerResizeObserver) {
+    composerResizeObserver.disconnect();
+    composerResizeObserver = null;
+  }
+  if (latestMessageLayoutObserver) {
+    latestMessageLayoutObserver.disconnect();
+    latestMessageLayoutObserver = null;
+  }
   stopAudioPlayback();
 });
 
@@ -1345,8 +1029,6 @@ watch(
 watch(
   () => props.chatting,
   (isChatting, wasChatting) => {
-    if (!autoFollowOutput.value) return;
-    nextTick(() => scrollToBottom());
     if (wasChatting && !isChatting && !props.frozen) {
       nextTick(() => chatInputRef.value?.focus({ preventScroll: true }));
     }
@@ -1354,92 +1036,59 @@ watch(
 );
 
 watch(
-  () => props.messageBlocks.length,
-  (newLen, oldLen) => {
-    if (loadingMore && newLen > oldLen) {
-      nextTick(() => {
-        const el = scrollContainer.value;
-        if (!el) {
-          clearLoadingMoreTimer();
-          loadingMore = false;
-          return;
-        }
-        const newHeight = el.scrollHeight;
-        el.scrollTop = Math.max(0, newHeight - loadingMoreOldHeight);
-        clearLoadingMoreTimer();
-        loadingMore = false;
-      });
-      return;
-    }
-    if (newLen > oldLen && autoFollowOutput.value) {
-      nextTick(() => scrollToBottom());
-    }
-  },
-);
-
-watch(
-  () => props.hasMoreMessageBlocks,
-  (hasMore) => {
-    if (hasMore) return;
-    clearLoadingMoreTimer();
-    loadingMore = false;
-  },
-);
-
-watch(
-  () => [
-    props.latestAssistantText,
-    props.latestReasoningStandardText,
-    props.latestReasoningInlineText,
-    props.toolStatusText,
-  ],
+  () => props.activeConversationId,
   () => {
-    if (autoFollowOutput.value) {
-      nextTick(() => scrollToBottom());
-    }
+    pendingAlignOnLatestContainerReady = false;
+    nextTick(() => {
+      updateLatestMessageMinHeight();
+      syncLatestMessageLayoutObserver();
+      updateJumpToBottomOffset();
+      const el = scrollContainer.value;
+      if (el) {
+        lastBottomState.value = isNearBottom(el);
+      }
+    });
   },
 );
 
 watch(
-  () => props.messageBlocks.map((item) => String(item.id || "")),
-  (ids, oldIds) => {
-    if (!messageListInitialized) {
-      ids.forEach((id) => seenMessageIds.add(id));
-      messageListInitialized = true;
-      return;
-    }
-    const prev = Array.isArray(oldIds) ? oldIds : [];
-    const prevLastId = String(prev[prev.length - 1] || "");
-    const nextLastId = String(ids[ids.length - 1] || "");
-    const isDraftFinalizeReplace =
-      ids.length === prev.length
-      && !!prevLastId
-      && !!nextLastId
-      && prevLastId !== nextLastId
-      && prevLastId.startsWith(DRAFT_ASSISTANT_ID_PREFIX);
-    if (isDraftFinalizeReplace) {
-      ids.forEach((id) => seenMessageIds.add(id));
-      return;
-    }
-    const newIds = ids.filter((id) => id && !seenMessageIds.has(id));
-    ids.forEach((id) => seenMessageIds.add(id));
-    if (newIds.length === 0) return;
-    const latestId = String(ids[ids.length - 1] || "");
-    const appendedIds = newIds.filter((id) => id === latestId);
-    if (appendedIds.length === 0) return;
-    const next = new Set(animatedMessageIds.value);
-    appendedIds.forEach((id) => next.add(id));
-    animatedMessageIds.value = next;
-    setTimeout(() => {
-      const current = new Set(animatedMessageIds.value);
-      let changed = false;
-      appendedIds.forEach((id) => {
-        if (current.delete(id)) changed = true;
-      });
-      if (changed) animatedMessageIds.value = current;
-    }, 1000);
+  () => props.messageBlocks.length,
+  (nextLength, prevLength) => {
+    nextTick(() => {
+      updateLatestMessageMinHeight();
+      syncLatestMessageLayoutObserver();
+      updateJumpToBottomOffset();
+      const el = scrollContainer.value;
+      if (el) {
+        lastBottomState.value = isNearBottom(el);
+      }
+      if (typeof prevLength === "number" && nextLength < prevLength) {
+        requestAnimationFrame(() => {
+          scrollToBottom("smooth");
+        });
+      }
+    });
   },
 );
+
+watch(
+  () => props.latestOwnMessageAlignRequest,
+  (nextValue, prevValue) => {
+    if (!nextValue || nextValue === prevValue) return;
+    pendingAlignOnLatestContainerReady = true;
+    nextTick(() => {
+      updateLatestMessageMinHeight();
+      syncLatestMessageLayoutObserver();
+      updateJumpToBottomOffset();
+      const el = scrollContainer.value;
+      if (el) lastBottomState.value = isNearBottom(el);
+      requestAnimationFrame(() => {
+        scrollToBottom("smooth");
+      });
+    });
+  },
+);
+
 </script>
 
 <style scoped>
@@ -1454,6 +1103,11 @@ watch(
 
 .conversation-tray-scroll-hidden::-webkit-scrollbar {
   display: none;
+}
+
+.ecall-chat-scroll-container {
+  overscroll-behavior-y: contain;
+  overflow-anchor: none;
 }
 
 .ecall-chat-avatar-col {
@@ -1495,10 +1149,6 @@ watch(
   opacity: 1;
 }
 
-.ecall-message-enter-up {
-  animation: ecall-message-enter-up 0.3s ease-out both;
-}
-
 .ecall-shimmer-text {
   position: relative;
   display: inline-block;
@@ -1521,14 +1171,16 @@ watch(
   );
   background-size: 280px 100%;
   background-position: 280px 0;
+  will-change: background-position;
+  transform: translateZ(0);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: ecall-reasoning-shimmer 2.5s linear infinite;
 }
 
-.assistant-markdown :deep(.ecall-markdown-content.ecall-stream-content) * {
-  animation: inherit;
+.assistant-markdown :deep(.ecall-markdown-content.ecall-stream-content) > * {
+  animation: ecall-stream-fade-in 0.5s ease-out forwards;
 }
 
 @keyframes ecall-stream-fade-in {
@@ -1544,17 +1196,6 @@ watch(
   from {
     opacity: 0;
     transform: translateY(2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes ecall-message-enter-up {
-  from {
-    opacity: 0;
-    transform: translateY(60px);
   }
   to {
     opacity: 1;

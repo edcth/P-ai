@@ -14,7 +14,6 @@ type UseAppLifecycleOptions = {
   refreshAllViewData: () => Promise<void>;
   viewMode: Ref<"chat" | "archives" | "config">;
   syncWindowControlsState: () => Promise<void>;
-  clearStreamBuffer: () => void;
   stopRecording: (discard: boolean) => Promise<void>;
   cleanupSpeechRecording: () => void;
   cleanupChatMedia: () => Promise<void>;
@@ -46,7 +45,6 @@ export function useAppLifecycle(options: UseAppLifecycleOptions) {
 
   onBeforeUnmount(() => {
     options.appBootstrapUnmount();
-    options.clearStreamBuffer();
     void options.stopRecording(true);
     options.cleanupSpeechRecording();
     options.recordHotkeyUnmount();
