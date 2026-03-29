@@ -322,6 +322,77 @@
     }
 
     #[test]
+    fn build_prompt_should_not_extract_latest_user_when_tail_is_assistant() {
+        let now = now_iso();
+        let agent = default_agent();
+        let mut user_message = test_text_message("user", "现在时间是多少？", &now);
+        user_message.speaker_agent_id = None;
+        let mut assistant_message = test_text_message("assistant", "2026-03-30 00:26（+08:00）", &now);
+        assistant_message.speaker_agent_id = Some(agent.id.clone());
+        let messages = vec![user_message, assistant_message];
+        let conv = test_active_conversation_with_messages(messages, Some(now));
+
+        let prepared = build_prompt(
+            &conv,
+            &agent,
+            &[agent.clone(), default_user_persona()],
+            &[],
+            "用户",
+            "我是...",
+            DEFAULT_RESPONSE_STYLE_ID,
+            "zh-CN",
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert!(prepared.latest_user_text.trim().is_empty());
+        assert_eq!(prepared.history_messages.len(), 2);
+        assert_eq!(prepared.history_messages[0].role, "user");
+        assert_eq!(prepared.history_messages[1].role, "assistant");
+    }
+
+    #[test]
+    fn prepared_prompt_to_messages_json_should_omit_empty_latest_user_turn() {
+        let prepared = PreparedPrompt {
+            preamble: "sys".to_string(),
+            history_messages: vec![
+                PreparedHistoryMessage {
+                    role: "user".to_string(),
+                    text: "现在时间是多少？".to_string(),
+                    user_time_text: None,
+                    images: Vec::new(),
+                    audios: Vec::new(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    reasoning_content: None,
+                },
+                PreparedHistoryMessage {
+                    role: "assistant".to_string(),
+                    text: "2026-03-30 00:26（+08:00）".to_string(),
+                    user_time_text: None,
+                    images: Vec::new(),
+                    audios: Vec::new(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    reasoning_content: None,
+                },
+            ],
+            latest_user_text: String::new(),
+            latest_user_meta_text: String::new(),
+            latest_user_extra_text: String::new(),
+            latest_images: Vec::new(),
+            latest_audios: Vec::new(),
+        };
+
+        let messages = prepared_prompt_to_messages_json(&prepared);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1].get("role").and_then(Value::as_str), Some("user"));
+        assert_eq!(messages[2].get("role").and_then(Value::as_str), Some("assistant"));
+    }
+
+    #[test]
     fn build_prompt_should_not_duplicate_compaction_message_into_latest_user_text() {
         let now = now_iso();
         let agent = default_agent();

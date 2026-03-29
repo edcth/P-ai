@@ -17,6 +17,11 @@
   - `task` 工具 schema、前端类型与消息语义统一显式使用 `runAtLocal`、`endAtLocal`、`nextRunAtLocal`、`startedAtLocal`、`finishedAtLocal`
   - `task-guide` 与时间统一计划文档同步更新，统一 local/utc 命名、章节编号与 RFC3339 表述
 
+- 修复（prompt-preview-latest-user-ordering）：修正请求体预览里的 latest user 顺序问题
+  - 共享提示词组装改为仅当尾消息本身是 `user` 时才抽取 `latest_user`，避免历史里已回复的用户消息被挪到数组末尾
+  - 请求体预览沿用统一消息组装回路，`latest_user` 为空时不再额外补一条空 user 消息
+  - 补充回归测试，覆盖“尾消息是 assistant 时不抽 latest user”和“空 latest user 不出现在预览 JSON”两条场景
+
 ## 更新（v0.8.6）：统一桌面脚本工具与 MCP 定义对齐
 
 - 新增（desktop-script-operate-mcp）：将桌面操作统一收敛为 MCP 版 `operate` 脚本工具

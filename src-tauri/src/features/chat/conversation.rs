@@ -1423,26 +1423,24 @@ fn build_prompt_with_mode(
         })
         .collect::<Vec<_>>();
     let last_compaction_index = compression_message_indexes.last().copied();
-    let latest_user_index = enriched_conversation
-        .messages
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(idx, message)| {
-            if let Some(boundary) = last_compaction_index {
-                if idx < boundary {
-                    return None;
-                }
+    let mut latest_user_index = None;
+    for (idx, message) in enriched_conversation.messages.iter().enumerate().rev() {
+        if let Some(boundary) = last_compaction_index {
+            if idx < boundary {
+                break;
             }
-            let role = prompt_role_for_message(message, &agent.id)?;
-            if role != "user" {
-                return None;
-            }
-            if is_context_compaction_message(message, role.as_str()) {
-                return None;
-            }
-            Some(idx)
-        });
+        }
+        let Some(role) = prompt_role_for_message(message, &agent.id) else {
+            continue;
+        };
+        if is_context_compaction_message(message, role.as_str()) {
+            continue;
+        }
+        if role == "user" {
+            latest_user_index = Some(idx);
+        }
+        break;
+    }
     let mut history_messages = Vec::<PreparedHistoryMessage>::new();
     for (idx, message) in enriched_conversation.messages.iter().enumerate() {
         let Some(role) = prompt_role_for_message(message, &agent.id) else {

@@ -226,6 +226,20 @@ fn normalize_prepared_prompt_messages(messages: &mut [Value]) {
     }
 }
 
+fn prepared_prompt_latest_user_text_blocks_for_json(prepared: &PreparedPrompt) -> Vec<String> {
+    let mut blocks = Vec::<String>::new();
+    for text in [
+        prepared.latest_user_text.trim(),
+        prepared.latest_user_meta_text.trim(),
+        prepared.latest_user_extra_text.trim(),
+    ] {
+        if !text.is_empty() {
+            blocks.push(text.to_string());
+        }
+    }
+    blocks
+}
+
 fn prepared_prompt_to_messages_json(prepared: &PreparedPrompt) -> Vec<Value> {
     let mut messages = Vec::<Value>::new();
     if !prepared.preamble.trim().is_empty() {
@@ -328,7 +342,7 @@ fn prepared_prompt_to_messages_json(prepared: &PreparedPrompt) -> Vec<Value> {
     }
 
     let mut latest_user_content = Vec::<Value>::new();
-    for text_block in prepared_prompt_latest_user_text_blocks(prepared) {
+    for text_block in prepared_prompt_latest_user_text_blocks_for_json(prepared) {
         latest_user_content.push(serde_json::json!({
             "type": "text",
             "text": text_block
@@ -360,10 +374,12 @@ fn prepared_prompt_to_messages_json(prepared: &PreparedPrompt) -> Vec<Value> {
             }
         }));
     }
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": latest_user_content
-    }));
+    if !latest_user_content.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": latest_user_content
+        }));
+    }
     normalize_prepared_prompt_messages(&mut messages);
     messages
 }
