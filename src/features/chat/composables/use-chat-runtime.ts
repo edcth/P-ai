@@ -26,6 +26,7 @@ type UseChatRuntimeOptions = {
   chatting: Ref<boolean>;
   forcingArchive: Ref<boolean>;
   allMessages: ShallowRef<ChatMessage[]>;
+  refreshUnarchivedConversations?: () => Promise<void>;
   perfNow: () => number;
   perfLog: (label: string, startedAt: number) => void;
   perfDebug: boolean;
@@ -83,7 +84,10 @@ export function useChatRuntime(options: UseChatRuntimeOptions) {
         });
         options.currentConversationId.value = activeConversationId;
       }
-      if (result.warning) {
+      if (result.reasonCode === "background_started") {
+        options.setStatus(options.t("status.forceArchiveRunning"));
+        options.setChatError("");
+      } else if (result.warning) {
         const detail = `${result.warning}${result.elapsedMs ? ` (${result.elapsedMs}ms)` : ""}`;
         const text = options.t("status.forceArchivePartial", { reason: detail });
         options.setStatus(text);
@@ -94,6 +98,9 @@ export function useChatRuntime(options: UseChatRuntimeOptions) {
       } else {
         options.setStatus("");
         options.setChatError("");
+      }
+      if (options.refreshUnarchivedConversations) {
+        await options.refreshUnarchivedConversations();
       }
       await loadAllMessages();
     } catch (e) {

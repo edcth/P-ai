@@ -29,7 +29,7 @@
 // ==================== 数据结构定义 ====================
 
 /// 主会话状态机
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MainSessionState {
     /// 空闲，可以出队
@@ -445,6 +445,17 @@ pub(crate) fn get_main_session_state(state: &AppState) -> Result<MainSessionStat
         return Ok(MainSessionState::AssistantStreaming);
     }
     Ok(MainSessionState::Idle)
+}
+
+pub(crate) fn get_conversation_runtime_state(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<MainSessionState, String> {
+    let slots = lock_conversation_runtime_slots(state)?;
+    Ok(slots
+        .get(conversation_id)
+        .map(|slot| slot.state.clone())
+        .unwrap_or(MainSessionState::Idle))
 }
 
 /// 设置会话状态并记录日志

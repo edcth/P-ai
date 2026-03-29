@@ -182,8 +182,12 @@
                 <button
                   :key="mainConversationItem.conversationId"
                   class="btn btn-xs flex items-center gap-1.5 min-w-8 shrink px-1.5!"
-                  :class="mainConversationItem.conversationId === activeConversationId ? 'bg-neutral text-neutral-content border-neutral' : 'bg-base-100 border-base-300'"
-                  :disabled="frozen"
+                  :class="[
+                    mainConversationItem.conversationId === activeConversationId ? 'bg-neutral text-neutral-content border-neutral' : 'bg-base-100 border-base-300',
+                    isConversationItemDisabled(mainConversationItem) ? 'btn-disabled opacity-60' : '',
+                  ]"
+                  :disabled="frozen || isConversationItemDisabled(mainConversationItem)"
+                  :title="conversationItemTitle(mainConversationItem)"
                   @click="onConversationItemClick(mainConversationItem)"
                 >
                   <span class="badge badge-xs badge-primary shrink-0">主</span>
@@ -210,14 +214,18 @@
                 </button>
                 <div class="mx-1 h-4 w-px shrink-0 bg-base-content/20"></div>
               </template>
-              <button
-                v-for="item in secondaryConversationItems"
-                :key="item.conversationId"
-                class="btn btn-xs flex items-center gap-1.5 min-w-8 shrink px-1.5!"
-                :class="item.conversationId === activeConversationId ? 'bg-neutral text-neutral-content border-neutral' : 'bg-base-100 border-base-300'"
-                :disabled="frozen"
-                @click="onConversationItemClick(item)"
-              >
+                <button
+                  v-for="item in secondaryConversationItems"
+                  :key="item.conversationId"
+                  class="btn btn-xs flex items-center gap-1.5 min-w-8 shrink px-1.5!"
+                  :class="[
+                    item.conversationId === activeConversationId ? 'bg-neutral text-neutral-content border-neutral' : 'bg-base-100 border-base-300',
+                    isConversationItemDisabled(item) ? 'btn-disabled opacity-60' : '',
+                  ]"
+                  :disabled="frozen || isConversationItemDisabled(item)"
+                  :title="conversationItemTitle(item)"
+                  @click="onConversationItemClick(item)"
+                >
                 <span
                   class="w-2 h-2 rounded-full shrink-0"
                   :class="{
@@ -381,6 +389,7 @@ const props = defineProps<{
     workspaceLabel?: string;
     isActive?: boolean;
     isMainConversation?: boolean;
+    runtimeState?: "idle" | "assistant_streaming" | "organizing_context";
     color?: string;
     canCreateNew?: boolean;
     backgroundStatus?: "completed" | "failed";
@@ -835,9 +844,21 @@ function onPreviewPointerUp(event: PointerEvent) {
   previewPointerId = null;
 }
 
-function onConversationItemClick(item: { conversationId: string; isActive?: boolean }) {
+function isConversationItemDisabled(item: { runtimeState?: string }) {
+  return item.runtimeState === "organizing_context";
+}
+
+function conversationItemTitle(item: { workspaceLabel?: string; runtimeState?: string }) {
+  if (item.runtimeState === "organizing_context") {
+    return `${item.workspaceLabel || "默认工作空间"}（后台归档中）`;
+  }
+  return item.workspaceLabel || "默认工作空间";
+}
+
+function onConversationItemClick(item: { conversationId: string; isActive?: boolean; runtimeState?: string }) {
   const conversationId = String(item.conversationId || "").trim();
   if (!conversationId) return;
+  if (isConversationItemDisabled(item)) return;
   const isCurrent = conversationId === String(props.activeConversationId || "").trim()
     || (!props.activeConversationId && !!item.isActive);
   if (isCurrent) return;

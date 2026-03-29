@@ -178,6 +178,83 @@ fn resolve_archive_target_conversation(
     Ok((selected_api, resolved_api, source, effective_agent_id))
 }
 
+fn prepare_background_archive_active_conversation(
+    state: &AppState,
+    selected_api: &ApiConfig,
+    source: &Conversation,
+) -> Result<String, String> {
+    let guard = state
+        .state_lock
+        .lock()
+        .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+    let mut data = state_read_app_data_cached(state)?;
+    let _ = ensure_default_agent(&mut data);
+    let _ = normalize_single_active_main_conversation(&mut data);
+
+    let _source_idx = data
+        .conversations
+        .iter()
+        .position(|conversation| {
+            conversation.id == source.id
+                && conversation.summary.trim().is_empty()
+                && conversation_visible_in_foreground_lists(conversation)
+        })
+        .ok_or_else(|| "当前没有可归档的活动对话。".to_string())?;
+
+    let target_idx = data
+        .conversations
+        .iter()
+        .enumerate()
+        .filter(|(_, conversation)| {
+            conversation.id != source.id
+                && conversation.summary.trim().is_empty()
+                && conversation_visible_in_foreground_lists(conversation)
+        })
+        .max_by(|(idx_a, a), (idx_b, b)| {
+            let a_updated = a.updated_at.trim();
+            let b_updated = b.updated_at.trim();
+            let a_created = a.created_at.trim();
+            let b_created = b.created_at.trim();
+            a_updated
+                .cmp(b_updated)
+                .then_with(|| a_created.cmp(b_created))
+                .then_with(|| idx_a.cmp(idx_b))
+        })
+        .map(|(idx, _)| idx);
+
+    let active_conversation_id = if let Some(idx) = target_idx {
+        data.conversations
+            .get(idx)
+            .map(|item| item.id.clone())
+            .ok_or_else(|| "切换归档后的前台会话失败：活动会话索引无效。".to_string())?
+    } else {
+        let conversation = build_conversation_record(
+            &selected_api.id,
+            "",
+            "",
+            CONVERSATION_KIND_CHAT,
+            None,
+            None,
+        );
+        let conversation_id = conversation.id.clone();
+        data.conversations.push(conversation);
+        if data
+            .main_conversation_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            data.main_conversation_id = Some(conversation_id.clone());
+        }
+        conversation_id
+    };
+
+    state_write_app_data_cached(state, &data)?;
+    drop(guard);
+    Ok(active_conversation_id)
+}
+
 fn archive_pipeline_message_count_for_delete(source: &Conversation) -> usize {
     source
         .messages
@@ -988,19 +1065,68 @@ async fn force_archive_current(
 ) -> Result<ForceArchiveResult, String> {
     let (selected_api, resolved_api, source, effective_agent_id) =
         resolve_archive_target_conversation(state.inner(), &input)?;
+    if get_conversation_runtime_state(state.inner(), &source.id)? == MainSessionState::OrganizingContext {
+        return Err("强制归档正在进行中，请稍候。".to_string());
+    }
+    let active_conversation_id =
+        prepare_background_archive_active_conversation(state.inner(), &selected_api, &source)?;
 
-    let result = run_archive_pipeline(
-        &state,
-        &selected_api,
-        &resolved_api,
-        &source,
-        &effective_agent_id,
-        "manual_force_archive",
-        "ARCHIVE-FORCE",
-    )
-    .await;
-    trigger_chat_queue_processing(state.inner());
-    result
+    let state_cloned = state.inner().clone();
+    let selected_api_cloned = selected_api.clone();
+    let resolved_api_cloned = resolved_api.clone();
+    let source_cloned = source.clone();
+    let effective_agent_id_cloned = effective_agent_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let panic_safe_task = std::panic::AssertUnwindSafe(async {
+            let result = run_archive_pipeline(
+                &state_cloned,
+                &selected_api_cloned,
+                &resolved_api_cloned,
+                &source_cloned,
+                &effective_agent_id_cloned,
+                "manual_force_archive",
+                "ARCHIVE-FORCE",
+            )
+            .await;
+            if let Err(err) = result {
+                eprintln!(
+                    "[ARCHIVE-FORCE] 失败，任务=background_force_archive，conversation_id={}，error={}",
+                    source_cloned.id, err
+                );
+            }
+            trigger_chat_queue_processing(&state_cloned);
+        });
+        if futures_util::FutureExt::catch_unwind(panic_safe_task).await.is_err() {
+            eprintln!(
+                "[ARCHIVE-FORCE] 失败，任务=background_force_archive，conversation_id={}，error=panic",
+                source_cloned.id
+            );
+            if let Err(err) = set_conversation_runtime_state(
+                &state_cloned,
+                &source_cloned.id,
+                MainSessionState::Idle,
+            ) {
+                eprintln!(
+                    "[ARCHIVE-FORCE] 警告，任务=background_force_archive_reset_state，conversation_id={}，error={}",
+                    source_cloned.id, err
+                );
+            }
+            trigger_chat_queue_processing(&state_cloned);
+        }
+    });
+
+    Ok(ForceArchiveResult {
+        archived: false,
+        archive_id: None,
+        active_conversation_id: Some(active_conversation_id),
+        summary: String::new(),
+        merged_memories: 0,
+        warning: None,
+        reason_code: Some("background_started".to_string()),
+        elapsed_ms: None,
+        memory_feedback: None,
+        merge_groups: Some(0),
+    })
 }
 
 #[tauri::command]
@@ -1013,7 +1139,11 @@ fn preview_force_archive_current(
     let message_count = archive_pipeline_message_count_for_delete(&source);
     let has_assistant_reply = archive_pipeline_has_assistant_reply(&source);
     let is_empty = source.messages.is_empty();
-    let archive_disabled_reason = if is_empty {
+    let archive_disabled_reason = if get_conversation_runtime_state(state.inner(), &source.id)?
+        == MainSessionState::OrganizingContext
+    {
+        Some("当前会话正在后台归档或整理上下文，请稍候。".to_string())
+    } else if is_empty {
         Some("当前会话为空，不能归档。".to_string())
     } else if !has_assistant_reply {
         Some("当前会话还没有助理回复，不能归档。".to_string())

@@ -766,6 +766,7 @@
     "deleteUnarchivedConfirm": "Delete this unarchived conversation? This action cannot be undone.",
     "currentUnarchived": "Current (Unarchived)",
     "currentUnarchivedHint": "Latest tail of linear messages",
+    "organizingContextDisabled": "Background archive in progress; switching is temporarily disabled.",
     "delegateConversations": "Delegate Threads",
     "archivedMessages": "Archived Messages",
     "summary": "Archive Summary",

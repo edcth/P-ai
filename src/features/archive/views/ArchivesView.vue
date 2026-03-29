@@ -60,9 +60,13 @@
           <div
             v-for="c in unarchivedConversations"
             :key="c.conversationId"
-            class="p-2 rounded cursor-pointer hover:bg-base-200"
-            :class="{ 'bg-primary/10': c.conversationId === selectedUnarchivedConversationId }"
-            @click="$emit('selectUnarchivedConversation', c.conversationId)"
+            class="p-2 rounded"
+            :class="[
+              c.conversationId === selectedUnarchivedConversationId ? 'bg-primary/10' : '',
+              c.runtimeState === 'organizing_context' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-base-200',
+            ]"
+            :title="c.runtimeState === 'organizing_context' ? t('archives.organizingContextDisabled') : ''"
+            @click="c.runtimeState === 'organizing_context' ? undefined : $emit('selectUnarchivedConversation', c.conversationId)"
           >
             <div class="font-medium truncate text-sm">{{ c.title }}</div>
             <div class="text-sm opacity-70 truncate">{{ formatDate(c.lastMessageAt || c.updatedAt) }}</div>

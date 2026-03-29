@@ -1109,6 +1109,7 @@ const chatUnarchivedConversationItems = computed(() => {
         conversationWorkspaceLabelMap.value[String(item.conversationId || "").trim()] || "默认工作空间",
       isActive: !!item.isActive,
       isMainConversation: !!item.isMainConversation,
+      runtimeState: item.runtimeState,
       updatedAt: item.lastMessageAt || item.updatedAt || "",
       backgroundStatus:
         backgroundConversationBadgeMap.value[String(item.conversationId || "").trim()] || undefined,
@@ -1557,6 +1558,7 @@ const chatRuntime = useChatRuntime({
   chatting,
   forcingArchive,
   allMessages,
+  refreshUnarchivedConversations: refreshChatUnarchivedConversations,
   perfNow,
   perfLog,
   perfDebug: PERF_DEBUG,

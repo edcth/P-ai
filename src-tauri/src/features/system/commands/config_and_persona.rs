@@ -1243,6 +1243,8 @@ struct UnarchivedConversationSummary {
     is_active: bool,
     #[serde(default)]
     is_main_conversation: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_state: Option<MainSessionState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1313,6 +1315,33 @@ fn delegate_conversation_summary_from_runtime_thread(
     }
 }
 
+fn unarchived_conversation_runtime_state(
+    state: &AppState,
+    conversation_id: &str,
+) -> Option<MainSessionState> {
+    match get_conversation_runtime_state(state, conversation_id) {
+        Ok(MainSessionState::Idle) => None,
+        Ok(value) => Some(value),
+        Err(err) => {
+            eprintln!(
+                "[会话] 读取运行态失败，任务=unarchived_runtime_state，conversation_id={}，error={}",
+                conversation_id, err
+            );
+            None
+        }
+    }
+}
+
+fn ensure_unarchived_conversation_not_organizing(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<(), String> {
+    if get_conversation_runtime_state(state, conversation_id)? == MainSessionState::OrganizingContext {
+        return Err("当前会话正在后台归档或整理上下文，暂时不能切换。".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn list_unarchived_conversations(state: State<'_, AppState>) -> Result<Vec<UnarchivedConversationSummary>, String> {
     let guard = state
@@ -1348,6 +1377,7 @@ fn list_unarchived_conversations(state: State<'_, AppState>) -> Result<Vec<Unarc
                 agent_id: c.agent_id.clone(),
                 is_active: c.status.trim() == "active",
                 is_main_conversation: c.id.trim() == main_conversation_id,
+                runtime_state: unarchived_conversation_runtime_state(state.inner(), &c.id),
             }
         })
         .collect::<Vec<_>>();
@@ -1458,6 +1488,12 @@ fn set_active_unarchived_conversation(
         target_idx = Some(ensure_active_conversation_index(&mut data, &api_config.id, ""));
     }
     let target_idx = target_idx.ok_or_else(|| "Unarchived conversation not found.".to_string())?;
+    let conversation_id = data
+        .conversations
+        .get(target_idx)
+        .map(|item| item.id.clone())
+        .ok_or_else(|| "Unarchived conversation index out of bounds.".to_string())?;
+    ensure_unarchived_conversation_not_organizing(state.inner(), &conversation_id)?;
 
     let mut changed = defaults_changed || normalized_changed;
     for (_idx, conversation) in data.conversations.iter_mut().enumerate() {
@@ -1470,11 +1506,6 @@ fn set_active_unarchived_conversation(
             changed = true;
         }
     }
-    let conversation_id = data
-        .conversations
-        .get(target_idx)
-        .map(|item| item.id.clone())
-        .ok_or_else(|| "Unarchived conversation index out of bounds.".to_string())?;
     if changed {
         state_write_app_data_cached(&state, &data)?;
     }
@@ -1510,6 +1541,7 @@ fn switch_active_conversation_snapshot(
                 && conversation_visible_in_foreground_lists(item)
         })
         .ok_or_else(|| "Unarchived conversation not found.".to_string())?;
+    ensure_unarchived_conversation_not_organizing(state.inner(), target_conversation_id)?;
 
     let mut changed = defaults_changed || normalized_changed;
     for (_idx, conversation) in data.conversations.iter_mut().enumerate() {
@@ -1563,6 +1595,7 @@ fn switch_active_conversation_snapshot(
                 agent_id: c.agent_id.clone(),
                 is_active: c.status.trim() == "active",
                 is_main_conversation: c.id.trim() == main_conversation_id,
+                runtime_state: unarchived_conversation_runtime_state(state.inner(), &c.id),
             }
         })
         .collect::<Vec<_>>();

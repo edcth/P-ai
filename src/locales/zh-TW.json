@@ -766,6 +766,7 @@
     "deleteUnarchivedConfirm": "确认删除该未归档会话？此操作不可撤销。",
     "currentUnarchived": "未歸檔（當前）",
     "currentUnarchivedHint": "線性消息最新尾部",
+    "organizingContextDisabled": "背景歸檔進行中，暫時不能切換。",
     "delegateConversations": "委託會話",
     "archivedMessages": "歸檔消息",
     "summary": "归档摘要",

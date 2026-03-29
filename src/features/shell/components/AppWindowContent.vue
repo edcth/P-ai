@@ -343,6 +343,7 @@ const props = defineProps<{
     workspaceLabel?: string;
     isActive?: boolean;
     isMainConversation?: boolean;
+    runtimeState?: "idle" | "assistant_streaming" | "organizing_context";
     color?: string;
     canCreateNew?: boolean;
     backgroundStatus?: "completed" | "failed";

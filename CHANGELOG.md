@@ -2,6 +2,13 @@
 
 ## 未发布
 
+- 修复（background-force-archive-and-organizing-session-guard）：强制归档改为后台执行并禁用归档中的会话切换
+  - 强制归档入口改为先切出当前会话，再后台启动归档任务，不再长时间占用前台聊天窗口
+  - 未归档会话列表新增运行态字段，当前处于 `organizing_context` 的会话会在聊天视图与归档视图中显示为禁用，避免归档过程中误切回
+  - 前后端切换会话命令补齐运行态校验，正在后台归档或整理上下文的会话会拒绝切换
+  - 后台归档任务补齐 panic 兜底，异常路径会主动恢复会话运行态到 `Idle`，避免会话卡死在整理上下文状态
+  - 归档视图的“后台归档中，暂时不能切换”提示改为走 i18n 词条，补齐中英繁 locale
+
 - 修复（read-file-pdf-image-pagination-and-multi-image-forwarding）：统一 `read_file` 的 PDF 图片分页与多图转发链路
   - `read_file` 读取 PDF 时，改为跟随现有 `pdf_read_mode` 与当前聊天模型 `enable_image` 自动决定走文本提取还是图片提取，不再固定只走文本模式
   - PDF 图片结果新增 `offset/limit` 分页支持，图片模式下按页偏移返回多页图片，并补齐 `nextOffset`、`returnedPageCount`、`returnedImageCount`、`totalPages` 等元信息
