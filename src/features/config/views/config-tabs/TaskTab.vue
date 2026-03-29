@@ -22,9 +22,6 @@
           </form>
         </div>
         <div class="flex items-center justify-end gap-2">
-          <button class="btn btn-sm btn-ghost" :disabled="listLoading" @click="openCreateEditor">
-            {{ t("config.task.newTask") }}
-          </button>
           <button class="btn btn-sm btn-ghost" :disabled="listLoading" @click="loadTasks()">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
           </button>
@@ -400,14 +397,6 @@ async function loadEditorTask(taskId = selectedTaskId.value) {
   } finally {
     editorLoading.value = false;
   }
-}
-
-async function openCreateEditor() {
-  if (!(await confirmDiscardIfNeeded())) return;
-  editorError.value = "";
-  runLogs.value = [];
-  resetEditorForm("create", null);
-  await ensureEditorDialogOpen();
 }
 
 async function openEditEditor(taskId: string) {
