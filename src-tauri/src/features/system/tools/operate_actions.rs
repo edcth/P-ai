@@ -3,6 +3,7 @@ use enigo::{Keyboard, Mouse};
 fn ensure_dpi_awareness_once() {
     static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let _ = ONCE.get_or_init(|| {
+        #[cfg(target_os = "windows")]
         let _ = enigo::set_dpi_awareness();
     });
 }
