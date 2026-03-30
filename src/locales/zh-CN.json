@@ -660,6 +660,7 @@
     "jumpToBottom": "回到底部",
     "image": "图片{index}",
     "recording": "录音中 {seconds}s",
+    "transcribing": "语音转写中...",
     "holdRecord": "按住{hotkey}或按钮录音",
     "placeholder": "输入问题，Ctrl+V 粘贴图片，按住按钮语音",
     "forceArchiveTip": "点击强制归档当前对话",

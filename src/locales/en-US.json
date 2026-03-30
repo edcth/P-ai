@@ -685,6 +685,7 @@
     "jumpToBottom": "Jump to bottom",
     "image": "Image {index}",
     "recording": "Recording {seconds}s",
+    "transcribing": "Transcribing voice...",
     "holdRecord": "Hold {hotkey} or button to record",
     "placeholder": "Type your question, Ctrl+V to paste image, hold to speak",
     "forceArchiveTip": "Force archive current chat",

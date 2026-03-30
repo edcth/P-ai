@@ -693,6 +693,7 @@
     "previewAudio": "[語音]",
     "previewAttachment": "[附件]",
     "messageCount": "{count} 條",
+    "transcribing": "語音轉寫中...",
     "taskTrigger": {
       "badge": "任務提醒",
       "kindImmediate": "立即任務",

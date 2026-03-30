@@ -2,13 +2,10 @@
   <div
     :data-message-id="String(block.id || '')"
     :data-message-role="isOwnMessage(block) ? 'user' : block.role"
-    :data-latest-own-message="latestOwnMessage ? 'true' : undefined"
-    :data-latest-message="latestMessage ? 'true' : undefined"
-    :style="containerStyle"
+    :data-active-turn-user="activeTurnUser ? 'true' : undefined"
     :class="[
-      'chat group/user-turn mt-3',
+      'chat group/user-turn mt-3 ecall-message-enter',
       isOwnMessage(block) ? 'chat-end' : 'chat-start',
-      latestMessage && !isOwnMessage(block) ? 'ecall-latest-message-container' : '',
     ]"
   >
     <div class="chat-image self-start ecall-chat-avatar-col">
@@ -31,8 +28,10 @@
     <template v-if="!isOwnMessage(block)">
       <div class="ecall-message-stack min-w-0 flex flex-col self-stretch">
         <div
-          class="ecall-message-content min-w-0"
-          :data-latest-assistant-content="latestMessage ? 'true' : undefined"
+          :class="[
+            'ecall-message-content min-w-0',
+            blockNeedsWideBubble(block) ? 'ecall-message-content-wide' : '',
+          ]"
         >
           <div class="chat-header mb-1 flex items-center gap-2">
             <span class="text-xs text-base-content">{{ displayName }}</span>
@@ -46,7 +45,7 @@
           <div :class="[
             'chat-bubble',
             'self-start bg-base-100 text-base-content border border-base-300/70 assistant-markdown ecall-assistant-bubble max-w-full',
-            blockHasMermaid(block) ? 'ecall-assistant-bubble-wide' : '',
+            blockNeedsWideBubble(block) ? 'ecall-assistant-bubble-wide' : '',
           ]">
             <div v-if="block.taskTrigger" class="space-y-2">
         <div class="flex items-center gap-2">
@@ -234,11 +233,6 @@
             </button>
           </div>
         </div>
-        <div
-          v-if="latestMessage"
-          class="ecall-message-spacer min-h-0 flex-1"
-          aria-hidden="true"
-        ></div>
       </div>
     </template>
     <template v-else>
@@ -276,120 +270,14 @@
           ? ''
           : [
             'self-start bg-base-100 text-base-content border border-base-300/70 assistant-markdown ecall-assistant-bubble max-w-full',
-            blockHasMermaid(block) ? 'ecall-assistant-bubble-wide' : '',
+            blockNeedsWideBubble(block) ? 'ecall-assistant-bubble-wide' : '',
           ],
       ]">
-        <div v-if="block.taskTrigger" class="space-y-2">
-          <div class="flex items-center gap-2">
-            <span class="badge badge-sm badge-outline">{{ t("chat.taskTrigger.badge") }}</span>
-          </div>
-          <div v-if="block.taskTrigger.goal" class="space-y-0.5">
-            <div class="text-[11px] opacity-55">{{ t("config.task.fields.goal") }}</div>
-            <div class="text-sm leading-6 whitespace-pre-wrap">{{ block.taskTrigger.goal }}</div>
-          </div>
-          <div v-if="block.taskTrigger.why" class="space-y-0.5">
-            <div class="text-[11px] opacity-55">{{ t("config.task.fields.why") }}</div>
-            <div class="text-sm leading-6 whitespace-pre-wrap">{{ block.taskTrigger.why }}</div>
-          </div>
-          <div v-if="block.taskTrigger.todo" class="space-y-0.5">
-            <div class="text-[11px] opacity-55">{{ t("config.task.fields.todo") }}</div>
-            <div class="text-sm leading-6 whitespace-pre-wrap">{{ block.taskTrigger.todo }}</div>
-          </div>
-          <div v-if="block.taskTrigger.runAtLocal || block.taskTrigger.endAtLocal || block.taskTrigger.everyMinutes" class="grid gap-1 text-sm leading-6">
-            <div v-if="block.taskTrigger.runAtLocal">
-              <span class="text-[11px] opacity-55">{{ t("config.task.fields.runAt") }}</span>
-              <span class="ml-2">{{ formattedBlockTime(block.taskTrigger.runAtLocal) }}</span>
-            </div>
-            <div v-if="block.taskTrigger.endAtLocal">
-              <span class="text-[11px] opacity-55">{{ t("config.task.fields.endAt") }}</span>
-              <span class="ml-2">{{ formattedBlockTime(block.taskTrigger.endAtLocal) }}</span>
-            </div>
-            <div v-if="block.taskTrigger.everyMinutes">
-              <span class="text-[11px] opacity-55">{{ t("config.task.fields.everyMinutes") }}</span>
-              <span class="ml-2">{{ block.taskTrigger.everyMinutes }}</span>
-            </div>
-          </div>
-        </div>
-        <details
-          v-if="!isOwnMessage(block) && block.reasoningStandard"
-          class="collapse mb-2 border-l-2 border-base-content/20 pl-3 rounded-none min-w-55"
-        >
-          <summary class="collapse-title py-0 px-0 min-h-0 text-xs flex items-center gap-1 text-base-content/80">
-            <span
-              :class="['block min-w-0 flex-1 truncate ecall-shimmer-text', reasoningSummaryClass(block)]"
-              :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
-            >
-              {{ reasoningSummaryLabel(block) }}
-            </span>
-          </summary>
-          <div class="collapse-content px-0 py-2 whitespace-pre-wrap text-[11px] leading-relaxed text-base-content/70">
-            {{ block.reasoningStandard }}
-          </div>
-        </details>
-        <details
-          v-if="!isOwnMessage(block) && resolvedInlineReasoning(block)"
-          class="collapse mb-2 border-l-2 border-base-content/20 pl-3 rounded-none min-w-55"
-        >
-          <summary class="collapse-title py-0 px-0 min-h-0 text-[10px] flex items-center gap-1 text-base-content/60 cursor-pointer">
-            <span
-              :class="['block min-w-0 flex-1 truncate ecall-shimmer-text', reasoningSummaryClass(block)]"
-              :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
-            >
-              {{ reasoningSummaryLabel(block) }}
-            </span>
-          </summary>
-          <div class="collapse-content max-w-full px-0 py-2 whitespace-pre-wrap wrap-break-word text-[10px] leading-relaxed text-base-content/60" style="overflow-wrap: anywhere;">
-            {{ resolvedInlineReasoning(block) }}
-          </div>
-        </details>
-        <div v-if="toolCallsForBlock(block).length > 0" class="mb-2 flex flex-col gap-1 text-[11px] opacity-90">
-          <details class="collapse bg-base-200 border-base-300 border">
-            <summary class="collapse-title py-2 px-3 min-h-0 text-[11px] font-semibold flex items-center gap-1.5">
-              <span class="inline-block h-2 w-2 rounded-full bg-success"></span>
-              <span
-                :class="['ecall-shimmer-text font-medium', toolSummaryClass(block)]"
-                :data-shimmer-text="showStreamingUi(block) ? '工具执行中' : ''"
-              >{{ toolStatusLabel(block) }}</span>
-              <span v-if="toolNamesLabel(block)" class="truncate">{{ ` · ${toolNamesLabel(block)}` }}</span>
-            </summary>
-            <div class="collapse-content px-3 pb-2 pt-0 text-[10px] text-base-content/70">
-              <div
-                v-for="(toolCall, idx) in toolCallsForBlock(block)"
-                :key="`${block.id}-tool-${idx}`"
-                class="mb-2 last:mb-0"
-              >
-                <div class="mb-1 font-semibold opacity-80">#{{ idx + 1 }} {{ toolCall.name }}</div>
-                <pre class="whitespace-pre-wrap break-all">{{ toolCall.argsText }}</pre>
-              </div>
-            </div>
-          </details>
-        </div>
-        <div v-if="block.text" :class="block.taskTrigger ? 'mt-3' : ''">
         <div
-          v-if="isOwnMessage(block)"
+          v-if="block.text"
           class="whitespace-pre-wrap break-all"
           style="overflow-wrap: anywhere;"
         >{{ block.text }}</div>
-          <MarkdownRender
-            v-else
-            :class="[
-              'ecall-markdown-content max-w-none',
-              block.isStreaming ? 'ecall-stream-content' : 'ecall-stream-content-done',
-            ]"
-            custom-id="chat-markstream"
-            :nodes="markdownNodesForBlock(block)"
-            :is-dark="markdownIsDark"
-            :final="!block.isStreaming"
-            :max-live-nodes="0"
-            :batch-rendering="true"
-            :render-batch-size="16"
-            :render-batch-delay="32"
-            :code-block-props="markdownCodeBlockProps"
-            :mermaid-props="markdownMermaidProps"
-            :typewriter="false"
-            @click="emit('assistantLinkClick', $event)"
-          />
-        </div>
         <div v-if="block.images.length > 0" :class="block.taskTrigger || block.text ? 'mt-2 grid gap-1' : 'grid gap-1'">
           <template v-for="(img, idx) in block.images" :key="`${block.id}-img-${idx}`">
             <img
@@ -432,38 +320,6 @@
             <span class="text-[11px]">{{ file.fileName }}</span>
           </div>
         </div>
-      </div>
-      <div
-        v-if="!isOwnMessage(block)"
-        :class="[
-          'chat-footer mt-1 flex h-6 items-center gap-1.5 transition-opacity',
-          canRegenerate
-            ? 'opacity-100 pointer-events-auto'
-            : !chatting && !frozen
-              ? 'opacity-0 pointer-events-none group-hover/user-turn:opacity-100 group-hover/user-turn:pointer-events-auto'
-              : 'opacity-0 pointer-events-none',
-        ]"
-      >
-        <button
-          type="button"
-          class="inline-flex h-6 w-6 items-center justify-center rounded text-base-content/55 hover:text-base-content"
-          :title="t('chat.copy')"
-          :class="!block.isStreaming && !chatting && !frozen ? '' : 'opacity-0 pointer-events-none'"
-          :disabled="block.isStreaming || chatting || frozen"
-          @click="emit('copyMessage', block)"
-        >
-          <Copy class="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          class="inline-flex h-6 w-6 items-center justify-center rounded text-base-content/55 hover:text-base-content"
-          :title="t('chat.regenerate')"
-          :class="!block.isStreaming && !chatting && !frozen && canRegenerate ? '' : 'opacity-0 pointer-events-none'"
-          :disabled="block.isStreaming || chatting || frozen || !canRegenerate"
-          @click="emit('regenerateTurn', { turnId: block.id })"
-        >
-          <RotateCcw class="h-3.5 w-3.5" />
-        </button>
       </div>
     </template>
   </div>
@@ -516,9 +372,7 @@ const props = defineProps<{
   streamToolCalls: Array<{ name: string; argsText: string }>;
   markdownIsDark: boolean;
   playingAudioId: string;
-  latestOwnMessage: boolean;
-  latestMessage: boolean;
-  latestMessageMinHeight: number;
+  activeTurnUser: boolean;
   canRegenerate: boolean;
 }>();
 
@@ -536,10 +390,6 @@ const { t } = useI18n();
 const displayName = computed(() => messageName(props.block));
 const avatarUrl = computed(() => messageAvatarUrl(props.block));
 const formattedCreatedAt = computed(() => formattedBlockTime(props.block.createdAt));
-const containerStyle = computed<Record<string, string> | undefined>(() => {
-  if (!props.latestMessage || isOwnMessage(props.block) || props.latestMessageMinHeight <= 0) return undefined;
-  return { "--latest-message-target-height": `${props.latestMessageMinHeight}px` };
-});
 
 function avatarInitial(name: string): string {
   const text = (name || "").trim();
@@ -677,6 +527,15 @@ function blockHasMermaid(block: ChatMessageBlock): boolean {
   return /```(?:\s*)mermaid\b/i.test(text);
 }
 
+function blockHasCodeFence(block: ChatMessageBlock): boolean {
+  const text = splitThinkText(block.text).visible;
+  return /```[\w-]*\s*[\r\n]/i.test(text);
+}
+
+function blockNeedsWideBubble(block: ChatMessageBlock): boolean {
+  return blockHasMermaid(block) || blockHasCodeFence(block);
+}
+
 function resolvedInlineReasoning(block: ChatMessageBlock): string {
   return splitThinkText(block.text).inline || block.reasoningInline || "";
 }
@@ -707,10 +566,6 @@ function isPdfMime(mime: string): boolean {
 </script>
 
 <style scoped>
-.ecall-latest-message-container {
-  min-height: var(--latest-message-target-height, 0px);
-}
-
 .ecall-chat-avatar-col {
   width: 1.75rem;
   min-width: 1.75rem;
@@ -725,12 +580,21 @@ function isPdfMime(mime: string): boolean {
   flex-shrink: 0;
 }
 
+.ecall-message-content-wide {
+  width: 100%;
+  max-width: 100%;
+}
+
 .ecall-time-loading {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   transform: scale(0.82);
   transform-origin: right center;
+}
+
+.ecall-message-enter {
+  animation: ecall-message-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .ecall-stream-content {
@@ -782,6 +646,17 @@ function isPdfMime(mime: string): boolean {
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes ecall-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
