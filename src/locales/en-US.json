@@ -679,6 +679,7 @@
     "previewAudio": "[Audio]",
     "previewAttachment": "[Attachment]",
     "messageCount": "{count} messages",
+    "viewSummary": "View Summary",
     "copy": "Copy",
     "regenerate": "Regenerate",
     "recall": "Recall",

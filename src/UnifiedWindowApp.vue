@@ -163,6 +163,7 @@
       :save-personas="savePersonas"
       :import-persona-memories="importPersonaMemories"
       :open-current-history="openCurrentHistory"
+      :open-conversation-summary="openConversationSummary"
       :open-force-archive-action-dialog="openForceArchiveActionDialog"
       :open-prompt-preview="openPromptPreview"
       :open-system-prompt-preview="openSystemPromptPreview"
@@ -3069,7 +3070,7 @@ async function saveChatSettingsNow() {
   await saveConversationApiSettings();
   await saveChatPreferences();
 }
-const { openCurrentHistory, openPromptPreview, openSystemPromptPreview } = useChatDialogActions({
+const { openCurrentHistory, openConversationSummary, openPromptPreview, openSystemPromptPreview } = useChatDialogActions({
   activeChatApiConfigId: currentForegroundApiConfigId,
   assistantDepartmentAgentId: currentForegroundAgentId,
   openPromptPreviewDialog,

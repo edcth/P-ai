@@ -49,7 +49,15 @@
             class="mt-4 flex items-center gap-3 text-[11px] text-base-content/45"
           >
             <div class="h-px flex-1 bg-base-300/80"></div>
-            <span class="shrink-0 tracking-[0.2em]">上文已压缩</span>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs shrink-0 gap-1.5 px-2 text-base-content/60 hover:text-base-content"
+              :title="t('chat.viewSummary')"
+              @click="openConversationSummary"
+            >
+              <History class="h-3.5 w-3.5" />
+              <span>{{ t("chat.viewSummary") }}</span>
+            </button>
             <div class="h-px flex-1 bg-base-300/80"></div>
           </div>
           <template v-else-if="item.kind === 'message'">
@@ -216,7 +224,7 @@
 import { computed, onBeforeUnmount, ref, toRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { isDarkAppTheme } from "../../shell/composables/use-app-theme";
-import { ChevronsDown, ListTodo } from "lucide-vue-next";
+import { ChevronsDown, History, ListTodo } from "lucide-vue-next";
 import "markstream-vue/index.css";
 import { invokeTauri } from "../../../services/tauri-api";
 import type { ChatConversationOverviewItem, ChatMessageBlock, ChatPersonaPresenceChip } from "../../../types/app";
@@ -373,6 +381,7 @@ const emit = defineEmits<{
   (e: "unlockWorkspace"): void;
   (e: "switchConversation", conversationId: string): void;
   (e: "createConversation", input?: { title?: string; departmentId?: string }): void;
+  (e: "openConversationSummary", conversationId: string): void;
   (e: "reachedBottom"): void;
 }>();
 const { t } = useI18n();
@@ -474,6 +483,12 @@ function handleConversationListSelect(conversationId: string) {
   const isCurrent = normalizedConversationId === String(props.activeConversationId || "").trim();
   if (isCurrent) return;
   emit("switchConversation", normalizedConversationId);
+}
+
+function openConversationSummary() {
+  const conversationId = String(props.activeConversationId || "").trim();
+  if (!conversationId) return;
+  emit("openConversationSummary", conversationId);
 }
 
 function isAbsoluteLocalPath(href: string): boolean {

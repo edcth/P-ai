@@ -694,6 +694,7 @@
     "previewAudio": "[語音]",
     "previewAttachment": "[附件]",
     "messageCount": "{count} 條",
+    "viewSummary": "查看摘要",
     "transcribing": "語音轉寫中...",
     "taskTrigger": {
       "badge": "任務提醒",

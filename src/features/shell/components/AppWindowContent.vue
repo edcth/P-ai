@@ -149,6 +149,7 @@
         @unlock-workspace="onUnlockChatWorkspace"
         @switch-conversation="onSwitchConversation"
         @create-conversation="onCreateConversation"
+        @open-conversation-summary="openConversationSummary"
       />
       <div
         v-if="forcingArchive"
@@ -401,6 +402,7 @@ const props = defineProps<{
   savePersonas: () => Promise<boolean> | boolean;
   importPersonaMemories: (payload: { agentId: string; file: File }) => void;
   openCurrentHistory: () => void;
+  openConversationSummary: (conversationId: string) => void;
   openForceArchiveActionDialog: () => void;
   openPromptPreview: () => void;
   openSystemPromptPreview: () => void;

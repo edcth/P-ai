@@ -165,7 +165,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watchEffect } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { invokeTauri } from "../../../services/tauri-api";
 import { summarizeToolActivityForDisplay } from "../../../utils/chat-message-semantics";
@@ -210,6 +210,8 @@ const emit = defineEmits<{
 }>();
 
 const viewMode = ref<"current" | "delegate" | "archive" | "remoteIm">("archive");
+const ARCHIVE_FOCUS_REQUEST_STORAGE_KEY = "easy_call.archives.focus_request.v1";
+const ARCHIVE_FOCUS_REQUEST_TTL_MS = 30_000;
 const archiveImageDataUrlCache = new Map<string, string>();
 const archiveImagePendingCache = new Map<string, Promise<string>>();
 const archiveResolvedImageMap = ref<Record<string, string>>({});
@@ -228,6 +230,91 @@ const archiveImportInputRef = ref<HTMLInputElement | null>(null);
 function switchViewMode(mode: "current" | "delegate" | "archive" | "remoteIm") {
   viewMode.value = mode;
 }
+
+function readPendingArchiveFocusRequest(): { conversationId: string; viewMode: "current" } | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(ARCHIVE_FOCUS_REQUEST_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const conversationId = String(parsed.conversationId || "").trim();
+    const createdAt = Number(parsed.createdAt || 0);
+    const requestViewMode = String(parsed.viewMode || "").trim();
+    if (!conversationId) return null;
+    if (!Number.isFinite(createdAt) || Date.now() - createdAt > ARCHIVE_FOCUS_REQUEST_TTL_MS) {
+      window.localStorage.removeItem(ARCHIVE_FOCUS_REQUEST_STORAGE_KEY);
+      return null;
+    }
+    if (requestViewMode !== "current") {
+      window.localStorage.removeItem(ARCHIVE_FOCUS_REQUEST_STORAGE_KEY);
+      return null;
+    }
+    return {
+      conversationId,
+      viewMode: "current",
+    };
+  } catch {
+    window.localStorage.removeItem(ARCHIVE_FOCUS_REQUEST_STORAGE_KEY);
+    return null;
+  }
+}
+
+function applyPendingArchiveFocusRequest() {
+  const pending = readPendingArchiveFocusRequest();
+  if (!pending) return false;
+  if (!props.unarchivedConversations.some((item) => String(item.conversationId || "").trim() === pending.conversationId)) {
+    return false;
+  }
+  viewMode.value = pending.viewMode;
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(ARCHIVE_FOCUS_REQUEST_STORAGE_KEY);
+  }
+  emit("selectUnarchivedConversation", pending.conversationId);
+  return true;
+}
+
+watch(
+  () => props.unarchivedConversations,
+  () => {
+    applyPendingArchiveFocusRequest();
+  },
+  { immediate: true },
+);
+
+function handleStorageChange(event: StorageEvent) {
+  if (event.key !== ARCHIVE_FOCUS_REQUEST_STORAGE_KEY) return;
+  applyPendingArchiveFocusRequest();
+}
+
+function handleWindowFocus() {
+  applyPendingArchiveFocusRequest();
+}
+
+function handleVisibilityChange() {
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+  applyPendingArchiveFocusRequest();
+}
+
+onMounted(() => {
+  applyPendingArchiveFocusRequest();
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", handleStorageChange);
+    window.addEventListener("focus", handleWindowFocus);
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (typeof window !== "undefined") {
+    window.removeEventListener("storage", handleStorageChange);
+    window.removeEventListener("focus", handleWindowFocus);
+  }
+  if (typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }
+});
 
 function triggerArchiveImport() {
   if (archiveImportInputRef.value) {

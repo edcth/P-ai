@@ -8,6 +8,8 @@ type UseChatDialogActionsOptions = {
   openSystemPromptPreviewDialog: (apiConfigId: string, agentId: string) => Promise<void>;
 };
 
+const ARCHIVE_FOCUS_REQUEST_STORAGE_KEY = "easy_call.archives.focus_request.v1";
+
 export function useChatDialogActions(options: UseChatDialogActionsOptions) {
   async function openCurrentHistory() {
     console.info("[CHAT] openCurrentHistory 开始: 打开归档窗口");
@@ -23,6 +25,34 @@ export function useChatDialogActions(options: UseChatDialogActionsOptions) {
     }
   }
 
+  async function openConversationSummary(conversationId: string) {
+    const normalizedConversationId = String(conversationId || "").trim();
+    if (!normalizedConversationId) {
+      await openCurrentHistory();
+      return;
+    }
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(ARCHIVE_FOCUS_REQUEST_STORAGE_KEY, JSON.stringify({
+          conversationId: normalizedConversationId,
+          viewMode: "current",
+          createdAt: Date.now(),
+        }));
+      }
+      await invokeTauri("set_active_unarchived_conversation", {
+        input: {
+          conversationId: normalizedConversationId,
+        },
+      });
+    } catch (error) {
+      console.warn("[CHAT] openConversationSummary 预设目标会话失败", {
+        conversationId: normalizedConversationId,
+        error,
+      });
+    }
+    await openCurrentHistory();
+  }
+
   async function openPromptPreview() {
     if (!options.activeChatApiConfigId.value || !options.assistantDepartmentAgentId.value) return;
     await options.openPromptPreviewDialog(options.activeChatApiConfigId.value, options.assistantDepartmentAgentId.value);
@@ -35,9 +65,9 @@ export function useChatDialogActions(options: UseChatDialogActionsOptions) {
 
   return {
     openCurrentHistory,
+    openConversationSummary,
     openPromptPreview,
     openSystemPromptPreview,
   };
 }
-
 
