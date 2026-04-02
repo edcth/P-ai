@@ -579,19 +579,16 @@ async function onSaveToolsConfig() {
     }))
     : [];
   const previousTerminalShellKind = String(props.config.terminalShellKind || "auto").trim() || "auto";
-  const previousToolMaxIterations = Number(props.config.toolMaxIterations || 10);
   try {
     const saved = await Promise.resolve(props.saveConfigAction());
     if (!saved) {
       props.config.shellWorkspaces = previousShellWorkspaces;
       props.config.terminalShellKind = previousTerminalShellKind;
-      props.config.toolMaxIterations = previousToolMaxIterations;
       props.setStatusAction(t("status.saveConfigFailed", { err: "tools settings save rejected" }));
     }
   } catch (error) {
     props.config.shellWorkspaces = previousShellWorkspaces;
     props.config.terminalShellKind = previousTerminalShellKind;
-    props.config.toolMaxIterations = previousToolMaxIterations;
     props.setStatusAction(t("status.saveConfigFailed", { err: String(error) }));
     throw error;
   } finally {

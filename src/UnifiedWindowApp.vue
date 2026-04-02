@@ -530,7 +530,6 @@ const config = reactive<AppConfig>({
   recordBackgroundWakeEnabled: true,
   minRecordSeconds: 1,
   maxRecordSeconds: 60,
-  toolMaxIterations: 10,
   selectedApiConfigId: "",
   assistantDepartmentApiConfigId: "",
   visionApiConfigId: undefined,
@@ -782,25 +781,19 @@ const MIN_RECORD_SECONDS = 1;
 const MAX_MIN_RECORD_SECONDS = 30;
 const DEFAULT_MAX_RECORD_SECONDS = 60;
 const MAX_RECORD_SECONDS = 600;
-const DEFAULT_TOOL_MAX_ITERATIONS = 10;
-const MAX_TOOL_MAX_ITERATIONS = 100;
 
 function normalizeRuntimeConfigNumbers(
   minValue: unknown,
   maxValue: unknown,
-  toolValue: unknown,
   fallback?: {
     minRecordSeconds?: number;
     maxRecordSeconds?: number;
-    toolMaxIterations?: number;
   },
-): { minRecordSeconds: number; maxRecordSeconds: number; toolMaxIterations: number } {
+): { minRecordSeconds: number; maxRecordSeconds: number } {
   const fallbackMin = Number(fallback?.minRecordSeconds);
   const fallbackMax = Number(fallback?.maxRecordSeconds);
-  const fallbackTool = Number(fallback?.toolMaxIterations);
   const nextMin = Number(minValue);
   const nextMax = Number(maxValue);
-  const nextTool = Number(toolValue);
   const resolvedMin = Number.isFinite(nextMin)
     ? nextMin
     : (Number.isFinite(fallbackMin) ? fallbackMin : MIN_RECORD_SECONDS);
@@ -815,14 +808,7 @@ function normalizeRuntimeConfigNumbers(
     minRecordSeconds,
     Math.min(MAX_RECORD_SECONDS, Math.round(resolvedMax)),
   );
-  const resolvedTool = Number.isFinite(nextTool)
-    ? nextTool
-    : (Number.isFinite(fallbackTool) ? fallbackTool : DEFAULT_TOOL_MAX_ITERATIONS);
-  const toolMaxIterations = Math.max(
-    1,
-    Math.min(MAX_TOOL_MAX_ITERATIONS, Math.round(resolvedTool)),
-  );
-  return { minRecordSeconds, maxRecordSeconds, toolMaxIterations };
+  return { minRecordSeconds, maxRecordSeconds };
 }
 
 const assistantDepartmentApiConfigId = computed(
@@ -2158,20 +2144,17 @@ const appBootstrap = useAppBootstrap({
     if ("recordBackgroundWakeEnabled" in payload) {
       config.recordBackgroundWakeEnabled = !!payload.recordBackgroundWakeEnabled;
     }
-    if ("minRecordSeconds" in payload || "maxRecordSeconds" in payload || "toolMaxIterations" in payload) {
+    if ("minRecordSeconds" in payload || "maxRecordSeconds" in payload) {
       const normalizedConfigNumbers = normalizeRuntimeConfigNumbers(
         "minRecordSeconds" in payload ? payload.minRecordSeconds : config.minRecordSeconds,
         "maxRecordSeconds" in payload ? payload.maxRecordSeconds : config.maxRecordSeconds,
-        "toolMaxIterations" in payload ? payload.toolMaxIterations : config.toolMaxIterations,
         {
           minRecordSeconds: config.minRecordSeconds,
           maxRecordSeconds: config.maxRecordSeconds,
-          toolMaxIterations: config.toolMaxIterations,
         },
       );
       config.minRecordSeconds = normalizedConfigNumbers.minRecordSeconds;
       config.maxRecordSeconds = normalizedConfigNumbers.maxRecordSeconds;
-      config.toolMaxIterations = normalizedConfigNumbers.toolMaxIterations;
     }
     if ("selectedApiConfigId" in payload) {
       config.selectedApiConfigId = String(payload.selectedApiConfigId ?? "").trim();

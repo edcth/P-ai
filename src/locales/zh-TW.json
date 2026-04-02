@@ -218,7 +218,6 @@
     "tools": {
       "basicConfig": "基本配置",
       "noChatLlmProvider": "未配置对话LLM供应商",
-      "maxIterations": "工具最大调用轮次",
       "terminalProjectRoots": "终端可用项目目录",
       "terminalProjectRootsPlaceholder": "每行一个目录，例如:\nD:\\work\\repo-a\nE:\\github\\repo-b",
       "terminalProjectRootsHint": "仅允许在这些目录（及其子目录）内切换终端根目录。",

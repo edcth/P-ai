@@ -88,7 +88,6 @@ export type AppConfig = {
   recordBackgroundWakeEnabled: boolean;
   minRecordSeconds: number;
   maxRecordSeconds: number;
-  toolMaxIterations: number;
   selectedApiConfigId: string;
   // Active chat LLM provider config id (kept as legacy key name for storage compatibility).
   assistantDepartmentApiConfigId: string;

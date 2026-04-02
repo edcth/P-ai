@@ -58,7 +58,7 @@
     <div class="mt-4"></div>
     <div v-if="toolApiConfig && !toolApiConfig.enableTools" class="text-sm opacity-70">{{ t("config.tools.disabledHint") }}</div>
     <div v-else class="border border-base-300 rounded-box bg-base-100 overflow-hidden">
-      <!-- 头部：人格选择 + 最大迭代 + 标题 -->
+      <!-- 头部：人格选择 + 标题 -->
       <div class="flex items-center gap-3 px-3 py-2 border-b border-base-300/70 flex-wrap">
         <div class="flex items-center gap-2 shrink-0">
           <div class="text-sm font-bold text-base-content whitespace-nowrap">{{ t("config.tools.personaLabel") }}</div>
@@ -69,10 +69,6 @@
           >
             <option v-for="persona in personas" :key="persona.id" :value="persona.id">{{ persona.name }}</option>
           </select>
-        </div>
-        <div class="flex items-center gap-2 shrink-0">
-          <div class="text-sm font-bold text-base-content whitespace-nowrap">{{ t("config.tools.maxIterations") }}</div>
-          <input v-model.number="config.toolMaxIterations" type="number" min="1" max="100" step="1" class="input input-bordered input-sm w-20" />
         </div>
         <div class="flex items-center gap-2 shrink-0 ml-auto">
           <button

@@ -36,6 +36,78 @@ fn resolve_reasoning_for_tool_history(turn_reasoning: &str, chat_history: &[RigM
     " ".to_string()
 }
 
+const INTERNAL_MAX_TOOL_LOOP_ROUNDS: usize = 100;
+const REPEATED_TOOL_CALL_BLOCK_THRESHOLD: usize = 10;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ToolRepeatGuard {
+    last_tool_name: String,
+    last_args_signature: String,
+    same_call_streak: usize,
+}
+
+fn canonical_json_signature(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string()),
+        Value::Array(items) => {
+            let parts = items
+                .iter()
+                .map(canonical_json_signature)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("[{}]", parts)
+        }
+        Value::Object(map) => {
+            let mut keys = map.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            let parts = keys
+                .iter()
+                .map(|key| {
+                    let key_text =
+                        serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
+                    let value_text = map
+                        .get(key)
+                        .map(canonical_json_signature)
+                        .unwrap_or_else(|| "null".to_string());
+                    format!("{key_text}:{value_text}")
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{parts}}}")
+        }
+    }
+}
+
+fn normalized_tool_args_signature(tool_args: &str) -> String {
+    let trimmed = tool_args.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => canonical_json_signature(&value),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+fn register_tool_repeat_attempt(
+    guard: &mut ToolRepeatGuard,
+    tool_name: &str,
+    tool_args: &str,
+) -> usize {
+    let next_signature = normalized_tool_args_signature(tool_args);
+    if guard.last_tool_name == tool_name && guard.last_args_signature == next_signature {
+        guard.same_call_streak = guard.same_call_streak.saturating_add(1);
+    } else {
+        guard.last_tool_name = tool_name.to_string();
+        guard.last_args_signature = next_signature;
+        guard.same_call_streak = 1;
+    }
+    guard.same_call_streak
+}
+
 #[derive(Debug, Clone)]
 struct ToolLoopAutoCompactionContext {
     conversation_id: String,
@@ -374,7 +446,7 @@ async fn run_unified_tool_loop<M>(
     resolved_api: &ResolvedApiConfig,
     auto_compaction_context: Option<&ToolLoopAutoCompactionContext>,
     on_delta: &tauri::ipc::Channel<AssistantDeltaEvent>,
-    max_tool_iterations: usize,
+    _max_tool_iterations: usize,
     include_reasoning_before_tool_calls: bool,
     tool_abort_state: Option<&AppState>,
     chat_session_key: &str,
@@ -390,9 +462,9 @@ where
     let (mut current_prompt, mut chat_history) =
         build_tool_loop_prompt(&prepared, protocol_family)?;
 
-    let max_rounds = std::cmp::max(1usize, max_tool_iterations);
     let mut auto_compaction_applied = false;
-    for round_index in 0..max_rounds {
+    let mut tool_repeat_guard = ToolRepeatGuard::default();
+    for round_index in 0..INTERNAL_MAX_TOOL_LOOP_ROUNDS {
         if round_index > 0 && !auto_compaction_applied {
             auto_compaction_applied = maybe_apply_auto_compaction_before_tool_continue(
                 tool_abort_state,
@@ -449,6 +521,8 @@ where
                         Value::String(raw) => raw.clone(),
                         other => other.to_string(),
                     };
+                    let repeat_streak =
+                        register_tool_repeat_attempt(&mut tool_repeat_guard, &tool_name, &tool_args);
                     send_tool_status_event(
                         on_delta,
                         &tool_name,
@@ -456,40 +530,59 @@ where
                         Some(tool_args.as_str()),
                         &format!("正在调用工具：{}", tool_name),
                     );
-                    let tool_result = match call_tool_with_user_abort(
-                        tool_abort_state,
-                        chat_session_key,
-                        agent.tool_server_handle.call_tool(&tool_name, &tool_args),
-                    )
-                    .await
-                    {
-                        Ok(output) => {
-                            send_tool_status_event(
-                                on_delta,
-                                &tool_name,
-                                "done",
-                                None,
-                                &format!("工具调用完成：{}", tool_name),
-                            );
-                            output
-                        }
-                        Err(err) => {
-                            if err == CHAT_ABORTED_BY_USER_ERROR {
-                                eprintln!(
-                                    "[聊天] 收到停止请求，立即退出工具循环 (session={})",
-                                    chat_session_key
+                    let tool_result = if repeat_streak > REPEATED_TOOL_CALL_BLOCK_THRESHOLD {
+                        let err_text = format!(
+                            "工具调用已被系统阻止：相同工具与相同参数已连续调用 {} 次，请调整参数或停止调用。",
+                            REPEATED_TOOL_CALL_BLOCK_THRESHOLD
+                        );
+                        runtime_log_info(format!(
+                            "[聊天] 工具循环触发重复调用熔断: session={}, tool_name={}, streak={}, args={}",
+                            chat_session_key, tool_name, repeat_streak, tool_args
+                        ));
+                        send_tool_status_event(
+                            on_delta,
+                            &tool_name,
+                            "failed",
+                            Some(tool_args.as_str()),
+                            &err_text,
+                        );
+                        tool_failure_result_json(&tool_name, &err_text)
+                    } else {
+                        match call_tool_with_user_abort(
+                            tool_abort_state,
+                            chat_session_key,
+                            agent.tool_server_handle.call_tool(&tool_name, &tool_args),
+                        )
+                        .await
+                        {
+                            Ok(output) => {
+                                send_tool_status_event(
+                                    on_delta,
+                                    &tool_name,
+                                    "done",
+                                    None,
+                                    &format!("工具调用完成：{}", tool_name),
                                 );
-                                return Err(err);
+                                output
                             }
-                            let err_text = err.to_string();
-                            send_tool_status_event(
-                                on_delta,
-                                &tool_name,
-                                "failed",
-                                None,
-                                &format!("工具调用失败：{} ({})", tool_name, err_text),
-                            );
-                            tool_failure_result_json(&tool_name, &err_text)
+                            Err(err) => {
+                                if err == CHAT_ABORTED_BY_USER_ERROR {
+                                    eprintln!(
+                                        "[聊天] 收到停止请求，立即退出工具循环 (session={})",
+                                        chat_session_key
+                                    );
+                                    return Err(err);
+                                }
+                                let err_text = err.to_string();
+                                send_tool_status_event(
+                                    on_delta,
+                                    &tool_name,
+                                    "failed",
+                                    None,
+                                    &format!("工具调用失败：{} ({})", tool_name, err_text),
+                                );
+                                tool_failure_result_json(&tool_name, &err_text)
+                            }
                         }
                     };
                     let tool_call_call_id = tool_call.call_id.clone();
@@ -698,7 +791,7 @@ where
         "tools",
         "failed",
         None,
-        "工具调用达到上限，停止继续调用并立刻汇报。",
+        "工具循环触发内部安全上限，停止继续调用并立刻汇报。",
     );
     Ok(ModelReply {
         assistant_text: full_assistant_text,
@@ -781,6 +874,50 @@ mod tool_loop_tests {
         .to_string();
 
         assert!(should_stop_after_remote_im_send("remote_im_send", &tool_result));
+    }
+
+    #[test]
+    fn normalized_tool_args_signature_should_ignore_json_key_order() {
+        let left = normalized_tool_args_signature(r#"{"b":2,"a":1}"#);
+        let right = normalized_tool_args_signature(r#"{"a":1,"b":2}"#);
+
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn tool_repeat_guard_should_block_after_ten_identical_calls() {
+        let mut guard = ToolRepeatGuard::default();
+        let mut streak = 0usize;
+        for _ in 0..11 {
+            streak = register_tool_repeat_attempt(&mut guard, "read_file", r#"{"path":"a.txt"}"#);
+        }
+
+        assert_eq!(streak, 11);
+        assert!(streak > REPEATED_TOOL_CALL_BLOCK_THRESHOLD);
+    }
+
+    #[test]
+    fn tool_repeat_guard_should_reset_when_args_change() {
+        let mut guard = ToolRepeatGuard::default();
+        for _ in 0..4 {
+            let _ = register_tool_repeat_attempt(&mut guard, "read_file", r#"{"path":"a.txt"}"#);
+        }
+
+        let streak = register_tool_repeat_attempt(&mut guard, "read_file", r#"{"path":"b.txt"}"#);
+
+        assert_eq!(streak, 1);
+    }
+
+    #[test]
+    fn tool_repeat_guard_should_reset_when_tool_changes() {
+        let mut guard = ToolRepeatGuard::default();
+        for _ in 0..4 {
+            let _ = register_tool_repeat_attempt(&mut guard, "read_file", r#"{"path":"a.txt"}"#);
+        }
+
+        let streak = register_tool_repeat_attempt(&mut guard, "exec", r#"{"command":"dir"}"#);
+
+        assert_eq!(streak, 1);
     }
 
     #[test]

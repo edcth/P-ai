@@ -103,8 +103,6 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
   const MAX_MIN_RECORD_SECONDS = 30;
   const DEFAULT_MAX_RECORD_SECONDS = 60;
   const MAX_RECORD_SECONDS = 600;
-  const DEFAULT_TOOL_MAX_ITERATIONS = 10;
-  const MAX_TOOL_MAX_ITERATIONS = 100;
 
   function extractHttpStatus(error: unknown): number | null {
     if (!error || typeof error !== "object") return null;
@@ -129,19 +127,15 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
   function normalizeConfigNumberFields(
     minValue: unknown,
     maxValue: unknown,
-    toolValue: unknown,
     fallback?: {
       minRecordSeconds?: number;
       maxRecordSeconds?: number;
-      toolMaxIterations?: number;
     },
-  ): { minRecordSeconds: number; maxRecordSeconds: number; toolMaxIterations: number } {
+  ): { minRecordSeconds: number; maxRecordSeconds: number } {
     const fallbackMin = Number(fallback?.minRecordSeconds);
     const fallbackMax = Number(fallback?.maxRecordSeconds);
-    const fallbackTool = Number(fallback?.toolMaxIterations);
     const minSeed = Number(minValue);
     const maxSeed = Number(maxValue);
-    const toolSeed = Number(toolValue);
     const resolvedMin = Number.isFinite(minSeed)
       ? minSeed
       : (Number.isFinite(fallbackMin) ? fallbackMin : MIN_RECORD_SECONDS);
@@ -156,14 +150,7 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
       minRecordSeconds,
       Math.min(MAX_RECORD_SECONDS, Math.round(resolvedMax)),
     );
-    const resolvedTool = Number.isFinite(toolSeed)
-      ? toolSeed
-      : (Number.isFinite(fallbackTool) ? fallbackTool : DEFAULT_TOOL_MAX_ITERATIONS);
-    const toolMaxIterations = Math.max(
-      1,
-      Math.min(MAX_TOOL_MAX_ITERATIONS, Math.round(resolvedTool)),
-    );
-    return { minRecordSeconds, maxRecordSeconds, toolMaxIterations };
+    return { minRecordSeconds, maxRecordSeconds };
   }
 
   function classifySaveConfigError(error: unknown): ConfigSaveErrorInfo {
@@ -212,11 +199,9 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
       const normalizedConfigNumbers = normalizeConfigNumberFields(
         cfg.minRecordSeconds,
         cfg.maxRecordSeconds,
-        cfg.toolMaxIterations,
       );
       options.config.minRecordSeconds = normalizedConfigNumbers.minRecordSeconds;
       options.config.maxRecordSeconds = normalizedConfigNumbers.maxRecordSeconds;
-      options.config.toolMaxIterations = normalizedConfigNumbers.toolMaxIterations;
       options.config.selectedApiConfigId = cfg.selectedApiConfigId;
       options.config.assistantDepartmentApiConfigId = cfg.assistantDepartmentApiConfigId;
       options.config.visionApiConfigId = cfg.visionApiConfigId ?? undefined;
@@ -300,16 +285,13 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
       const normalizedConfigNumbers = normalizeConfigNumberFields(
         saved.minRecordSeconds,
         saved.maxRecordSeconds,
-        saved.toolMaxIterations,
         {
           minRecordSeconds: options.config.minRecordSeconds,
           maxRecordSeconds: options.config.maxRecordSeconds,
-          toolMaxIterations: options.config.toolMaxIterations,
         },
       );
       options.config.minRecordSeconds = normalizedConfigNumbers.minRecordSeconds;
       options.config.maxRecordSeconds = normalizedConfigNumbers.maxRecordSeconds;
-      options.config.toolMaxIterations = normalizedConfigNumbers.toolMaxIterations;
       options.config.selectedApiConfigId = saved.selectedApiConfigId;
       options.config.assistantDepartmentApiConfigId = saved.assistantDepartmentApiConfigId;
       options.config.visionApiConfigId = saved.visionApiConfigId ?? undefined;
