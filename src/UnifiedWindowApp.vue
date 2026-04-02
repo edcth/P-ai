@@ -1439,6 +1439,14 @@ function isLocalOwnUserMessage(message?: ChatMessage | null): boolean {
   return !speakerAgentId || speakerAgentId === "user-persona";
 }
 
+function isOptimisticOwnUserDraft(message?: ChatMessage | null): boolean {
+  if (!message || message.role !== "user") return false;
+  const messageId = String(message.id || "").trim();
+  if (messageId.startsWith("__draft_user__:")) return true;
+  const meta = (message.providerMeta || {}) as Record<string, unknown>;
+  return meta._optimistic === true && isLocalOwnUserMessage(message);
+}
+
 function updatePersonaEditorIdWithNotice(value: string) {
   const nextId = String(value || "").trim();
   if (!nextId || nextId === personaEditorId.value) return;
@@ -2902,7 +2910,7 @@ const chatFlow = useChatFlow({
     // 激活助理的批次也只做去重合并，避免清空重建打断滚动与分页状态。
     const queueMessages = Array.isArray(pendingMessages) ? pendingMessages : [];
     if (queueMessages.length > 0) {
-      const existing = allMessages.value;
+      const existing = allMessages.value.filter((message) => !isOptimisticOwnUserDraft(message));
       const dedup = new Set(existing.map((m) => String(m.id || "").trim()).filter((id) => !!id));
       const beforeDedupCount = queueMessages.length;
       const uniqueIncoming = queueMessages.filter((m) => {

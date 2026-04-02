@@ -106,6 +106,7 @@ type UseChatFlowOptions = {
 // ---------------------------------------------------------------------------
 
 const DRAFT_ASSISTANT_ID_PREFIX = "__draft_assistant__:";
+const DRAFT_USER_ID_PREFIX = "__draft_user__:";
 const STREAM_SMOOTH_CATCHUP_MS = 600;
 
 // ---------------------------------------------------------------------------
@@ -161,6 +162,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
   let activeHistoryMessageCount = 0;
   const reasoningStartedAtMs = ref(0);
+  let pendingUserDraftId = "";
 
   // =========================================================================
   // 工具函数（纯逻辑，无副作用）
@@ -294,6 +296,42 @@ export function useChatFlow(options: UseChatFlowOptions) {
   // removeDraft: history_flushed 清屏时移除上一轮残留
   // =========================================================================
 
+  function insertUserDraft(
+    gen: number,
+    text: string,
+    images: Array<{ mime: string; bytesBase64: string; savedPath?: string }>,
+    attachments: Array<{ fileName: string; relativePath: string; mime: string }>,
+  ): string {
+    const draftId = `${DRAFT_USER_ID_PREFIX}${gen}`;
+    const parts: ChatMessage["parts"] = [];
+    const normalizedText = String(text || "");
+    if (normalizedText) {
+      parts.push({ type: "text", text: normalizedText });
+    }
+    for (const image of images) {
+      const mime = String(image.mime || "").trim();
+      const bytesBase64 = String(image.bytesBase64 || "").trim();
+      if (!mime || !bytesBase64) continue;
+      parts.push({ type: "image", mime, bytesBase64 });
+    }
+    const msg: ChatMessage = {
+      id: draftId,
+      role: "user",
+      createdAt: new Date().toISOString(),
+      speakerAgentId: "user-persona",
+      parts,
+      providerMeta: {
+        attachments: attachments.length > 0 ? attachments : undefined,
+        _optimistic: true,
+      },
+    };
+    const cur = options.allMessages.value;
+    const idx = cur.findIndex((m) => m.id === draftId);
+    options.allMessages.value = idx < 0 ? [...cur, msg] : cur.map((m, i) => (i === idx ? msg : m));
+    pendingUserDraftId = draftId;
+    return draftId;
+  }
+
   function insertDraft(gen: number): string {
     const draftId = `${DRAFT_ASSISTANT_ID_PREFIX}${gen}`;
     const agentId = String(options.getSession()?.agentId || "").trim();
@@ -422,6 +460,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
   function removeDraft(draftId: string) {
     if (!draftId) return;
+    if (draftId === pendingUserDraftId) {
+      pendingUserDraftId = "";
+    }
     options.allMessages.value = options.allMessages.value.filter((m) => m.id !== draftId);
   }
 
@@ -564,6 +605,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
     sendChatActiveGen = 0;
     pendingAssistantDeltaBuffer = "";
     stopStreamFlushLoop();
+    if (pendingUserDraftId) {
+      removeDraft(pendingUserDraftId);
+    }
     if (round.phase === "streaming") {
       removeDraft(round.draftId);
     }
@@ -588,6 +632,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
     ++generation;
     sendChatActiveGen = 0;
     flushPendingAssistantDelta(true);
+    if (pendingUserDraftId) {
+      removeDraft(pendingUserDraftId);
+    }
     if (round.phase === "streaming") {
       finalizeDraft(round.draftId);
     }
@@ -625,7 +672,13 @@ export function useChatFlow(options: UseChatFlowOptions) {
   }
 
   function formalizeMessages(messages: ChatMessage[]): ChatMessage[] {
-    return messages.filter((item) => !String(item?.id || "").trim().startsWith(DRAFT_ASSISTANT_ID_PREFIX));
+    return messages.filter((item) => {
+      const messageId = String(item?.id || "").trim();
+      return (
+        !messageId.startsWith(DRAFT_ASSISTANT_ID_PREFIX)
+        && !messageId.startsWith(DRAFT_USER_ID_PREFIX)
+      );
+    });
   }
 
   // =========================================================================
@@ -1119,6 +1172,11 @@ export function useChatFlow(options: UseChatFlowOptions) {
     options.chatErrorText.value = "";
 
     const sentImages = [...options.clipboardImages.value];
+    options.latestUserText.value = plainText;
+    options.latestUserImages.value = sentImages.map((image) => ({
+      mime: String(image.mime || ""),
+      bytesBase64: String(image.bytesBase64 || ""),
+    }));
     options.chatInput.value = "";
     options.clipboardImages.value = [];
     if (options.queuedAttachmentNotices) options.queuedAttachmentNotices.value = [];
@@ -1126,6 +1184,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const gen = ++generation;
     sendChatActiveGen = gen;
     pendingTerminalEvent = null;
+    insertUserDraft(gen, plainText, sentImages, attachments);
 
     if (!wasChatting) {
       resetDisplayState();
@@ -1170,6 +1229,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
       });
 
       if (round.phase === "idle" || round.gen !== gen) {
+        if (pendingUserDraftId === `${DRAFT_USER_ID_PREFIX}${gen}`) {
+          removeDraft(pendingUserDraftId);
+        }
         options.chatErrorText.value = options.formatRequestFailed(error);
         return;
       }
@@ -1187,6 +1249,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
       if (cur && cur.apiConfigId === sendSession.apiConfigId && cur.agentId === sendSession.agentId
           && round.phase === "streaming" && round.gen === gen) {
         removeDraft(round.draftId);
+        if (pendingUserDraftId === `${DRAFT_USER_ID_PREFIX}${gen}`) {
+          removeDraft(pendingUserDraftId);
+        }
         round = { phase: "idle" };
         options.chatting.value = false;
         reasoningStartedAtMs.value = 0;
@@ -1196,6 +1261,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
       // 仅在该轮次未收到 history_flushed 时，才执行 queued 兜底回收。
       // 否则可能与 handleHistoryFlushed 的 await 竞态，导致 draft 无法插入。
       if (round.phase === "queued" && round.gen === gen && historyFlushedReceivedGen !== gen) {
+        if (pendingUserDraftId === `${DRAFT_USER_ID_PREFIX}${gen}`) {
+          removeDraft(pendingUserDraftId);
+        }
         round = { phase: "idle" };
         options.chatting.value = false;
         reasoningStartedAtMs.value = 0;
@@ -1221,6 +1289,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
       pendingTerminalEvent = null;
       pendingAssistantDeltaBuffer = "";
       stopStreamFlushLoop();
+      if (pendingUserDraftId) {
+        removeDraft(pendingUserDraftId);
+      }
       round = { phase: "idle" };
       options.chatting.value = false;
       reasoningStartedAtMs.value = 0;
@@ -1285,6 +1356,9 @@ export function useChatFlow(options: UseChatFlowOptions) {
     sendChatActiveGen = 0;
     pendingAssistantDeltaBuffer = "";
     stopStreamFlushLoop();
+    if (pendingUserDraftId) {
+      removeDraft(pendingUserDraftId);
+    }
     if (round.phase === "streaming") {
       removeDraft(round.draftId);
     }
