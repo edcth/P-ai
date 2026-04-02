@@ -21,6 +21,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
   const jumpToBottomOffset = ref(96);
   const showSideConversationList = ref(false);
   const lastBottomState = ref(false);
+  const suppressNextAnimatedConversationScroll = ref(false);
 
   let composerResizeObserver: ResizeObserver | null = null;
   let activeTurnLayoutObserver: ResizeObserver | null = null;
@@ -189,6 +190,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
   watch(
     options.activeConversationId,
     () => {
+      suppressNextAnimatedConversationScroll.value = true;
       nextTick(() => {
         updateActiveTurnLayout();
         syncActiveTurnLayoutObserver();
@@ -218,9 +220,13 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
         syncActiveTurnLayoutObserver();
         updateJumpToBottomOffset();
         if (!options.lastMessageIsOwn.value) {
+          const behavior: ScrollBehavior = suppressNextAnimatedConversationScroll.value ? "auto" : "smooth";
           requestAnimationFrame(() => {
-            alignActiveTurnUserToTop("smooth");
+            alignActiveTurnUserToTop(behavior);
+            suppressNextAnimatedConversationScroll.value = false;
           });
+        } else {
+          suppressNextAnimatedConversationScroll.value = false;
         }
         const el = scrollContainer.value;
         if (el) {
@@ -250,7 +256,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
       if (!nextValue || nextValue === prevValue) return;
       nextTick(() => {
         requestAnimationFrame(() => {
-          scrollToBottom("smooth");
+          scrollToBottom("auto");
         });
       });
     },

@@ -797,22 +797,11 @@ function openResolvedImagePreview(
   }
 }
 
-.assistant-markdown :deep(.ecall-markdown-content :where(h1,h2,h3,h4,h5,h6,p,ul,ol,pre,blockquote,figure)) {
-  margin: 0.24em 0;
-}
-
-.assistant-markdown :deep(.ecall-markdown-content hr) {
-  border: 0;
-  border-top: 1px solid hsl(var(--bc) / 0.22);
-  margin: 0.8rem 0;
-  opacity: 1;
-}
-
 .assistant-markdown :deep(.ecall-markdown-content.prose) {
   --tw-prose-body: currentColor;
   --tw-prose-headings: currentColor;
   --tw-prose-lead: currentColor;
-  --tw-prose-links: currentColor;
+  --tw-prose-links: hsl(var(--bc));
   --tw-prose-bold: currentColor;
   --tw-prose-counters: currentColor;
   --tw-prose-bullets: hsl(var(--bc) / 0.5);
@@ -831,10 +820,127 @@ function openResolvedImagePreview(
   min-width: 0;
   max-width: 100%;
   overflow-x: hidden;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content > :first-child) {
+  margin-top: 0;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content > :last-child) {
+  margin-bottom: 0;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content :where(p,ul,ol,blockquote,pre,table,figure)) {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content :where(h1,h2,h3,h4)) {
+  margin-top: 0.7rem;
+  margin-bottom: 0.32rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: -0.015em;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content h1) {
+  font-size: 1.12rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content h2) {
+  font-size: 1.04rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content h3) {
+  font-size: 0.98rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content h4) {
+  font-size: 0.94rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content :where(ul,ol)) {
+  padding-left: 1.05rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content li) {
+  margin: 0.12rem 0;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content li > :where(p,ul,ol)) {
+  margin-top: 0.16rem;
+  margin-bottom: 0.16rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content a) {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  text-decoration-color: hsl(var(--bc) / 0.28);
+}
+
+.assistant-markdown :deep(.ecall-markdown-content a:hover) {
+  text-decoration-color: hsl(var(--bc) / 0.5);
+}
+
+.assistant-markdown :deep(.ecall-markdown-content strong) {
+  font-weight: 600;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content blockquote) {
+  border-left: 3px solid hsl(var(--bc) / 0.16);
+  padding-left: 0.68rem;
+  color: hsl(var(--bc) / 0.82);
+}
+
+.assistant-markdown :deep(.ecall-markdown-content hr) {
+  border: 0;
+  border-top: 1px solid hsl(var(--bc) / 0.14);
+  margin: 0.65rem 0;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content :not(pre) > code) {
+  border: 1px solid hsl(var(--bc) / 0.12);
+  background: hsl(var(--b2));
+  border-radius: 0.4rem;
+  padding: 0.08rem 0.3rem;
+  font-size: 0.86em;
+  font-weight: 500;
 }
 
 .assistant-markdown :deep(.ecall-markdown-content pre) {
   overflow-x: auto;
+  border: 1px solid hsl(var(--bc) / 0.12);
+  border-radius: 0.85rem;
+  background: hsl(var(--b2));
+  padding: 0.62rem 0.78rem;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03);
+}
+
+.assistant-markdown :deep(.ecall-markdown-content pre code) {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 0.88em;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content th) {
+  border-bottom: 1px solid hsl(var(--bc) / 0.16);
+  padding: 0.36rem 0.5rem;
+  text-align: left;
+  font-weight: 600;
+}
+
+.assistant-markdown :deep(.ecall-markdown-content td) {
+  border-bottom: 1px solid hsl(var(--bc) / 0.1);
+  padding: 0.34rem 0.5rem;
 }
 
 .assistant-markdown :deep(.ecall-markdown-content ._mermaid) {

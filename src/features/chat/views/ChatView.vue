@@ -560,10 +560,6 @@ onBeforeUnmount(() => {
   animation: ecall-reasoning-shimmer 2.5s linear infinite;
 }
 
-.assistant-markdown :deep(.ecall-markdown-content.ecall-stream-content) > * {
-  animation: ecall-stream-fade-in 0.5s ease-out forwards;
-}
-
 @keyframes ecall-stream-fade-in {
   from {
     opacity: 0;
@@ -591,39 +587,6 @@ onBeforeUnmount(() => {
   to {
     background-position: -280px 0;
   }
-}
-
-.assistant-markdown :deep(.ecall-markdown-content :where(h1,h2,h3,h4,h5,h6,p,ul,ol,pre,blockquote,figure)) {
-  margin: 0.24em 0;
-}
-
-
-
-.assistant-markdown :deep(.ecall-markdown-content.prose) {
-  --tw-prose-body: currentColor;
-  --tw-prose-headings: currentColor;
-  --tw-prose-lead: currentColor;
-  --tw-prose-links: currentColor;
-  --tw-prose-bold: currentColor;
-  --tw-prose-counters: currentColor;
-  --tw-prose-bullets: hsl(var(--bc) / 0.5);
-  --tw-prose-hr: hsl(var(--bc) / 0.15);
-  --tw-prose-quotes: currentColor;
-  --tw-prose-quote-borders: hsl(var(--bc) / 0.2);
-  --tw-prose-captions: hsl(var(--bc) / 0.75);
-  --tw-prose-code: currentColor;
-  --tw-prose-pre-code: currentColor;
-  --tw-prose-pre-bg: hsl(var(--b2));
-  --tw-prose-th-borders: hsl(var(--bc) / 0.2);
-  --tw-prose-td-borders: hsl(var(--bc) / 0.15);
-}
-
-.assistant-markdown :deep(.ecall-markdown-content pre) {
-  overflow-x: auto;
-}
-
-.assistant-markdown :deep(.ecall-markdown-content ._mermaid) {
-  width: 100%;
 }
 
 :deep(.chat-bubble) {

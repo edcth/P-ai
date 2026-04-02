@@ -1,5 +1,21 @@
 # 变更日志
 
+## 更新（未发布）：优化 Markdown 渲染样式与聊天滚动体验
+
+- 优化（chat-message-markdown-style）：重构 Markdown 内容样式规范，提升可读性与视觉一致性
+  - 统一字体大小为 0.9rem，行高为 1.5，优化阅读舒适度
+  - 调整段落间距为 0.25rem，保持紧凑同时保留空行效果
+  - 标题、链接、加粗、引用、代码块、表格等元素样式统一收口至 ChatMessageItem 组件
+  - 移除 ChatView 中重复的样式定义，避免维护负担
+  - 优化链接样式，增加悬停效果与下划线间距
+  - 代码块与内联代码增加边框与背景，提升可识别性
+  - 表格样式优化，增加边框与间距
+
+- 优化（chat-scroll-behavior）：优化聊天窗口滚动体验
+  - 切换会话时使用自动滚动（auto），避免平滑滚动动画延迟
+  - 跳转到底部时使用自动滚动，提升响应速度
+  - 新增 `suppressNextAnimatedConversationScroll` 标志，精准控制滚动行为
+
 ## 更新（未发布）：会话绑定部门与主会话固定
 
 - 新增（conversation-bound-department-and-main-session-pin）：前台会话支持独立绑定部门，并修复主会话选择规则
