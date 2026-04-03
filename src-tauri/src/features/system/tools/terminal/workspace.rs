@@ -65,9 +65,12 @@ fn normalize_terminal_timeout_ms(timeout_ms: Option<u64>) -> u64 {
 }
 
 fn normalize_terminal_path_for_compare(path: &Path) -> String {
-    let text = path.to_string_lossy().to_string();
+    let mut text = path.to_string_lossy().to_string();
     #[cfg(target_os = "windows")]
     {
+        if let Some(stripped) = text.strip_prefix("\\\\?\\") {
+            text = stripped.to_string();
+        }
         text.to_ascii_lowercase()
     }
     #[cfg(not(target_os = "windows"))]
@@ -545,6 +548,8 @@ mod terminal_workspace_tests {
             id: "conv-1".to_string(),
             title: "Conversation".to_string(),
             agent_id: "agent-1".to_string(),
+            department_id: String::new(),
+            last_read_message_id: String::new(),
             conversation_kind: CONVERSATION_KIND_CHAT.to_string(),
             root_conversation_id: None,
             delegate_id: None,

@@ -167,8 +167,11 @@
             api_providers: Vec::new(),
         };
         normalize_app_config(&mut cfg);
-        assert_eq!(cfg.selected_api_config_id, "edit-b".to_string());
-        assert_eq!(cfg.assistant_department_api_config_id, "chat-a".to_string());
+        assert_eq!(cfg.selected_api_config_id, "edit-b::edit-b-model-default".to_string());
+        assert_eq!(
+            cfg.assistant_department_api_config_id,
+            "chat-a::chat-a-model-default".to_string()
+        );
     }
 
     #[test]
@@ -342,10 +345,20 @@
         normalize_app_config(&mut cfg);
 
         assert_eq!(cfg.assistant_department_api_config_id, "");
-        assert_eq!(cfg.departments[0].api_config_id, "");
-        assert!(cfg.departments[0].api_config_ids.is_empty());
-        assert_eq!(cfg.departments[1].api_config_id, "");
-        assert!(cfg.departments[1].api_config_ids.is_empty());
+        let assistant = cfg
+            .departments
+            .iter()
+            .find(|item| item.id == ASSISTANT_DEPARTMENT_ID)
+            .expect("assistant department");
+        assert_eq!(assistant.api_config_id, "");
+        assert!(assistant.api_config_ids.is_empty());
+        let research = cfg
+            .departments
+            .iter()
+            .find(|item| item.id == "department-research")
+            .expect("research department");
+        assert_eq!(research.api_config_id, "");
+        assert!(research.api_config_ids.is_empty());
     }
 
     #[test]

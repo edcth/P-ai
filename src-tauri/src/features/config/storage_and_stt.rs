@@ -250,6 +250,22 @@ fn provider_first_endpoint_id(provider: &ApiProviderConfig) -> Option<String> {
     })
 }
 
+fn remap_legacy_api_config_id_to_endpoint(config: &AppConfig, raw_id: &str) -> String {
+    let trimmed = raw_id.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if config.api_configs.iter().any(|api| api.id == trimmed) {
+        return trimmed.to_string();
+    }
+    config
+        .api_providers
+        .iter()
+        .find(|provider| provider.id.trim() == trimmed)
+        .and_then(provider_first_endpoint_id)
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
 fn expand_api_configs_from_providers(config: &mut AppConfig) {
     let mut expanded = Vec::<ApiConfig>::new();
     for provider in &config.api_providers {
@@ -699,15 +715,20 @@ fn normalize_departments(config: &mut AppConfig) {
         }
         let mut api_config_ids = department_api_config_ids(raw)
             .into_iter()
+            .map(|id| remap_legacy_api_config_id_to_endpoint(config, &id))
             .filter(|id| valid_text_chat_api_ids.contains(id))
             .collect::<Vec<_>>();
-        if api_config_ids.is_empty() && !fallback_api_id.trim().is_empty() {
+        if api_config_ids.is_empty()
+            && !raw.api_config_id.trim().is_empty()
+            && !fallback_api_id.trim().is_empty()
+            && (raw.id == DEPUTY_DEPARTMENT_ID || raw.id == FRONT_DESK_DEPARTMENT_ID)
+        {
             api_config_ids.push(fallback_api_id.clone());
         }
         let api_config_id = api_config_ids
             .first()
             .cloned()
-            .unwrap_or_else(|| fallback_api_id.clone());
+            .unwrap_or_default();
         let mut agent_ids = Vec::<String>::new();
         let mut seen_agent_ids = std::collections::HashSet::<String>::new();
         for agent_id in &raw.agent_ids {
@@ -769,6 +790,7 @@ fn normalize_departments(config: &mut AppConfig) {
         |item: &mut DepartmentConfig, valid_text_chat_api_ids: &std::collections::HashSet<String>| {
             let ids = department_api_config_ids(item)
                 .into_iter()
+                .map(|id| remap_legacy_api_config_id_to_endpoint(config, &id))
                 .filter(|id| valid_text_chat_api_ids.contains(id))
                 .collect::<Vec<_>>();
             item.api_config_ids = ids;
@@ -835,6 +857,20 @@ fn normalize_app_config(config: &mut AppConfig) {
     }
     migrate_legacy_api_configs_into_providers(config);
     expand_api_configs_from_providers(config);
+    config.selected_api_config_id =
+        remap_legacy_api_config_id_to_endpoint(config, &config.selected_api_config_id);
+    config.assistant_department_api_config_id =
+        remap_legacy_api_config_id_to_endpoint(config, &config.assistant_department_api_config_id);
+    config.vision_api_config_id = config
+        .vision_api_config_id
+        .as_ref()
+        .map(|id| remap_legacy_api_config_id_to_endpoint(config, id))
+        .filter(|id| !id.trim().is_empty());
+    config.stt_api_config_id = config
+        .stt_api_config_id
+        .as_ref()
+        .map(|id| remap_legacy_api_config_id_to_endpoint(config, id))
+        .filter(|id| !id.trim().is_empty());
     ensure_hotkey_config_normalized(config);
     let lang = config.ui_language.trim();
     config.ui_language = match lang {

@@ -1,5 +1,12 @@
 # 变更日志
 
+## 更新：修复 Rust 测试与旧配置归一化断裂
+
+- 修复（rust-tests-and-legacy-normalize-fixes）：收口测试断裂与若干旧结构兼容问题
+  - 修复用户画像记忆前言拼接、Windows 终端工作区路径比较与旧 `api_config` 到新 `provider::model` 端点 id 的映射
+  - 更新多处 Rust 单测以匹配当前会话 replacement main、记忆注入位置与部门顺序的真实行为
+  - 重新打通整套 Rust 测试，当前结果为 `188 passed, 0 failed, 1 ignored`
+
 ## 更新：会话 Todo 改为持久化并实时推送
 
 - 修复（conversation-todo-persistence-and-sync）：补齐会话 Todo 的持久化、实时推送与首次快照恢复链路

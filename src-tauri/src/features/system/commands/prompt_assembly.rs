@@ -223,9 +223,17 @@ fn build_user_profile_memory_board(
 fn enrich_prepared_prompt_with_common_preamble(
     mut prepared: PreparedPrompt,
     _last_archive_summary: Option<&str>,
-    _user_profile_memory_block: Option<&str>,
+    user_profile_memory_block: Option<&str>,
     terminal_block: Option<String>,
 ) -> PreparedPrompt {
+    if let Some(block) = user_profile_memory_block {
+        let trimmed = block.trim();
+        if !trimmed.is_empty() {
+            prepared.preamble.push('\n');
+            prepared.preamble.push_str(trimmed);
+            prepared.preamble.push('\n');
+        }
+    }
     if let Some(block) = terminal_block {
         if !block.trim().is_empty() {
             prepared.preamble.push('\n');

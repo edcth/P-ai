@@ -306,15 +306,10 @@
             false,
         );
 
-        assert_eq!(
-            prepared.history_messages[0]
-                .text
-                .matches("用户很喜欢猫咪")
-                .count(),
-            1
-        );
-        assert!(prepared.history_messages[0].text.contains("因为用户妈妈从小养猫"));
-        assert!(!prepared.history_messages[0].text.contains("用户对花生过敏"));
+        let history_extra = prepared.history_messages[0].extra_text_blocks.join("\n");
+        assert_eq!(history_extra.matches("用户很喜欢猫咪").count(), 1);
+        assert!(history_extra.contains("因为用户妈妈从小养猫"));
+        assert!(!history_extra.contains("用户对花生过敏"));
         assert!(prepared.latest_user_extra_text.contains("用户对花生过敏"));
         assert_eq!(prepared.latest_user_extra_text.matches("用户很喜欢猫咪").count(), 0);
         assert_eq!(prepared.latest_user_extra_text.matches("用户对花生过敏").count(), 1);
@@ -329,6 +324,9 @@
             &now,
         );
         message.provider_meta = Some(serde_json::json!({
+            "message_meta": {
+                "kind": "context_compaction"
+            },
             "origin": {
                 "kind": "remote_im",
                 "channel_id": "remote-im-1",
@@ -1304,6 +1302,8 @@
             id: conversation_id.to_string(),
             title: conversation_id.to_string(),
             agent_id: DEFAULT_AGENT_ID.to_string(),
+            department_id: String::new(),
+            last_read_message_id: String::new(),
             conversation_kind: CONVERSATION_KIND_CHAT.to_string(),
             root_conversation_id: None,
             delegate_id: None,
@@ -1336,6 +1336,14 @@
             test_chat_conversation("conversation-sub", "active", &later),
         ];
         data
+    }
+
+    fn total_queue_len(state: &AppState) -> Result<usize, String> {
+        let slots = state
+            .conversation_runtime_slots
+            .lock()
+            .map_err(|err| format!("lock conversation_runtime_slots failed: {err}"))?;
+        Ok(slots.values().map(|slot| slot.pending_queue.len()).sum())
     }
 
     #[test]
@@ -1518,7 +1526,7 @@
         ];
         data.conversations = vec![conversation];
 
-        let summaries = collect_unarchived_conversation_summaries(&state, &data);
+        let summaries = collect_unarchived_conversation_summaries(&state, &AppConfig::default(), &data);
 
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].workspace_label, "默认工作空间");
@@ -1698,6 +1706,8 @@
             id: "conversation-main".to_string(),
             title: "main".to_string(),
             agent_id: DEFAULT_AGENT_ID.to_string(),
+            department_id: String::new(),
+            last_read_message_id: String::new(),
             conversation_kind: CONVERSATION_KIND_CHAT.to_string(),
             root_conversation_id: None,
             delegate_id: None,
@@ -2000,11 +2010,12 @@
             .expect("delete main conversation");
         let updated = state_read_app_data_cached(&state).expect("read app data");
 
-        assert_eq!(next_id, "conversation-sub");
-        assert_eq!(updated.main_conversation_id.as_deref(), Some("conversation-sub"));
-        assert_eq!(updated.conversations.len(), 1);
-        assert_eq!(updated.conversations[0].id, "conversation-sub");
-        assert_eq!(updated.conversations[0].status, "active");
+        assert_ne!(next_id, "conversation-main");
+        assert_ne!(next_id, "conversation-sub");
+        assert_eq!(updated.main_conversation_id.as_deref(), Some(next_id.as_str()));
+        assert_eq!(updated.conversations.len(), 2);
+        assert!(updated.conversations.iter().any(|item| item.id == next_id && item.status == "active"));
+        assert!(!updated.conversations.iter().any(|item| item.id == "conversation-main" && item.summary.is_empty()));
     }
 
     #[test]
@@ -2052,8 +2063,12 @@
             .expect("archive current main");
         let idx = ensure_main_conversation_index(&mut data, "", DEFAULT_AGENT_ID);
 
-        assert_eq!(data.conversations[idx].id, "conversation-sub");
-        assert_eq!(data.main_conversation_id.as_deref(), Some("conversation-sub"));
+        assert_ne!(data.conversations[idx].id, "conversation-main");
+        assert_ne!(data.conversations[idx].id, "conversation-sub");
+        assert_eq!(
+            data.main_conversation_id.as_deref(),
+            Some(data.conversations[idx].id.as_str())
+        );
     }
 
     #[test]

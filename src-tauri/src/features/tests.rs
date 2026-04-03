@@ -37,6 +37,8 @@
             id: Uuid::new_v4().to_string(),
             title: "t".to_string(),
             agent_id: "agent".to_string(),
+            department_id: String::new(),
+            last_read_message_id: String::new(),
             conversation_kind: CONVERSATION_KIND_CHAT.to_string(),
             root_conversation_id: None,
             delegate_id: None,
