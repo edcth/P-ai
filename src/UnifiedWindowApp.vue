@@ -72,6 +72,7 @@
       :persona-dirty="personaDirty"
       :config-dirty="configDirty"
       :saving="saving"
+      :normalize-api-bindings-action="normalizeApiBindingsLocal"
       :hotkey-test-recording="hotkeyTestRecording"
       :hotkey-test-recording-ms="hotkeyTestRecordingMs"
       :hotkey-test-audio="hotkeyTestAudio"
@@ -102,6 +103,7 @@
       :recording-ms="recordingMs"
       :transcribing="transcribing"
       :record-hotkey="config.recordHotkey"
+      :selected-chat-model-id="currentForegroundApiConfigId"
       :chat-usage-percent="chatUsagePercent"
       :force-archive-tip="t('chat.forceArchiveTip')"
       :media-drag-active="mediaDragActive"
@@ -156,6 +158,7 @@
       :refresh-models="refreshModels"
       :on-tools-changed="handleToolsChanged"
       :save-config="saveConfig"
+      :restore-config="restoreLastSavedConfigSnapshot"
       :add-api-config="addApiConfig"
       :remove-selected-api-config="removeSelectedApiConfig"
       :add-persona="addPersona"
@@ -179,6 +182,7 @@
       :save-agent-avatar="saveAgentAvatar"
       :clear-agent-avatar="clearAgentAvatar"
       :update-chat-input="handleChatInputUpdate"
+      :update-selected-chat-model-id="updateAssistantDepartmentApiConfigId"
       :set-side-conversation-list-visible="handleSideConversationListVisibleChange"
       :remove-clipboard-image="removeClipboardImage"
       :remove-queued-attachment-notice="removeQueuedAttachmentNotice"
@@ -215,6 +219,7 @@
       :checking-update="checkingUpdate"
       :check-update="manualCheckGithubUpdate"
       :open-github="openGithubRepository"
+      :last-saved-config-json="lastSavedConfigJson"
     />
 
     <dialog class="modal" :class="{ 'modal-open': updateDialogOpen }">
@@ -563,6 +568,7 @@ const config = reactive<AppConfig>({
   mcpServers: [],
   remoteImChannels: [],
   departments: [],
+  apiProviders: [],
   apiConfigs: [],
 });
 const recordHotkeyProbeLastSeq = ref(0);
@@ -793,6 +799,10 @@ const titleText = computed(() => {
   return t("window.configTitle");
 });
 const selectedApiConfig = computed(() => config.apiConfigs.find((a) => a.id === config.selectedApiConfigId) ?? null);
+const selectedApiProvider = computed(() => {
+  const [providerId] = String(config.selectedApiConfigId || "").split("::");
+  return config.apiProviders.find((provider) => provider.id === providerId) ?? null;
+});
 const textCapableApiConfigs = computed(() =>
   config.apiConfigs.filter(
     (a) =>
@@ -1351,6 +1361,7 @@ const chatInputPlaceholder = computed(() => {
 const defaultCreateConversationDepartmentId = computed(() => "assistant-department");
 const {
   defaultApiTools,
+  createApiProvider,
   createApiConfig,
   normalizeApiBindingsLocal,
   buildConfigPayload,
@@ -1459,6 +1470,35 @@ function updatePersonaEditorIdWithNotice(value: string) {
 
 function updateAssistantDepartmentAgentId(value: string) {
   assistantDepartmentAgentId.value = value;
+}
+
+function updateAssistantDepartmentApiConfigId(value: string) {
+  const nextId = String(value || "").trim();
+  if (!nextId) return;
+  if (!config.apiConfigs.some((item) => String(item.id || "").trim() === nextId)) {
+    console.warn("[聊天模型] 选择的模型不存在，忽略更新", { nextId });
+    return;
+  }
+  const currentDepartmentId = String(currentForegroundDepartmentId.value || "").trim();
+  const currentDepartment = config.departments.find(
+    (item) => String(item.id || "").trim() === currentDepartmentId,
+  );
+  if (currentDepartment) {
+    const nextIds = Array.from(
+      new Set([
+        nextId,
+        ...((currentDepartment.apiConfigIds || []).map((id) => String(id || "").trim()).filter(Boolean)),
+      ]),
+    );
+    currentDepartment.apiConfigIds = nextIds;
+    currentDepartment.apiConfigId = nextId;
+    if (currentDepartment.id === "assistant-department" || currentDepartment.isBuiltInAssistant) {
+      config.assistantDepartmentApiConfigId = nextId;
+    }
+  } else {
+    config.assistantDepartmentApiConfigId = nextId;
+  }
+  config.selectedApiConfigId = nextId;
 }
 
 function updateSelectedResponseStyleId(value: string) {
@@ -1617,6 +1657,7 @@ const {
   avatarError,
   toolPersona: selectedPersonaEditor,
   selectedApiConfig,
+  selectedApiProvider,
   refreshingModels,
   modelRefreshError,
   apiModelOptions,
@@ -1671,6 +1712,7 @@ const {
   savePersonas,
   saveChatPreferences,
   saveConversationApiSettings,
+  restoreLastSavedConfigSnapshot,
 } = configPersistence;
 const chatRuntime = useChatRuntime({
   t: tr,
@@ -2203,6 +2245,7 @@ const {
   personaEditorId,
   selectedPersonaEditor,
   createApiConfig,
+  createApiProvider,
   normalizeApiBindingsLocal,
 });
 
@@ -2330,6 +2373,25 @@ const appBootstrap = useAppBootstrap({
     if ("terminalShellKind" in payload) {
       config.terminalShellKind = String(payload.terminalShellKind ?? "");
     }
+    if ("apiProviders" in payload) {
+      config.apiProviders = Array.isArray(payload.apiProviders)
+        ? payload.apiProviders.map((provider) => ({
+            ...provider,
+            apiKeys: Array.isArray(provider.apiKeys) ? [...provider.apiKeys] : [],
+            cachedModelOptions: Array.isArray(provider.cachedModelOptions) ? [...provider.cachedModelOptions] : [],
+            models: Array.isArray(provider.models)
+              ? provider.models.map((model) => ({ ...model }))
+              : [],
+            tools: Array.isArray(provider.tools)
+              ? provider.tools.map((tool) => ({
+                  ...tool,
+                  args: Array.isArray(tool.args) ? [...tool.args] : [],
+                  values: { ...((tool.values || {}) as Record<string, unknown>) },
+                }))
+              : [],
+          }))
+        : [];
+    }
     config.apiConfigs.splice(
       0,
       config.apiConfigs.length,
@@ -2350,7 +2412,6 @@ const appBootstrap = useAppBootstrap({
           agentIds: Array.isArray(item.agentIds) ? [...item.agentIds] : [],
         }))
       : [];
-    normalizeApiBindingsLocal();
   },
   onRecordHotkeyProbe: ({ state, seq }) => {
     if (seq > 0) {
@@ -2620,7 +2681,6 @@ watch(
 
 function setUiLanguage(value: string) {
   if (!applyUiLanguage(value)) return;
-  void saveConfig();
 }
 
 function openSkillPlaceholderDialog() {

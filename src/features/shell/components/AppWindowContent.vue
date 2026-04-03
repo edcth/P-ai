@@ -47,11 +47,14 @@
       :persona-dirty="personaDirty"
       :config-dirty="configDirty"
       :saving-config="saving"
+      :normalize-api-bindings-action="normalizeApiBindingsAction"
       :hotkey-test-recording="hotkeyTestRecording"
       :hotkey-test-recording-ms="hotkeyTestRecordingMs"
       :hotkey-test-audio-ready="!!hotkeyTestAudio"
       :checking-update="checkingUpdate"
       :save-config-action="saveConfig"
+      :restore-config-action="restoreConfig"
+      :last-saved-config-json="lastSavedConfigJson"
       :set-status-action="setStatus"
       @update:config-tab="updateConfigTab"
       @update:ui-language="setUiLanguage"
@@ -117,6 +120,8 @@
         :recording-ms="recordingMs"
         :transcribing="transcribing"
         :record-hotkey="recordHotkey"
+        :selected-chat-model-id="selectedChatModelId"
+        :chat-model-options="textCapableApiConfigs"
         :chat-usage-percent="chatUsagePercent"
         :force-archive-tip="forceArchiveTip"
         :media-drag-active="mediaDragActive"
@@ -137,6 +142,7 @@
         @remove-clipboard-image="removeClipboardImage"
         @remove-queued-attachment-notice="removeQueuedAttachmentNotice"
         @pick-attachments="pickAttachments"
+        @update:selected-chat-model-id="updateSelectedChatModelId"
         @start-recording="startRecording"
         @stop-recording="stopRecording"
         @send-chat="sendChat"
@@ -310,6 +316,7 @@ const props = defineProps<{
   personaDirty: boolean;
   configDirty: boolean;
   saving: boolean;
+  normalizeApiBindingsAction: () => void;
   hotkeyTestRecording: boolean;
   hotkeyTestRecordingMs: number;
   hotkeyTestAudio: unknown;
@@ -340,6 +347,7 @@ const props = defineProps<{
   recordingMs: number;
   transcribing: boolean;
   recordHotkey: string;
+  selectedChatModelId: string;
   chatUsagePercent: number;
   forceArchiveTip: string;
   mediaDragActive: boolean;
@@ -394,6 +402,8 @@ const props = defineProps<{
   setTheme: (value: string) => void;
   refreshModels: () => void;
   saveConfig: () => Promise<boolean> | boolean;
+  restoreConfig: () => boolean;
+  lastSavedConfigJson: string;
   onToolsChanged: () => void;
   addApiConfig: () => void;
   removeSelectedApiConfig: () => void;
@@ -418,6 +428,7 @@ const props = defineProps<{
   saveAgentAvatar: (input: { agentId: string; mime: string; bytesBase64: string }) => void;
   clearAgentAvatar: (input: { agentId: string }) => void;
   updateChatInput: (value: string) => void;
+  updateSelectedChatModelId: (value: string) => void;
   setSideConversationListVisible: (value: boolean) => void;
   removeClipboardImage: (index: number) => void;
   removeQueuedAttachmentNotice: (index: number) => void;

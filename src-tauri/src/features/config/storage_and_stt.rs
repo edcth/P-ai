@@ -40,7 +40,340 @@ fn write_config(path: &PathBuf, config: &AppConfig) -> Result<(), String> {
     fs::write(path, toml_str).map_err(|err| format!("Write config failed: {err}"))
 }
 
+fn api_endpoint_id(provider_id: &str, model_id: &str) -> String {
+    format!(
+        "{}::{}",
+        provider_id.trim().to_string(),
+        model_id.trim().to_string()
+    )
+}
+
+fn parse_api_endpoint_id(endpoint_id: &str) -> Option<(String, String)> {
+    let trimmed = endpoint_id.trim();
+    let (provider_id, model_id) = trimmed.split_once("::")?;
+    let provider_id = provider_id.trim().to_string();
+    let model_id = model_id.trim().to_string();
+    if provider_id.is_empty() || model_id.is_empty() {
+        return None;
+    }
+    Some((provider_id, model_id))
+}
+
+fn provider_key_cursor_state() -> &'static Mutex<std::collections::HashMap<String, usize>> {
+    static CURSORS: OnceLock<Mutex<std::collections::HashMap<String, usize>>> = OnceLock::new();
+    CURSORS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn peek_provider_api_key(provider: &ApiProviderConfig) -> String {
+    let keys = provider
+        .api_keys
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        return String::new();
+    }
+    let Ok(guard) = provider_key_cursor_state().lock() else {
+        let idx = (provider.key_cursor as usize) % keys.len();
+        return keys[idx].to_string();
+    };
+    let idx = guard
+        .get(&provider.id)
+        .copied()
+        .unwrap_or((provider.key_cursor as usize) % keys.len())
+        % keys.len();
+    keys[idx].to_string()
+}
+
+fn select_and_advance_provider_api_key(provider: &ApiProviderConfig) -> String {
+    let keys = provider
+        .api_keys
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        return String::new();
+    }
+    let Ok(mut guard) = provider_key_cursor_state().lock() else {
+        let idx = (provider.key_cursor as usize) % keys.len();
+        return keys[idx].to_string();
+    };
+    let entry = guard
+        .entry(provider.id.clone())
+        .or_insert((provider.key_cursor as usize) % keys.len());
+    let idx = *entry % keys.len();
+    let selected = keys[idx].to_string();
+    *entry = (idx + 1) % keys.len();
+    selected
+}
+
+fn consume_api_key_for_request(resolved_api: &ResolvedApiConfig) -> String {
+    let keys = resolved_api
+        .provider_api_keys
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if keys.is_empty() || resolved_api.provider_id.is_none() {
+        return resolved_api.api_key.trim().to_string();
+    }
+    let provider = ApiProviderConfig {
+        id: resolved_api.provider_id.clone().unwrap_or_default(),
+        name: String::new(),
+        request_format: resolved_api.request_format,
+        enable_text: true,
+        enable_image: false,
+        enable_audio: false,
+        enable_tools: false,
+        tools: Vec::new(),
+        base_url: resolved_api.base_url.clone(),
+        api_keys: resolved_api.provider_api_keys.clone(),
+        key_cursor: resolved_api.provider_key_cursor as u32,
+        cached_model_options: Vec::new(),
+        models: Vec::new(),
+        failure_retry_count: 0,
+    };
+    let selected = select_and_advance_provider_api_key(&provider);
+    if selected.trim().is_empty() {
+        resolved_api.api_key.trim().to_string()
+    } else {
+        selected
+    }
+}
+
+fn migrate_legacy_api_configs_into_providers(config: &mut AppConfig) {
+    let only_default_placeholder_providers = !config.api_providers.is_empty()
+        && config
+            .api_providers
+            .iter()
+            .all(is_default_placeholder_provider);
+    if !config.api_providers.is_empty() && !only_default_placeholder_providers {
+        return;
+    }
+    if config.api_configs.is_empty() {
+        config.api_providers = default_api_providers();
+        return;
+    }
+
+    config.api_providers = config
+        .api_configs
+        .iter()
+        .map(|legacy| {
+            let model_id = format!("{}-model-default", legacy.id.trim());
+            ApiProviderConfig {
+                id: legacy.id.clone(),
+                name: legacy.name.clone(),
+                request_format: legacy.request_format,
+                enable_text: legacy.enable_text,
+                enable_image: legacy.enable_image,
+                enable_audio: legacy.enable_audio,
+                enable_tools: legacy.enable_tools,
+                tools: legacy.tools.clone(),
+                base_url: legacy.base_url.clone(),
+                api_keys: legacy
+                    .api_key
+                    .trim()
+                    .is_empty()
+                    .then(Vec::new)
+                    .unwrap_or_else(|| vec![legacy.api_key.clone()]),
+                key_cursor: 0,
+                cached_model_options: legacy
+                    .model
+                    .trim()
+                    .is_empty()
+                    .then(Vec::new)
+                    .unwrap_or_else(|| vec![legacy.model.clone()]),
+                models: vec![ApiModelConfig {
+                    id: model_id,
+                    model: legacy.model.clone(),
+                    enable_image: legacy.enable_image,
+                    enable_tools: legacy.enable_tools,
+                    temperature: legacy.temperature,
+                    custom_temperature_enabled: legacy.custom_temperature_enabled,
+                    context_window_tokens: legacy.context_window_tokens,
+                    max_output_tokens: legacy.max_output_tokens,
+                    custom_max_output_tokens_enabled: legacy.custom_max_output_tokens_enabled,
+                }],
+                failure_retry_count: legacy.failure_retry_count,
+            }
+        })
+        .collect();
+}
+
+fn is_default_placeholder_provider(provider: &ApiProviderConfig) -> bool {
+    let Some(model) = provider.models.first() else {
+        return false;
+    };
+    let default_tools = default_api_tools();
+    let tools_match = provider.tools.len() == default_tools.len()
+        && provider
+            .tools
+            .iter()
+            .zip(default_tools.iter())
+            .all(|(left, right)| {
+                left.id == right.id
+                    && left.command == right.command
+                    && left.args == right.args
+                    && left.enabled == right.enabled
+                    && left.values == right.values
+            });
+    provider.id == "default-provider-openai"
+        && provider.name == "Default OpenAI"
+        && matches!(provider.request_format, RequestFormat::OpenAI)
+        && provider.enable_text
+        && !provider.enable_image
+        && !provider.enable_audio
+        && provider.enable_tools
+        && tools_match
+        && provider.base_url == "https://api.openai.com/v1"
+        && provider.api_keys.is_empty()
+        && provider.key_cursor == 0
+        && provider.cached_model_options == vec!["gpt-4o-mini".to_string()]
+        && provider.models.len() == 1
+        && model.id == "default-model"
+        && model.model == "gpt-4o-mini"
+        && !model.enable_image
+        && model.enable_tools
+        && (model.temperature - default_api_temperature()).abs() < f64::EPSILON
+        && !model.custom_temperature_enabled
+        && model.context_window_tokens == default_context_window_tokens()
+        && model.max_output_tokens == default_max_output_tokens()
+        && !model.custom_max_output_tokens_enabled
+        && provider.failure_retry_count == default_failure_retry_count()
+}
+
+fn provider_first_endpoint_id(provider: &ApiProviderConfig) -> Option<String> {
+    provider.models.iter().find_map(|model| {
+        (!model.model.trim().is_empty()).then(|| api_endpoint_id(&provider.id, &model.id))
+    })
+}
+
+fn expand_api_configs_from_providers(config: &mut AppConfig) {
+    let mut expanded = Vec::<ApiConfig>::new();
+    for provider in &config.api_providers {
+        for model in &provider.models {
+            if model.model.trim().is_empty() {
+                continue;
+            }
+            expanded.push(ApiConfig {
+                id: api_endpoint_id(&provider.id, &model.id),
+                name: format!("{}/{}", provider.name.trim(), model.model.trim()),
+                request_format: provider.request_format,
+                enable_text: provider.enable_text,
+                enable_image: model.enable_image,
+                enable_audio: provider.enable_audio,
+                enable_tools: model.enable_tools,
+                tools: provider.tools.clone(),
+                base_url: provider.base_url.clone(),
+                api_key: provider.api_keys.first().cloned().unwrap_or_default(),
+                model: model.model.clone(),
+                temperature: model.temperature,
+                custom_temperature_enabled: model.custom_temperature_enabled,
+                context_window_tokens: model.context_window_tokens,
+                max_output_tokens: model.max_output_tokens,
+                custom_max_output_tokens_enabled: model.custom_max_output_tokens_enabled,
+                failure_retry_count: provider.failure_retry_count,
+            });
+        }
+    }
+    if expanded.is_empty() {
+        let default_provider = ApiProviderConfig::default();
+        config.api_providers = vec![default_provider.clone()];
+        expanded.push(ApiConfig::default());
+    }
+    config.api_configs = expanded;
+}
+
+fn normalize_tools_list(
+    tools: &mut Vec<ApiToolConfig>,
+    enable_tools: bool,
+    legacy_command_enabled: bool,
+) {
+    for tool in tools.iter_mut() {
+        match tool.id.as_str() {
+            "bing-search" => {
+                tool.id = "websearch".to_string();
+            }
+            "desktop-screenshot" | "screenshot" => {
+                tool.id = "__merged_into_operate__".to_string();
+            }
+            "desktop-wait" | "wait" | "reload" | "organize_context" => {
+                tool.id = "__merged_into_command__".to_string();
+            }
+            "shell-exec" => {
+                tool.id = "exec".to_string();
+                tool.args = vec!["exec".to_string()];
+            }
+            "shell-switch-workspace" => {
+                tool.id = "__removed_shell_switch_workspace__".to_string();
+            }
+            _ => {}
+        }
+    }
+    tools.retain(|tool| {
+        !matches!(
+            tool.id.as_str(),
+            "__merged_into_command__"
+                | "__removed_shell_switch_workspace__"
+                | "__merged_into_operate__"
+        )
+    });
+    tools.sort_by(|a, b| a.id.cmp(&b.id));
+    tools.dedup_by(|a, b| a.id == b.id);
+    if enable_tools {
+        if tools.is_empty() {
+            *tools = default_api_tools();
+        } else {
+            let defaults = default_api_tools();
+            for default_tool in defaults {
+                if !tools.iter().any(|tool| tool.id == default_tool.id) {
+                    tools.push(default_tool);
+                }
+            }
+        }
+    }
+    if let Some(command_tool) = tools.iter_mut().find(|tool| tool.id == "command") {
+        command_tool.enabled = command_tool.enabled || legacy_command_enabled;
+    }
+}
+
 fn normalize_api_tools(config: &mut AppConfig) {
+    for provider in &mut config.api_providers {
+        provider.enable_audio = false;
+        provider.key_cursor = provider.key_cursor.min(1_000_000);
+        provider.failure_retry_count = provider.failure_retry_count.clamp(0, 20);
+        provider.api_keys = provider
+            .api_keys
+            .iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        provider.cached_model_options = provider
+            .cached_model_options
+            .iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        for model in &mut provider.models {
+            model.temperature = model.temperature.clamp(0.0, 2.0);
+            model.context_window_tokens = model.context_window_tokens.clamp(16_000, 2_000_000);
+            model.max_output_tokens = model.max_output_tokens.clamp(256, 32_768);
+        }
+        let legacy_command_enabled = provider.tools.iter().any(|tool| {
+            matches!(
+                tool.id.as_str(),
+                "command" | "desktop-wait" | "wait" | "reload" | "organize_context"
+            ) && tool.enabled
+        });
+        normalize_tools_list(
+            &mut provider.tools,
+            provider.enable_tools,
+            legacy_command_enabled,
+        );
+    }
+
     for api in &mut config.api_configs {
         api.enable_audio = false;
         api.temperature = api.temperature.clamp(0.0, 2.0);
@@ -55,52 +388,7 @@ fn normalize_api_tools(config: &mut AppConfig) {
                 "command" | "desktop-wait" | "wait" | "reload" | "organize_context"
             ) && tool.enabled
         });
-        for tool in &mut api.tools {
-            match tool.id.as_str() {
-                "bing-search" => {
-                    tool.id = "websearch".to_string();
-                }
-                "desktop-screenshot" | "screenshot" => {
-                    tool.id = "__merged_into_operate__".to_string();
-                }
-                "desktop-wait" | "wait" | "reload" | "organize_context" => {
-                    tool.id = "__merged_into_command__".to_string();
-                }
-                "shell-exec" => {
-                    tool.id = "exec".to_string();
-                    tool.args = vec!["exec".to_string()];
-                }
-                "shell-switch-workspace" => {
-                    tool.id = "__removed_shell_switch_workspace__".to_string();
-                }
-                _ => {}
-            }
-        }
-        api.tools.retain(|tool| {
-            !matches!(
-                tool.id.as_str(),
-                "__merged_into_command__"
-                    | "__removed_shell_switch_workspace__"
-                    | "__merged_into_operate__"
-            )
-        });
-        api.tools.sort_by(|a, b| a.id.cmp(&b.id));
-        api.tools.dedup_by(|a, b| a.id == b.id);
-        if api.enable_tools {
-            if api.tools.is_empty() {
-                api.tools = default_api_tools();
-            } else {
-                let defaults = default_api_tools();
-                for d in defaults {
-                    if !api.tools.iter().any(|t| t.id == d.id) {
-                        api.tools.push(d);
-                    }
-                }
-            }
-        }
-        if let Some(command_tool) = api.tools.iter_mut().find(|tool| tool.id == "command") {
-            command_tool.enabled = command_tool.enabled || legacy_command_enabled;
-        }
+        normalize_tools_list(&mut api.tools, api.enable_tools, legacy_command_enabled);
     }
 }
 
@@ -541,10 +829,12 @@ fn normalize_departments(config: &mut AppConfig) {
 }
 
 fn normalize_app_config(config: &mut AppConfig) {
-    if config.api_configs.is_empty() {
+    if config.api_configs.is_empty() && config.api_providers.is_empty() {
         *config = AppConfig::default();
         return;
     }
+    migrate_legacy_api_configs_into_providers(config);
+    expand_api_configs_from_providers(config);
     ensure_hotkey_config_normalized(config);
     let lang = config.ui_language.trim();
     config.ui_language = match lang {
@@ -569,12 +859,24 @@ fn normalize_app_config(config: &mut AppConfig) {
         }
     }
 
+    for provider in &mut config.api_providers {
+        if matches!(provider.request_format, RequestFormat::Gemini) && !provider.enable_text {
+            provider.request_format = RequestFormat::GeminiEmbedding;
+        }
+    }
+    expand_api_configs_from_providers(config);
+
     if !config
         .api_configs
         .iter()
         .any(|a| a.id == config.selected_api_config_id)
     {
-        config.selected_api_config_id = config.api_configs[0].id.clone();
+        config.selected_api_config_id = config
+            .api_providers
+            .iter()
+            .find_map(provider_first_endpoint_id)
+            .or_else(|| config.api_configs.first().map(|api| api.id.clone()))
+            .unwrap_or_default();
     }
 
     let chat_valid = config.api_configs.iter().any(|a| {
@@ -928,6 +1230,9 @@ fn resolve_api_config(
                 return Err(".debug/api-key.json exists but apiKey is empty.".to_string());
             }
             return Ok(ResolvedApiConfig {
+                provider_id: None,
+                provider_api_keys: Vec::new(),
+                provider_key_cursor: 0,
                 request_format: RequestFormat::OpenAI,
                 base_url: debug_cfg.base_url.trim().to_string(),
                 api_key: debug_cfg.api_key.trim().to_string(),
@@ -942,16 +1247,41 @@ fn resolve_api_config(
         "No API config configured. Please add at least one API config.".to_string()
     })?;
 
-    if selected.api_key.trim().is_empty() {
-        return Err(
-            "Selected API config API key is empty. Please fill it in settings.".to_string(),
-        );
+    let selected_provider_id = requested_id
+        .and_then(parse_api_endpoint_id)
+        .and_then(|(provider_id, _model_id)| {
+            app_config
+                .api_providers
+                .iter()
+                .any(|provider| provider.id == provider_id)
+                .then_some(provider_id)
+        });
+    let selected_provider = selected_provider_id.as_deref().and_then(|provider_id| {
+        app_config
+            .api_providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+    });
+    let selected_api_key = selected_provider
+        .map(peek_provider_api_key)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| selected.api_key.trim().to_string());
+
+    if selected_api_key.trim().is_empty() {
+        return Err("Selected API config API key is empty. Please fill it in settings.".to_string());
     }
 
     Ok(ResolvedApiConfig {
+        provider_id: selected_provider_id,
+        provider_api_keys: selected_provider
+            .map(|provider| provider.api_keys.clone())
+            .unwrap_or_default(),
+        provider_key_cursor: selected_provider
+            .map(|provider| provider.key_cursor as usize)
+            .unwrap_or(0),
         request_format: selected.request_format,
         base_url: selected.base_url.trim().to_string(),
-        api_key: selected.api_key.trim().to_string(),
+        api_key: selected_api_key,
         model: selected.model.trim().to_string(),
         temperature: selected
             .custom_temperature_enabled

@@ -39,24 +39,6 @@ type UseAppWatchersOptions = {
 
 export function useAppWatchers(options: UseAppWatchersOptions) {
   watch(
-    () => options.config.apiConfigs.map((a) => ({
-      id: a.id,
-      requestFormat: a.requestFormat,
-      enableText: a.enableText,
-      enableImage: a.enableImage,
-      enableAudio: a.enableAudio,
-      enableTools: a.enableTools,
-      temperature: a.temperature,
-      customTemperatureEnabled: !!a.customTemperatureEnabled,
-      contextWindowTokens: a.contextWindowTokens,
-      customMaxOutputTokensEnabled: !!a.customMaxOutputTokensEnabled,
-      maxOutputTokens: a.maxOutputTokens,
-    })),
-    () => options.normalizeApiBindingsLocal(),
-    { deep: true },
-  );
-
-  watch(
     () => options.userPersona.value?.name,
     () => {
       options.syncUserAliasFromPersona();

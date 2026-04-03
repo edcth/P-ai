@@ -91,6 +91,7 @@
                     failure_retry_count: 0,
                 },
             ],
+            api_providers: Vec::new(),
         };
         normalize_app_config(&mut cfg);
         assert_eq!(cfg.record_hotkey, "Alt");
@@ -163,6 +164,7 @@
                     failure_retry_count: 0,
                 },
             ],
+            api_providers: Vec::new(),
         };
         normalize_app_config(&mut cfg);
         assert_eq!(cfg.selected_api_config_id, "edit-b".to_string());
@@ -210,6 +212,7 @@
                 custom_max_output_tokens_enabled: false,
                 failure_retry_count: 0,
             }],
+            api_providers: Vec::new(),
         };
         normalize_app_config(&mut cfg);
         let api = &cfg.api_configs[0];
@@ -333,6 +336,7 @@
                     failure_retry_count: 0,
                 },
             ],
+            api_providers: Vec::new(),
         };
 
         normalize_app_config(&mut cfg);
@@ -399,6 +403,7 @@
                 custom_max_output_tokens_enabled: false,
                 failure_retry_count: 0,
             }],
+            api_providers: Vec::new(),
         };
 
         normalize_app_config(&mut cfg);
@@ -448,4 +453,163 @@
             cfg.shell_workspaces[0].path,
             r"E:\__easy_call_ai_path_norm_test__\repo".to_string()
         );
+    }
+
+    #[test]
+    fn normalize_app_config_should_migrate_legacy_api_configs_into_providers() {
+        let mut cfg = AppConfig {
+            selected_api_config_id: "legacy-openai".to_string(),
+            assistant_department_api_config_id: "legacy-openai".to_string(),
+            api_providers: Vec::new(),
+            api_configs: vec![ApiConfig {
+                id: "legacy-openai".to_string(),
+                name: "Legacy OpenAI".to_string(),
+                request_format: RequestFormat::OpenAI,
+                enable_text: true,
+                enable_image: false,
+                enable_audio: false,
+                enable_tools: true,
+                tools: default_api_tools(),
+                base_url: "https://api.openai.com/v1".to_string(),
+                api_key: "legacy-key".to_string(),
+                model: "gpt-4.1".to_string(),
+                temperature: 0.7,
+                custom_temperature_enabled: true,
+                context_window_tokens: 256_000,
+                max_output_tokens: 8_192,
+                custom_max_output_tokens_enabled: true,
+                failure_retry_count: 2,
+            }],
+            ..AppConfig::default()
+        };
+
+        normalize_app_config(&mut cfg);
+
+        assert_eq!(cfg.api_providers.len(), 1);
+        assert_eq!(cfg.api_providers[0].api_keys, vec!["legacy-key".to_string()]);
+        assert_eq!(cfg.api_providers[0].models.len(), 1);
+        assert_eq!(cfg.api_providers[0].models[0].model, "gpt-4.1".to_string());
+        assert_eq!(
+            cfg.selected_api_config_id,
+            "legacy-openai::legacy-openai-model-default".to_string()
+        );
+        assert_eq!(cfg.api_configs.len(), 1);
+        assert_eq!(cfg.api_configs[0].id, cfg.selected_api_config_id);
+    }
+
+    #[test]
+    fn normalize_app_config_should_migrate_legacy_api_configs_when_serde_injected_default_provider() {
+        let mut cfg: AppConfig = toml::from_str(
+            r#"
+hotkey = "Alt+·"
+selectedApiConfigId = "legacy-openai"
+assistantDepartmentApiConfigId = "legacy-openai"
+
+[[apiConfigs]]
+id = "legacy-openai"
+name = "Legacy OpenAI"
+requestFormat = "openai"
+enableText = true
+enableImage = false
+enableAudio = false
+enableTools = true
+baseUrl = "https://api.openai.com/v1"
+apiKey = "legacy-key"
+model = "gpt-4.1"
+temperature = 0.7
+contextWindowTokens = 256000
+maxOutputTokens = 8192
+"#,
+        )
+        .expect("legacy toml should deserialize");
+
+        normalize_app_config(&mut cfg);
+
+        assert_eq!(cfg.api_providers.len(), 1);
+        assert_eq!(cfg.api_providers[0].id, "legacy-openai".to_string());
+        assert_eq!(cfg.api_providers[0].api_keys, vec!["legacy-key".to_string()]);
+        assert_eq!(cfg.api_providers[0].models.len(), 1);
+        assert_eq!(cfg.api_providers[0].models[0].model, "gpt-4.1".to_string());
+        assert_eq!(
+            cfg.selected_api_config_id,
+            "legacy-openai::legacy-openai-model-default".to_string()
+        );
+    }
+
+    #[test]
+    fn consume_api_key_for_request_should_rotate_provider_keys_across_same_provider_models() {
+        let provider_id = format!(
+            "provider-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0)
+        );
+        let model_a = "model-a".to_string();
+        let model_b = "model-b".to_string();
+        let mut cfg = AppConfig {
+            selected_api_config_id: api_endpoint_id(&provider_id, &model_a),
+            assistant_department_api_config_id: api_endpoint_id(&provider_id, &model_a),
+            api_providers: vec![ApiProviderConfig {
+                id: provider_id.clone(),
+                name: "OpenAI".to_string(),
+                request_format: RequestFormat::OpenAI,
+                enable_text: true,
+                enable_image: false,
+                enable_audio: false,
+                enable_tools: true,
+                tools: default_api_tools(),
+                base_url: "https://api.openai.com/v1".to_string(),
+                api_keys: vec!["key-1".to_string(), "key-2".to_string()],
+                key_cursor: 0,
+                cached_model_options: vec!["gpt-4.1".to_string(), "gpt-4.1-mini".to_string()],
+                models: vec![
+                    ApiModelConfig {
+                        id: model_a.clone(),
+                        model: "gpt-4.1".to_string(),
+                        enable_image: false,
+                        enable_tools: true,
+                        temperature: 1.0,
+                        custom_temperature_enabled: false,
+                        context_window_tokens: 128_000,
+                        max_output_tokens: 4_096,
+                        custom_max_output_tokens_enabled: false,
+                    },
+                    ApiModelConfig {
+                        id: model_b.clone(),
+                        model: "gpt-4.1-mini".to_string(),
+                        enable_image: false,
+                        enable_tools: true,
+                        temperature: 1.0,
+                        custom_temperature_enabled: false,
+                        context_window_tokens: 128_000,
+                        max_output_tokens: 4_096,
+                        custom_max_output_tokens_enabled: false,
+                    },
+                ],
+                failure_retry_count: 0,
+            }],
+            api_configs: Vec::new(),
+            ..AppConfig::default()
+        };
+        normalize_app_config(&mut cfg);
+
+        let first = resolve_api_config(&cfg, Some(&api_endpoint_id(&provider_id, &model_a)))
+            .expect("first resolve");
+        let second = resolve_api_config(&cfg, Some(&api_endpoint_id(&provider_id, &model_b)))
+            .expect("second resolve");
+        let third = resolve_api_config(&cfg, Some(&api_endpoint_id(&provider_id, &model_a)))
+            .expect("third resolve");
+
+        assert_eq!(first.api_key, "key-1".to_string());
+        assert_eq!(second.api_key, "key-1".to_string());
+        assert_eq!(third.api_key, "key-1".to_string());
+
+        let first_sent = consume_api_key_for_request(&first);
+        let second_sent = consume_api_key_for_request(&second);
+        let third_sent = consume_api_key_for_request(&third);
+
+        assert_eq!(first_sent, "key-1".to_string());
+        assert_eq!(second_sent, "key-2".to_string());
+        assert_eq!(third_sent, "key-1".to_string());
     }

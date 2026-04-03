@@ -937,6 +937,7 @@ fn builtin_read_file_should_return_root_image_payload_when_model_supports_image(
                 custom_max_output_tokens_enabled: false,
                 failure_retry_count: 0,
             }],
+            api_providers: Vec::new(),
             ..AppConfig::default()
         };
         state_write_config_cached(&state, &config).expect("write config");

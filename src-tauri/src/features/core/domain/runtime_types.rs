@@ -1,5 +1,8 @@
 #[derive(Debug, Clone)]
 struct ResolvedApiConfig {
+    provider_id: Option<String>,
+    provider_api_keys: Vec<String>,
+    provider_key_cursor: usize,
     request_format: RequestFormat,
     base_url: String,
     api_key: String,

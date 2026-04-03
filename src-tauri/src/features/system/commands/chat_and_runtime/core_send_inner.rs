@@ -2376,6 +2376,7 @@ mod core_send_inner_tests {
     fn prioritize_requested_chat_api_id_should_move_requested_id_to_front() {
         let app_config = AppConfig {
             api_configs: vec![test_chat_api("text-a", false), test_chat_api("vision-b", true)],
+            api_providers: Vec::new(),
             ..AppConfig::default()
         };
         let mut candidate_api_ids = vec!["text-a".to_string(), "vision-b".to_string()];
@@ -2392,6 +2393,7 @@ mod core_send_inner_tests {
     fn prioritize_requested_chat_api_id_should_insert_requested_chat_model_not_in_department_list() {
         let app_config = AppConfig {
             api_configs: vec![test_chat_api("text-a", false), test_chat_api("vision-b", true)],
+            api_providers: Vec::new(),
             ..AppConfig::default()
         };
         let mut candidate_api_ids = vec!["text-a".to_string()];
@@ -2410,6 +2412,7 @@ mod core_send_inner_tests {
         embedding_api.request_format = RequestFormat::OpenAIEmbedding;
         let app_config = AppConfig {
             api_configs: vec![test_chat_api("text-a", false), embedding_api],
+            api_providers: Vec::new(),
             ..AppConfig::default()
         };
         let mut candidate_api_ids = vec!["text-a".to_string()];

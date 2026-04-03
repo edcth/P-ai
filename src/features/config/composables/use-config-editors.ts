@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from "vue";
-import type { ApiConfigItem, AppConfig, PersonaProfile } from "../../../types/app";
+import type { ApiConfigItem, ApiProviderConfigItem, AppConfig, PersonaProfile } from "../../../types/app";
 import { defaultToolBindings } from "../utils/builtin-tools";
 
 type TrFn = (key: string, params?: Record<string, unknown>) => string;
@@ -13,25 +13,31 @@ type UseConfigEditorsOptions = {
   personaEditorId: Ref<string>;
   selectedPersonaEditor: ComputedRef<PersonaProfile | null>;
   createApiConfig: (seed?: string) => ApiConfigItem;
+  createApiProvider: (seed?: string) => ApiProviderConfigItem;
   normalizeApiBindingsLocal: () => void;
 };
 
 export function useConfigEditors(options: UseConfigEditorsOptions) {
   function addApiConfig() {
-    const c = options.createApiConfig();
-    options.config.apiConfigs.push(c);
-    options.config.selectedApiConfigId = c.id;
+    const provider = options.createApiProvider();
+    options.config.apiProviders.push(provider);
     options.normalizeApiBindingsLocal();
+    options.config.selectedApiConfigId = `${provider.id}::${provider.models[0]?.id || ""}`;
   }
 
   function removeSelectedApiConfig() {
-    if (options.config.apiConfigs.length <= 1) return;
-    const idx = options.config.apiConfigs.findIndex(
-      (a) => a.id === options.config.selectedApiConfigId,
-    );
-    if (idx < 0) return;
-    const removedId = options.config.apiConfigs[idx].id;
-    options.config.apiConfigs.splice(idx, 1);
+    if (options.config.apiProviders.length <= 1) return;
+    const [providerId, modelId] = String(options.config.selectedApiConfigId || "").split("::");
+    if (!providerId) return;
+    const providerIdx = options.config.apiProviders.findIndex((item) => item.id === providerId);
+    if (providerIdx < 0) return;
+    const provider = options.config.apiProviders[providerIdx];
+    const removedId = String(options.config.selectedApiConfigId || "").trim();
+    if (modelId && provider.models.length > 1) {
+      provider.models = provider.models.filter((item) => item.id !== modelId);
+    } else {
+      options.config.apiProviders.splice(providerIdx, 1);
+    }
     for (const department of options.config.departments || []) {
       const nextIds = (Array.isArray(department.apiConfigIds) ? department.apiConfigIds : [])
         .map((id) => String(id || "").trim())
@@ -51,10 +57,13 @@ export function useConfigEditors(options: UseConfigEditorsOptions) {
     if (options.config.visionApiConfigId === removedId) {
       options.config.visionApiConfigId = undefined;
     }
-    if (options.config.apiConfigs.length > 0) {
-      options.config.selectedApiConfigId = options.config.apiConfigs[0].id;
-    }
     options.normalizeApiBindingsLocal();
+    if (options.config.apiProviders.length > 0) {
+      const provider = options.config.apiProviders[0];
+      const modelId = Array.isArray(provider.models) ? String(provider.models[0]?.id || "").trim() : "";
+      const providerId = String(provider.id || "").trim();
+      options.config.selectedApiConfigId = providerId && modelId ? `${providerId}::${modelId}` : "";
+    }
   }
 
   function addPersona() {

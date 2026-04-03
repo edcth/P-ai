@@ -1,309 +1,297 @@
 <template>
-  <div v-if="props.selectedApiConfig" class="grid gap-3">
-    <!-- 能力分组与LLM配置 -->
-    <div class="card border border-base-300 bg-base-100">
-      <div class="card-body p-4">
-        <div class="flex flex-col gap-3">
-          <div class="flex w-full flex-col gap-1">
-            <div class="flex items-center justify-between py-1">
-              <span class="text-sm font-medium">能力分组</span>
-            </div>
-            <div class="join w-full">
-              <button
-                v-for="tab in capabilityTabs"
-                :key="tab.id"
-                class="btn btn-sm join-item flex-1"
-                :class="activeCapability === tab.id ? 'btn-primary' : 'bg-base-200'"
-                @click="switchCapabilityTab(tab.id)"
-              >
-                {{ tab.label }}
-              </button>
-            </div>
-          </div>
+  <div class="relative flex h-full min-h-0 flex-col gap-3">
+    <div class="shrink-0 px-4 pt-4">
+      <div class="flex flex-col gap-3">
+        <div class="join w-full">
+          <button v-for="tab in capabilityTabs" :key="tab.id" class="btn btn-sm join-item flex-1" type="button"
+            :class="activeCapability === tab.id ? 'btn-primary' : 'bg-base-100'" @click="switchCapabilityTab(tab.id)">
+            {{ tab.label }}
+          </button>
+        </div>
 
-          <label class="flex w-full flex-col gap-1">
-            <div class="flex items-center justify-between py-1">
-              <span class="text-sm font-medium">LLM配置</span>
-            </div>
-            <div class="flex w-full min-w-0 gap-1">
-              <select
-                :value="activeCapabilitySelectedId"
-                class="select select-bordered select-sm min-w-0 flex-1"
-                @change="switchCapabilityConfig"
-              >
-                <option v-for="a in capabilityScopedConfigsWithFallback" :key="a.id" :value="a.id">{{ a.name }}</option>
-              </select>
-              <button class="btn btn-sm btn-square bg-base-200" :title="t('config.api.addConfig')" @click="handleAddApiConfig">
-                <Plus class="h-3.5 w-3.5" />
-              </button>
-              <button class="btn btn-sm btn-square bg-base-200" :title="t('config.api.removeConfig')" :disabled="props.config.apiConfigs.length <= 1" @click="$emit('removeSelectedApiConfig')">
-                <Trash2 class="h-3.5 w-3.5" />
-              </button>
-              <button
-                class="btn btn-sm btn-square"
-                :class="props.configDirty ? 'btn-primary' : 'bg-base-200'"
-                :disabled="!props.configDirty || props.savingConfig"
-                :title="props.savingConfig ? t('config.api.saving') : props.configDirty ? t('config.api.saveConfig') : t('config.api.saved')"
-                @click="handleSaveApiConfig"
-              >
-                <Save v-if="!props.savingConfig" class="h-3.5 w-3.5" />
-                <span v-else class="loading loading-spinner loading-sm"></span>
-              </button>
-            </div>
-          </label>
+        <div class="flex items-center gap-2">
+          <button class="btn btn-sm btn-square btn-primary shrink-0" type="button" title="新增供应商"
+            @click="addProvider()">
+            <Plus class="h-4 w-4" />
+          </button>
+          <button class="btn btn-sm btn-square shrink-0"
+            :class="scopedProviderList.length <= 1 ? 'btn-disabled bg-base-200 text-base-content/30' : 'btn-error'"
+            type="button" title="删除当前供应商" :disabled="scopedProviderList.length <= 1"
+            @click="removeProvider(selectedProviderId)">
+            <Trash2 class="h-4 w-4" />
+          </button>
+          <select :value="selectedProviderId" class="select select-bordered select-md flex-1"
+          @change="handleProviderChange($event)">
+          <option v-for="provider in scopedProviderList" :key="provider.id" :value="provider.id">
+            {{ provider.name || provider.id }}（{{ provider.requestFormat }}）
+          </option>
+          </select>
+          <button class="api-save-btn btn btn-sm btn-square shrink-0 transition-all duration-300"
+            :class="currentProviderDirty
+              ? 'btn-success api-save-btn--dirty'
+              : 'bg-base-200 text-base-content/50 shadow-none'" type="button"
+            :title="props.savingConfig ? t('config.api.saving') : currentProviderDirty ? '保存配置' : '已保存'"
+            :disabled="!currentProviderDirty || props.savingConfig" @click="handleSaveApiConfig">
+            <Save v-if="!props.savingConfig" class="h-4 w-4" />
+            <span v-else class="loading loading-spinner loading-sm"></span>
+          </button>
         </div>
       </div>
     </div>
 
-    <!-- API 配置详情 -->
-    <div class="card border border-base-300 bg-base-100">
-      <div class="card-body p-4">
-        <div class="flex flex-col gap-3">
-          <div class="flex w-full items-center gap-2">
-            <span class="w-24 shrink-0 text-sm font-medium">{{ t("config.api.configName") }}</span>
-            <input v-model="props.selectedApiConfig.name" class="input input-bordered input-sm min-w-0 flex-1" :placeholder="t('config.api.configName')" />
-          </div>
-
-          <div class="flex w-full items-center gap-2">
-            <span class="w-24 shrink-0 text-sm font-medium">{{ t("config.api.requestFormat") }}</span>
-            <select v-model="props.selectedApiConfig.requestFormat" class="select select-bordered select-sm min-w-0 flex-1">
-              <option v-for="item in currentProtocolOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
-          </div>
-
-          <div class="flex w-full flex-col gap-1">
-            <div class="flex w-full items-center gap-2">
-              <span class="w-24 shrink-0 text-sm font-medium">{{ t("config.api.baseUrl") }}</span>
-              <div class="flex min-w-0 flex-1 gap-1">
-                <input v-model="props.selectedApiConfig.baseUrl" class="input input-bordered input-sm min-w-0 flex-1" :placeholder="props.baseUrlReference" />
-                <button class="btn btn-sm btn-square bg-base-200" :title="t('config.api.linkHelper')" @click="baseUrlHelperOpen = !baseUrlHelperOpen">
-                  <WandSparkles class="h-3.5 w-3.5" />
-                </button>
-              </div>
+    <div class="min-h-0 flex-1 overflow-y-auto pb-24">
+      <div v-if="selectedProvider" class="grid gap-3 pr-1">
+        <div class="card bg-base-100 border border-base-300">
+          <div class="card-body gap-3 p-4">
+            <div class="flex items-center justify-between gap-2">
+              <div class="card-title text-base mb-0">供应商设置</div>
             </div>
-            <div v-if="baseUrlHelperOpen" class="mt-1 rounded-box border border-base-300 bg-base-100 p-2">
-              <div class="mb-2 text-sm opacity-70">{{ t("config.api.linkHelperHint") }}</div>
-              <div class="flex flex-wrap gap-1">
-                <div v-for="preset in filteredProviderPresets" :key="preset.id" class="join rounded-btn shadow-sm">
-                  <button
-                    class="btn btn-sm join-item relative overflow-visible"
-                    :class="selectedProviderId === preset.id ? 'btn-primary' : 'bg-base-200'"
-                    @click="selectedProviderId = preset.id"
-                  >
-                    <span
-                      v-if="preset.hasFreeQuota"
-                      class="badge badge-secondary badge-sm absolute -top-2 left-1 text-[9px] leading-none"
-                    >
-                      {{ t("config.api.freeBadge") }}
-                    </span>
-                    <span>{{ preset.name }}</span>
-                  </button>
-                  <button
-                    class="btn btn-sm btn-neutral join-item"
-                    :title="t('config.api.openProviderSite')"
-                    @click="openProviderSite(preset)"
-                  >
-                    <ExternalLink class="h-3 w-3" />
-                  </button>
-                </div>
-              </div>
-              <label class="mt-2 flex w-full flex-col gap-1">
-                <div class="flex items-center justify-between py-0">
-                  <span class="text-sm">{{ t("config.api.generatedLink") }}</span>
-                </div>
-                <div class="flex w-full min-w-0 gap-1">
-                  <input :value="generatedBaseUrl" class="input input-bordered input-sm min-w-0 flex-1" readonly />
-                  <button class="btn btn-sm btn-primary" :disabled="!generatedBaseUrl" @click="applyGeneratedBaseUrl">
-                    <Link class="h-3 w-3" />
-                    <span>{{ t("config.api.fillBaseUrl") }}</span>
-                  </button>
-                </div>
+
+            <div class="grid gap-3 md:grid-cols-2">
+              <label class="flex flex-col gap-1">
+                <span class="text-sm font-medium">{{ t("config.api.configName") }}</span>
+                <input v-model="selectedProvider.name" class="input input-bordered input-sm" placeholder="供应商名称" />
+              </label>
+
+              <label class="flex flex-col gap-1">
+                <span class="text-sm font-medium">{{ t("config.api.requestFormat") }}</span>
+                <select v-model="selectedProvider.requestFormat" class="select select-bordered select-sm"
+                  @change="handleRequestFormatChange($event)">
+                  <option v-for="item in protocolOptions" :key="item.value" :value="item.value">{{ item.label }}
+                  </option>
+                </select>
               </label>
             </div>
-          </div>
 
-          <div class="flex w-full items-center gap-2">
-            <span class="w-24 shrink-0 text-sm font-medium">API Key</span>
-            <div class="flex min-w-0 flex-1 gap-1">
-              <input
-                v-model="props.selectedApiConfig.apiKey"
-                :type="showApiKey ? 'text' : 'password'"
-                class="input input-bordered input-sm min-w-0 flex-1"
-                placeholder="api key"
-              />
-              <button
-                class="btn btn-sm btn-square bg-base-200"
-                type="button"
-                :title="showApiKey ? t('config.api.hideApiKey') : t('config.api.showApiKey')"
-                @click="showApiKey = !showApiKey"
-              >
-                <EyeOff v-if="showApiKey" class="h-3.5 w-3.5" />
-                <Eye v-else class="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-
-          <div class="flex w-full flex-col gap-1">
-            <div class="flex w-full items-center gap-2">
-              <span class="w-24 shrink-0 text-sm font-medium">{{ t("config.api.model") }}</span>
-              <div class="flex min-w-0 flex-1 gap-1">
-                <input v-model="props.selectedApiConfig.model" class="input input-bordered input-sm min-w-0 flex-1" placeholder="model" />
-                <div v-if="isTextMode" ref="modelPickerRef" class="dropdown dropdown-end" :class="{ 'dropdown-open': modelPickerOpen }">
-                  <button
-                    type="button"
-                    class="btn btn-sm btn-square"
-                    :class="props.modelRefreshOk ? 'btn-primary' : 'bg-base-200'"
-                    :disabled="props.modelOptions.length === 0"
-                    :title="t('config.api.pickModel')"
-                    @click.stop="toggleModelPicker"
-                  >
-                    <ChevronsUpDown class="h-3.5 w-3.5" />
-                  </button>
-                  <div v-if="modelPickerOpen" class="dropdown-content z-1 flex max-h-72 min-w-70 flex-col overflow-hidden rounded-box bg-base-100 shadow" @click.stop>
-                    <input
-                      v-model="modelSearch"
-                      type="text"
-                      :placeholder="t('config.api.searchModel')"
-                      class="input input-bordered input-sm h-8 min-h-8 w-full rounded-none border-x-0 border-t-0 focus:outline-none"
-                      @click.stop
-                      @keydown.esc.stop.prevent="closeModelPicker()"
-                    />
-                    <ul class="menu flex-1 flex-col flex-nowrap overflow-auto p-1">
-                      <li v-for="modelName in filteredModels" :key="modelName">
-                        <button class="wrap-break-word whitespace-normal text-left" @click="selectModel(modelName)">{{ modelName }}</button>
-                      </li>
-                      <li v-if="filteredModels.length === 0" class="py-2 text-center text-sm opacity-50">{{ t("config.api.noModelFound") }}</li>
-                    </ul>
-                  </div>
-                </div>
-                <button v-if="isTextMode" class="btn btn-sm btn-square bg-base-200" :class="{ loading: props.refreshingModels }" :disabled="props.refreshingModels" :title="t('config.api.refreshModels')" @click="$emit('refreshModels')">
-                  <RefreshCw class="h-3.5 w-3.5" />
+            <div class="flex flex-col gap-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium">{{ t("config.api.baseUrl") }}</span>
+                <button class="btn btn-xs bg-base-200" type="button" @click="baseUrlHelperOpen = !baseUrlHelperOpen">
+                  <WandSparkles class="h-3 w-3" />
+                  <span>{{ t("config.api.linkHelper") }}</span>
                 </button>
               </div>
-            </div>
-            <div class="flex w-full items-center justify-between pl-26">
-              <span class="min-h-4 text-[11px] text-error">{{ props.modelRefreshError || " " }}</span>
-            </div>
-            <div v-if="modelControlsLocked" class="pl-26 text-[11px] text-warning">
-              {{ t("config.api.saveModelFirstHint") }}
+              <input v-model="selectedProvider.baseUrl" class="input input-bordered input-sm"
+                :placeholder="props.baseUrlReference" />
+              <div v-if="baseUrlHelperOpen" class="rounded-box border border-base-300 bg-base-200/50 p-3">
+                <div class="mb-2 text-xs opacity-70">{{ t("config.api.linkHelperHint") }}</div>
+                <div class="flex flex-wrap gap-1">
+                  <div v-for="preset in filteredProviderPresets" :key="preset.id" class="join rounded-btn shadow-sm">
+                    <button class="btn btn-sm join-item"
+                      :class="selectedPresetId === preset.id ? 'btn-primary' : 'bg-base-100'" type="button"
+                      @click="applyGeneratedBaseUrl(preset.id)">
+                      {{ preset.name }}
+                    </button>
+                    <button class="btn btn-sm btn-neutral join-item" type="button" @click="openProviderSite(preset)">
+                      <ExternalLink class="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+        </div>
 
-          <div v-if="isTextMode" class="flex w-full items-center gap-2">
-            <span class="w-24 shrink-0 text-sm font-medium">{{ t("config.api.temperature") }}</span>
-            <div class="min-w-0 flex-1">
-              <div class="mb-1 flex items-center justify-end">
-                <span class="text-sm opacity-70">{{ Number(props.selectedApiConfig.temperature ?? 1).toFixed(1) }}</span>
+          <div class="card bg-base-100 border border-base-300">
+            <div class="card-body gap-3 p-4">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <div class="card-title text-base mb-1">API Key 池</div>
+                  <div class="text-xs opacity-60">同一供应商下所有模型共享轮询池，每次调用后游标 +1。</div>
+                </div>
+                <button class="btn btn-sm bg-base-200" type="button" @click="addApiKey">
+                  <Plus class="h-3.5 w-3.5" />
+                  <span>新增 Key</span>
+                </button>
               </div>
-              <input
-                v-model.number="props.selectedApiConfig.temperature"
-                :disabled="modelControlsLocked || !props.selectedApiConfig.customTemperatureEnabled"
-                type="range"
-                min="0"
-                max="2"
-                step="0.1"
-                class="range range-sm w-full"
-              />
-              <div class="mt-1 flex justify-between text-[10px] opacity-60">
-                <span>0.0</span>
-                <span>1.0</span>
-                <span>2.0</span>
-              </div>
-            </div>
-            <input
-              v-model="props.selectedApiConfig.customTemperatureEnabled"
-              :disabled="modelControlsLocked"
-              type="checkbox"
-              class="checkbox checkbox-sm shrink-0"
-            />
-          </div>
 
-          <div v-if="isTextMode" class="flex w-full items-center gap-2">
-            <span class="w-24 shrink-0 text-sm font-medium">{{ t("config.api.contextWindow") }}</span>
-            <div class="min-w-0 flex-1">
-              <div class="mb-1 flex items-center justify-end">
-                <span class="text-sm opacity-70">{{ Math.round(Number(props.selectedApiConfig.contextWindowTokens ?? 128000)) }}</span>
-              </div>
-              <input
-                v-model.number="props.selectedApiConfig.contextWindowTokens"
-                :disabled="modelControlsLocked"
-                type="range"
-                min="16000"
-                :max="contextWindowMax"
-                step="1000"
-                class="range range-sm w-full"
-              />
-              <div class="mt-1 flex justify-between text-[10px] opacity-60">
-                <span>16K</span>
-                <span>{{ contextWindowMidLabel }}</span>
-                <span>{{ contextWindowMaxLabel }}</span>
+              <div class="grid gap-2">
+                <div v-for="(apiKey, index) in selectedProvider.apiKeys" :key="`key-${selectedProvider.id}-${index}`"
+                  class="flex items-center gap-2">
+                  <input v-model="selectedProvider.apiKeys[index]"
+                    :type="showApiKeys[selectedProvider.id]?.[index] ? 'text' : 'password'"
+                    class="input input-bordered input-sm flex-1" :placeholder="`API Key #${index + 1}`" />
+                  <button class="btn btn-sm btn-square bg-base-200" type="button"
+                    @click="toggleApiKeyVisible(selectedProvider.id, index)">
+                    <EyeOff v-if="showApiKeys[selectedProvider.id]?.[index]" class="h-3.5 w-3.5" />
+                    <Eye v-else class="h-3.5 w-3.5" />
+                  </button>
+                  <button class="btn btn-sm btn-square bg-base-200 text-error" type="button"
+                    :disabled="selectedProvider.apiKeys.length <= 1" @click="removeApiKey(index)">
+                    <Trash2 class="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div v-if="selectedProvider.apiKeys.length === 0"
+                  class="rounded-box border border-dashed border-base-300 px-3 py-3 text-sm opacity-60">
+                  还没有 API Key，点击“新增 Key”开始配置。
+                </div>
               </div>
             </div>
           </div>
 
-          <div v-if="isTextMode" class="flex w-full items-center gap-2">
-            <span class="w-24 shrink-0 text-sm font-medium">{{ t("config.api.maxOutputTokens") }}</span>
-            <div class="min-w-0 flex-1">
-              <div class="mb-1 flex items-center justify-end">
-                <span class="text-sm opacity-70">{{ selectedMaxOutputTokens }}</span>
+          <div class="card bg-base-100 border border-base-300">
+            <div class="card-body gap-3 p-4">
+              <div class="flex items-center justify-between gap-2">
+                <div>
+                  <div class="card-title text-base mb-1">模型卡片</div>
+                  <div class="text-xs opacity-60">支持手填模型名，也支持从刷新结果里点选辅助填入。</div>
+                </div>
+                <div class="flex gap-2">
+                  <button class="btn btn-sm bg-base-200" type="button" :class="{ loading: props.refreshingModels }"
+                    :disabled="props.refreshingModels" @click="$emit('refreshModels')">
+                    <RefreshCw class="h-3.5 w-3.5" />
+                    <span>{{ t("config.api.refreshModels") }}</span>
+                  </button>
+                  <button class="btn btn-sm bg-base-200" type="button" @click="addModelCard">
+                    <Plus class="h-3.5 w-3.5" />
+                    <span>新增模型</span>
+                  </button>
+                </div>
               </div>
-              <input
-                v-model.number="props.selectedApiConfig.maxOutputTokens"
-                :disabled="modelControlsLocked || !maxOutputTokensEnabled"
-                type="range"
-                min="256"
-                :max="maxOutputTokensMax"
-                step="256"
-                class="range range-sm w-full"
-              />
-              <div class="mt-1 flex justify-between text-[10px] opacity-60">
-                <span>256</span>
-                <span>{{ maxOutputTokensMidLabel }}</span>
-                <span>{{ maxOutputTokensMaxLabel }}</span>
+
+              <div class="text-[11px] text-error">{{ props.modelRefreshError || " " }}</div>
+
+              <div class="grid gap-3">
+                <div v-for="modelCard in selectedProvider.models" :key="modelCard.id"
+                  class="card border border-base-300 bg-base-200/50 transition"
+                  :class="selectedModel?.id === modelCard.id ? '' : ''">
+                  <div class="card-body gap-3 p-4">
+                    <div class="flex items-start justify-between gap-2">
+                      <button class="min-w-0 flex-1 text-left" type="button" @click="selectModelCard(modelCard.id)">
+                        <div class="card-title text-base mb-1">{{ `${selectedProvider.name ||
+                          selectedProvider.id}/${modelCard.model || "未命名模型"}` }}</div>
+                      </button>
+                      <button class="btn btn-sm btn-square btn-ghost" type="button"
+                        :class="selectedProvider.models.length <= 1 ? 'text-base-content/30' : 'text-error'"
+                        :disabled="selectedProvider.models.length <= 1" @click="removeModelCard(modelCard.id)">
+                        <Trash2 class="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div class="grid gap-3">
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm font-medium">{{ t("config.api.model") }}</span>
+                        <div class="join">
+                          <input v-model="modelCard.model" class="input input-bordered input-sm join-item flex-1"
+                            placeholder="model" @focus="selectModelCard(modelCard.id)"
+                            @blur="void syncModelMetadata(modelCard)"
+                            @keydown.enter.prevent="void syncModelMetadata(modelCard)" />
+                          <button class="btn btn-sm join-item bg-base-200" type="button"
+                            :disabled="providerModelOptions.length === 0" @click="openModelPicker(modelCard.id)">
+                            <ChevronsUpDown class="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div v-if="activeCapability === 'text'" class="grid gap-2 md:grid-cols-2">
+                      <label
+                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-200 px-3 py-2">
+                        <span class="text-sm">{{ t("config.api.capImage") }}</span>
+                        <input v-model="modelCard.enableImage" type="checkbox" class="toggle toggle-sm" />
+                      </label>
+                      <label
+                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-200 px-3 py-2">
+                        <span class="text-sm">{{ t("config.api.capTools") }}</span>
+                        <input v-model="modelCard.enableTools" type="checkbox" class="toggle toggle-sm" />
+                      </label>
+                    </div>
+
+                    <div v-if="activeModelPickerId === modelCard.id"
+                      class="rounded-box border border-base-300 bg-base-200/50 p-3">
+                      <input v-model="modelSearch" class="input input-bordered input-sm mb-2 w-full"
+                        :placeholder="t('config.api.searchModel')" @keydown.esc.stop.prevent="closeModelPicker" />
+                      <div class="max-h-48 overflow-auto">
+                        <button v-for="option in filteredModels" :key="`${modelCard.id}-${option}`"
+                          class="btn btn-ghost btn-sm mb-1 mr-1" type="button"
+                          @click="selectModelOption(modelCard, option)">
+                          {{ option }}
+                        </button>
+                        <div v-if="filteredModels.length === 0" class="px-2 py-3 text-sm opacity-50">{{
+                          t("config.api.noModelFound") }}</div>
+                      </div>
+                    </div>
+
+                    <div v-if="activeCapability === 'text'" class="grid gap-3">
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm font-medium">{{ t("config.api.temperature") }}</span>
+                        <div class="flex items-center gap-2">
+                          <input :value="modelCard.temperature"
+                            @input="modelCard.temperature = Number(($event.target as HTMLInputElement).value)"
+                            type="range" min="0" max="2" step="0.1" class="range range-sm flex-1"
+                            :disabled="!modelCard.customTemperatureEnabled" />
+                          <span class="text-xs font-mono w-8 text-right">{{ modelCard.temperature.toFixed(1) }}</span>
+                          <label class="flex items-center text-xs opacity-70">
+                            <input v-model="modelCard.customTemperatureEnabled" type="checkbox"
+                              class="checkbox checkbox-sm" :aria-label="t('config.api.useCustomTemperature')"
+                              :title="t('config.api.useCustomTemperature')" />
+                          </label>
+                        </div>
+                      </label>
+
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm font-medium">{{ t("config.api.contextWindow") }}</span>
+                        <div class="flex items-center gap-2">
+                          <input :value="modelCard.contextWindowTokens"
+                            @input="modelCard.contextWindowTokens = Number(($event.target as HTMLInputElement).value)"
+                            type="range" :min="SLIDER_CONTEXT_MIN" :max="contextWindowMax(modelCard)" step="1000"
+                            class="range range-sm flex-1" />
+                          <span class="text-xs font-mono w-24 text-right">{{
+                            Number(modelCard.contextWindowTokens).toLocaleString() }}</span>
+                        </div>
+                      </label>
+
+                      <label class="flex flex-col gap-1">
+                        <span class="text-sm font-medium">{{ t("config.api.maxOutputTokens") }}</span>
+                        <div class="flex items-center gap-2">
+                          <input :value="modelCard.maxOutputTokens"
+                            @input="modelCard.maxOutputTokens = Number(($event.target as HTMLInputElement).value)"
+                            type="range" min="256" :max="maxOutputTokensMax(modelCard)" step="256"
+                            class="range range-sm flex-1" :disabled="!modelCard.customMaxOutputTokensEnabled" />
+                          <span class="text-xs font-mono w-24 text-right">{{
+                            Number(modelCard.maxOutputTokens).toLocaleString() }}</span>
+                          <label class="flex items-center text-xs opacity-70">
+                            <input v-model="modelCard.customMaxOutputTokensEnabled" type="checkbox"
+                              class="checkbox checkbox-sm" :aria-label="t('config.api.useCustomMaxOutputTokens')"
+                              :title="t('config.api.useCustomMaxOutputTokens')" />
+                          </label>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-            <input
-              v-model="props.selectedApiConfig.customMaxOutputTokensEnabled"
-              :disabled="modelControlsLocked || maxOutputTokensToggleLocked"
-              type="checkbox"
-              class="checkbox checkbox-sm shrink-0"
-            />
           </div>
         </div>
       </div>
     </div>
-
-    <!-- 能力配置 -->
-    <div v-if="isTextMode" class="card border border-base-300 bg-base-100">
-      <div class="card-body p-4">
-        <h3 class="card-title mb-3 text-base">{{ t("config.api.capabilities") }}</h3>
-        <div class="flex w-full gap-2">
-          <label class="flex flex-1 cursor-pointer items-center justify-between rounded-md border border-base-300 bg-base-200 px-2 py-1">
-            <span class="text-sm">{{ t("config.api.capImage") }}</span>
-            <input v-model="props.selectedApiConfig.enableImage" :disabled="modelControlsLocked || !imageToggleAvailable" type="checkbox" class="toggle toggle-sm" />
-          </label>
-          <label class="flex flex-1 cursor-pointer items-center justify-between rounded-md border border-base-300 bg-base-200 px-2 py-1">
-            <span class="text-sm">{{ t("config.api.capTools") }}</span>
-            <input v-model="props.selectedApiConfig.enableTools" :disabled="modelControlsLocked || !toolsToggleAvailable" type="checkbox" class="toggle toggle-sm" />
-          </label>
-        </div>
-        <div v-if="!imageToggleAvailable || !toolsToggleAvailable" class="mt-2 text-[11px] opacity-70">
-          {{ t("config.api.capabilityLimitedByModelHint") }}
+    <dialog class="modal" :class="{ 'modal-open': providerDeleteDialogOpen }">
+      <div class="modal-box max-w-sm">
+        <h3 class="text-lg font-semibold">{{ t("config.api.deleteProviderTitle") }}</h3>
+        <p class="py-3 text-sm opacity-80">{{ t("config.api.deleteProviderConfirm", { name: pendingDeleteProviderName }) }}</p>
+        <div class="modal-action">
+          <button class="btn btn-ghost" type="button" @click="closeDeleteProviderDialog">
+            {{ t("common.cancel") }}
+          </button>
+          <button class="btn btn-error" type="button" @click="confirmDeleteProvider">
+            {{ t("common.confirm") }}
+          </button>
         </div>
       </div>
-    </div>
-  </div>
+      <form method="dialog" class="modal-backdrop" @submit.prevent="closeDeleteProviderDialog">
+        <button type="submit">close</button>
+      </form>
+    </dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { ChevronsUpDown, ExternalLink, Eye, EyeOff, Link, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
-import type { ApiConfigItem, ApiRequestFormat, AppConfig } from "../../../../types/app";
+import type { ApiModelConfigItem, ApiProviderConfigItem, ApiRequestFormat, AppConfig } from "../../../../types/app";
 import { invokeTauri } from "../../../../services/tauri-api";
 
 type ApiCapability = "text" | "voice" | "embedding";
-
 type ProviderPreset = {
   id: string;
   name: string;
@@ -313,51 +301,7 @@ type ProviderPreset = {
 };
 
 type ProtocolOption = { value: ApiRequestFormat; label: string };
-
-const props = defineProps<{
-  config: AppConfig;
-  selectedApiConfig: ApiConfigItem | null;
-  baseUrlReference: string;
-  refreshingModels: boolean;
-  modelOptions: string[];
-  modelRefreshOk: boolean;
-  modelRefreshError: string;
-  configDirty: boolean;
-  savingConfig: boolean;
-  saveApiConfigAction: () => Promise<boolean> | boolean;
-}>();
-
-const emit = defineEmits<{
-  (e: "saveApiConfig"): void;
-  (e: "addApiConfig"): void;
-  (e: "removeSelectedApiConfig"): void;
-  (e: "refreshModels"): void;
-  (e: "configSwitched"): void;
-}>();
-
-const { t } = useI18n();
-const CONTEXT_WINDOW_DEFAULT_MAX = 200000;
-const CONTEXT_WINDOW_HARD_MAX = 2000000;
-const baseUrlHelperOpen = ref(false);
-const showApiKey = ref(false);
-const selectedProviderId = ref("openai-official");
-const modelSearch = ref("");
-const modelPickerOpen = ref(false);
-const modelPickerRef = ref<HTMLElement | null>(null);
-const activeCapability = ref<ApiCapability>("text");
-const creatingCapabilityDefault = ref(false);
-const applyingModelMetadata = ref(false);
-const savedModelSignatureByApiId = ref<Record<string, string>>({});
-const metadataModelSignatureByApiId = ref<Record<string, string>>({});
-const modelCapabilityByApiId = ref<Record<string, {
-  contextWindowMax?: number;
-  maxOutputTokensMax?: number;
-  enableImage?: boolean;
-  enableTools?: boolean;
-  enableAudio?: boolean;
-}>>({});
-
-type FetchModelMetadataOutput = {
+type FetchModelMetadataResult = {
   found: boolean;
   matchedModelId?: string | null;
   contextWindowTokens?: number | null;
@@ -366,13 +310,46 @@ type FetchModelMetadataOutput = {
   enableTools?: boolean | null;
   enableAudio?: boolean | null;
 };
+type ModelCapabilityLimits = {
+  contextWindowMax?: number;
+  maxOutputTokensMax?: number;
+};
 
+const SLIDER_CONTEXT_MIN = 16_000;
+
+const props = defineProps<{
+  config: AppConfig;
+  baseUrlReference: string;
+  refreshingModels: boolean;
+  modelOptions: string[];
+  modelRefreshOk: boolean;
+  modelRefreshError: string;
+  configDirty: boolean;
+  savingConfig: boolean;
+  saveApiConfigAction: () => Promise<boolean> | boolean;
+  normalizeApiBindingsAction: () => void;
+  lastSavedConfigJson: string;
+}>();
+
+const emit = defineEmits<{
+  (e: "refreshModels"): void;
+}>();
+
+const { t } = useI18n();
+const baseUrlHelperOpen = ref(false);
+const selectedPresetId = ref("openai-official");
+const activeModelPickerId = ref("");
+const modelSearch = ref("");
+const providerDeleteDialogOpen = ref(false);
+const pendingDeleteProviderId = ref("");
+const pendingDeleteProviderName = ref("");
+const showApiKeys = ref<Record<string, Record<number, boolean>>>({});
+const modelCapabilityById = ref<Record<string, ModelCapabilityLimits>>({});
 const capabilityTabs: Array<{ id: ApiCapability; label: string }> = [
   { id: "text", label: "文本" },
-  { id: "voice", label: "语音（朗读/转写）" },
-  { id: "embedding", label: "嵌入（嵌入/重排）" },
+  { id: "voice", label: "语音" },
+  { id: "embedding", label: "向量" },
 ];
-
 const protocolOptionsByCapability: Record<ApiCapability, ProtocolOption[]> = {
   text: [
     { value: "openai", label: "OpenAI Compatible" },
@@ -390,304 +367,24 @@ const protocolOptionsByCapability: Record<ApiCapability, ProtocolOption[]> = {
     { value: "openai_rerank", label: "OpenAI Rerank" },
   ],
 };
-
 const capabilityDefaultProtocol: Record<ApiCapability, ApiRequestFormat> = {
   text: "openai",
   voice: "openai_stt",
   embedding: "openai_embedding",
 };
 
-function capabilityFromConfig(config: ApiConfigItem): ApiCapability {
-  const format = config.requestFormat;
-  const normalized = String(format || "").trim().toLowerCase();
-  if (
-    normalized === "openai_stt"
-    || normalized === "openai_tts"
-    || normalized === "openai-stt"
-    || normalized === "openai-tts"
-    || normalized === "stt"
-    || normalized === "tts"
-  ) {
-    return "voice";
-  }
-  if (
-    normalized === "openai_embedding"
-    || normalized === "gemini_embedding"
-    || normalized === "openai_rerank"
-    || normalized === "openai-embedding"
-    || normalized === "openai-rerank"
-    || normalized === "embedding"
-    || normalized === "rerank"
-  ) {
-    return "embedding";
-  }
-  return "text";
-}
-
-const currentProtocol = computed<ApiRequestFormat>(() => props.selectedApiConfig?.requestFormat || "openai");
-const isTextMode = computed(() => activeCapability.value === "text");
-const selectedApiId = computed(() => String(props.selectedApiConfig?.id || "").trim());
-const selectedModelSignature = computed(() => {
-  const cfg = props.selectedApiConfig;
-  if (!cfg) return "";
-  return `${String(cfg.model || "").trim()}`;
-});
-const modelChangedButUnsaved = computed(() => {
-  const id = selectedApiId.value;
-  if (!id || !isTextMode.value) return false;
-  const savedSignature = savedModelSignatureByApiId.value[id];
-  if (savedSignature === undefined) return false;
-  return selectedModelSignature.value !== savedSignature;
-});
-const modelControlsLocked = computed(() => isTextMode.value && (modelChangedButUnsaved.value || applyingModelMetadata.value));
-const selectedModelCapability = computed(() => {
-  const id = selectedApiId.value;
-  if (!id) return null;
-  return modelCapabilityByApiId.value[id] ?? null;
-});
-const contextWindowMax = computed(() => {
-  const raw = Number(selectedModelCapability.value?.contextWindowMax ?? CONTEXT_WINDOW_DEFAULT_MAX);
-  if (!Number.isFinite(raw)) return CONTEXT_WINDOW_DEFAULT_MAX;
-  return Math.max(16000, Math.min(CONTEXT_WINDOW_HARD_MAX, Math.round(raw)));
-});
-const maxOutputTokensMax = computed(() => {
-  const raw = Number(selectedModelCapability.value?.maxOutputTokensMax ?? 32768);
-  if (!Number.isFinite(raw)) return 32768;
-  return Math.max(256, Math.min(32768, Math.round(raw)));
-});
-const contextWindowMaxLabel = computed(() => `${Math.round(contextWindowMax.value / 1000)}K`);
-const contextWindowMidLabel = computed(() => formatTokenLabel(Math.round(((16000 + contextWindowMax.value) / 2) / 1000) * 1000));
-const maxOutputTokensMaxLabel = computed(() => `${Math.round(maxOutputTokensMax.value / 1000)}K`);
-const maxOutputTokensMidLabel = computed(() => formatTokenLabel(Math.round(((256 + maxOutputTokensMax.value) / 2) / 256) * 256));
-const maxOutputTokensToggleLocked = computed(() => currentProtocol.value === "anthropic");
-const maxOutputTokensEnabled = computed(() => maxOutputTokensToggleLocked.value || !!props.selectedApiConfig?.customMaxOutputTokensEnabled);
-const selectedMaxOutputTokens = computed(() => {
-  const raw = Number(props.selectedApiConfig?.maxOutputTokens);
-  if (!Number.isFinite(raw)) return maxOutputTokensMax.value;
-  return Math.max(256, Math.min(maxOutputTokensMax.value, Math.round(raw)));
-});
-const selectedModelMetadataReady = computed(() => {
-  const id = selectedApiId.value;
-  if (!id) return false;
-  return metadataModelSignatureByApiId.value[id] === selectedModelSignature.value;
-});
-const imageToggleAvailable = computed(() => {
-  const value = selectedModelCapability.value?.enableImage;
-  return value === undefined ? true : !!value;
-});
-const toolsToggleAvailable = computed(() => {
-  const value = selectedModelCapability.value?.enableTools;
-  return value === undefined ? true : !!value;
-});
-const currentProtocolOptions = computed(() => {
-  return protocolOptionsByCapability[activeCapability.value];
-});
-const capabilityScopedConfigs = computed(() =>
-  props.config.apiConfigs.filter(
-    (cfg) => capabilityFromConfig(cfg) === activeCapability.value,
-  ),
-);
-const capabilityScopedConfigsWithFallback = computed(() => {
-  const items = [...capabilityScopedConfigs.value];
-  if (activeCapability.value !== "voice") return items;
-  const sttId = String(props.config.sttApiConfigId || "").trim();
-  if (!sttId) return items;
-  if (items.some((item) => item.id === sttId)) return items;
-  const sttConfig = props.config.apiConfigs.find((item) => item.id === sttId);
-  if (!sttConfig) return items;
-  return [sttConfig, ...items];
-});
-const activeCapabilitySelectedId = computed(() => {
-  const selected = props.config.selectedApiConfigId;
-  if (capabilityScopedConfigsWithFallback.value.some((item) => item.id === selected)) {
-    return selected;
-  }
-  return capabilityScopedConfigsWithFallback.value[0]?.id ?? "";
-});
-
-onMounted(() => {
-  savedModelSignatureByApiId.value = Object.fromEntries(
-    props.config.apiConfigs.map((item) => [item.id, String(item.model || "").trim()]),
-  );
-  document.addEventListener("mousedown", handleDocumentMouseDown);
-  const selected = props.selectedApiConfig;
-  if (!selected) return;
-  activeCapability.value = capabilityFromConfig(selected);
-  ensureCapabilityConfig(activeCapability.value);
-});
-
-onBeforeUnmount(() => {
-  document.removeEventListener("mousedown", handleDocumentMouseDown);
-});
-
-watch(
-  () => props.config.apiConfigs,
-  (list) => {
-    const snapshot = { ...savedModelSignatureByApiId.value };
-    for (const item of list) {
-      if (!(item.id in snapshot)) {
-        snapshot[item.id] = String(item.model || "").trim();
-      }
-    }
-    savedModelSignatureByApiId.value = snapshot;
-  },
-  { deep: true },
-);
-
-watch(activeCapability, (capability) => {
-  closeModelPicker(false);
-  if (!ensureCapabilityConfig(capability)) {
-    return;
-  }
-  const selected = props.config.selectedApiConfigId;
-  if (capabilityScopedConfigsWithFallback.value.some((item) => item.id === selected)) return;
-  const nextId = capabilityScopedConfigsWithFallback.value[0]?.id;
-  if (!nextId) return;
-  props.config.selectedApiConfigId = nextId;
-});
-
-watch(
-  [activeCapability, capabilityScopedConfigs],
-  () => {
-    closeModelPicker(false);
-    if (!ensureCapabilityConfig(activeCapability.value)) {
-      return;
-    }
-    const selected = props.config.selectedApiConfigId;
-    if (capabilityScopedConfigsWithFallback.value.some((item) => item.id === selected)) return;
-    const nextId = capabilityScopedConfigsWithFallback.value[0]?.id;
-    if (!nextId) return;
-    props.config.selectedApiConfigId = nextId;
-  },
-  { immediate: true },
-);
-
-watch(
-  [selectedApiId, selectedModelSignature, activeCapability],
-  () => {
-    void syncSelectedModelMetadataIfNeeded();
-  },
-  { immediate: true },
-);
-
-const filteredModels = computed(() => {
-  const search = modelSearch.value.trim().toLowerCase();
-  if (!search) return props.modelOptions;
-  return props.modelOptions.filter((m) => m.toLowerCase().includes(search));
-});
-
-function selectModel(modelName: string) {
-  if (props.selectedApiConfig) {
-    props.selectedApiConfig.model = modelName;
-  }
-  closeModelPicker();
-}
-
-function formatTokenLabel(value: number): string {
-  if (value >= 1000) {
-    return `${Math.round(value / 1000)}K`;
-  }
-  return String(Math.round(value));
-}
-
-function closeModelPicker(resetSearch = true) {
-  modelPickerOpen.value = false;
-  if (resetSearch) {
-    modelSearch.value = "";
-  }
-}
-
-function toggleModelPicker() {
-  if (props.modelOptions.length === 0) return;
-  if (modelPickerOpen.value) {
-    closeModelPicker();
-    return;
-  }
-  modelPickerOpen.value = true;
-}
-
-function handleDocumentMouseDown(event: MouseEvent) {
-  const root = modelPickerRef.value;
-  const target = event.target;
-  if (!root || !(target instanceof Node)) return;
-  if (!root.contains(target)) {
-    closeModelPicker(false);
-  }
-}
-
-async function applySavedModelMetadata(target: ApiConfigItem) {
-  const model = String(target.model || "").trim();
-  if (!model) return;
-  const metadata = await invokeTauri<FetchModelMetadataOutput>("fetch_model_metadata", {
-    input: {
-      requestFormat: target.requestFormat,
-      model,
-    },
-  });
-  if (!metadata?.found) return;
-  const rawContextMax = Number(metadata.contextWindowTokens ?? target.contextWindowTokens ?? 128000);
-  const rawOutputMax = Number(metadata.maxOutputTokens ?? target.maxOutputTokens ?? 4096);
-  const contextMax = Math.max(16000, Math.min(CONTEXT_WINDOW_HARD_MAX, Math.round(rawContextMax)));
-  const outputMax = Math.max(256, Math.min(32768, Math.round(rawOutputMax)));
-  modelCapabilityByApiId.value = {
-    ...modelCapabilityByApiId.value,
-    [target.id]: {
-      contextWindowMax: contextMax,
-      maxOutputTokensMax: outputMax,
-      enableImage: typeof metadata.enableImage === "boolean" ? metadata.enableImage : undefined,
-      enableTools: typeof metadata.enableTools === "boolean" ? metadata.enableTools : undefined,
-      enableAudio: typeof metadata.enableAudio === "boolean" ? metadata.enableAudio : undefined,
-    },
-  };
-  metadataModelSignatureByApiId.value = {
-    ...metadataModelSignatureByApiId.value,
-    [target.id]: model,
-  };
-}
-
-async function syncSelectedModelMetadataIfNeeded() {
-  const target = props.selectedApiConfig;
-  if (!target || capabilityFromConfig(target) !== "text") return;
-  if (applyingModelMetadata.value || modelChangedButUnsaved.value || selectedModelMetadataReady.value) return;
-  if (!String(target.id || "").trim() || !String(target.model || "").trim()) return;
-  applyingModelMetadata.value = true;
-  try {
-    await applySavedModelMetadata(target);
-  } catch (error) {
-    console.warn("[API] fetch_model_metadata failed:", error);
-  } finally {
-    applyingModelMetadata.value = false;
-  }
-}
-
-async function handleSaveApiConfig() {
-  const target = props.selectedApiConfig;
-  const saved = await Promise.resolve(props.saveApiConfigAction());
-  if (!saved || !target) return;
-  const signature = String(target.model || "").trim();
-  savedModelSignatureByApiId.value = {
-    ...savedModelSignatureByApiId.value,
-    [target.id]: signature,
-  };
-  if (!isTextMode.value) return;
-  applyingModelMetadata.value = true;
-  try {
-    await applySavedModelMetadata(target);
-  } catch (error) {
-    console.warn("[API] fetch_model_metadata failed:", error);
-  } finally {
-    applyingModelMetadata.value = false;
-  }
-}
-
 const providerPresets: ProviderPreset[] = [
   { id: "openai-official", name: "OpenAI", urls: { openai: "https://api.openai.com/v1", openai_responses: "https://api.openai.com/v1", openai_stt: "https://api.openai.com/v1", openai_tts: "https://api.openai.com/v1/audio/speech", openai_embedding: "https://api.openai.com/v1", openai_rerank: "https://api.openai.com/v1" }, docsUrl: "https://platform.openai.com/docs/overview" },
   { id: "anthropic-official", name: "Anthropic", urls: { anthropic: "https://api.anthropic.com" }, docsUrl: "https://docs.anthropic.com/en/api/overview" },
   { id: "google-gemini", name: "Google Gemini", urls: { gemini: "https://generativelanguage.googleapis.com", gemini_embedding: "https://generativelanguage.googleapis.com" }, docsUrl: "https://ai.google.dev/gemini-api/docs", hasFreeQuota: true },
-  { id: "deepseek", name: "DeepSeek", urls: { openai: "https://api.deepseek.com/v1", openai_responses: "https://api.deepseek.com/v1" }, docsUrl: "https://api-docs.deepseek.com/" },
+  { id: "deepseek", name: "DeepSeek", urls: { anthropic: "https://api.deepseek.com/anthropic", openai: "https://api.deepseek.com/v1", openai_responses: "https://api.deepseek.com/v1" }, docsUrl: "https://api-docs.deepseek.com/" },
   { id: "moonshot-kimi", name: "Moonshot/Kimi", urls: { openai: "https://api.moonshot.cn/v1", openai_responses: "https://api.moonshot.cn/v1" }, docsUrl: "https://platform.moonshot.cn/docs/api-reference" },
-  { id: "zhipu-glm", name: "Zhipu GLM", urls: { openai: "https://open.bigmodel.cn/api/paas/v4", openai_responses: "https://open.bigmodel.cn/api/paas/v4" }, docsUrl: "https://open.bigmodel.cn/dev/api", hasFreeQuota: true },
-  { id: "minimax", name: "MiniMax", urls: { openai: "https://api.minimax.chat/v1", openai_responses: "https://api.minimax.chat/v1" }, docsUrl: "https://www.minimax.io/platform/document" },
+  { id: "aliyun-bailian-coding", name: "百炼编程", urls: { anthropic: "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1", openai: "https://coding.dashscope.aliyuncs.com/v1", openai_responses: "https://coding.dashscope.aliyuncs.com/v1" }, docsUrl: "https://help.aliyun.com/zh/model-studio/" },
+  { id: "aliyun-bailian", name: "百炼通用", urls: { openai: "https://dashscope.aliyuncs.com/compatible-mode/v1", openai_responses: "https://dashscope.aliyuncs.com/compatible-mode/v1" }, docsUrl: "https://help.aliyun.com/zh/model-studio/" },
+  { id: "zhipu-glm", name: "Zhipu GLM", urls: { anthropic: "https://open.bigmodel.cn/api/anthropic", openai: "https://open.bigmodel.cn/api/paas/v4", openai_responses: "https://open.bigmodel.cn/api/paas/v4" }, docsUrl: "https://open.bigmodel.cn/dev/api", hasFreeQuota: true },
+  { id: "minimax", name: "MiniMax", urls: { anthropic: "https://api.minimaxi.com/anthropic", openai: "https://api.minimaxi.com/v1", openai_responses: "https://api.minimaxi.com/v1" }, docsUrl: "https://www.minimax.io/platform/document" },
+  { id: "volcengine-ark", name: "火山方舟", urls: { openai: "https://ark.cn-beijing.volces.com/api/v3", openai_responses: "https://ark.cn-beijing.volces.com/api/v3" }, docsUrl: "https://www.volcengine.com/docs/82379" },
+  { id: "volcengine-ark-coding", name: "火山方舟编程", urls: { anthropic: "https://ark.cn-beijing.volces.com/api/coding", openai: "https://ark.cn-beijing.volces.com/api/coding/v3", openai_responses: "https://ark.cn-beijing.volces.com/api/coding/v3" }, docsUrl: "https://www.volcengine.com/docs/82379" },
   { id: "siliconflow", name: "SiliconFlow", urls: { openai: "https://api.siliconflow.cn/v1", openai_responses: "https://api.siliconflow.cn/v1", openai_stt: "https://api.siliconflow.cn/v1", openai_embedding: "https://api.siliconflow.cn/v1", openai_rerank: "https://api.siliconflow.cn/v1" }, docsUrl: "https://docs.siliconflow.cn/", hasFreeQuota: true },
   { id: "modelscope", name: "ModelScope", urls: { openai: "https://api-inference.modelscope.cn/v1", openai_responses: "https://api-inference.modelscope.cn/v1" }, docsUrl: "https://modelscope.cn/models", hasFreeQuota: true },
   { id: "nvidia-nim", name: "NVIDIA NIM", urls: { openai: "https://integrate.api.nvidia.com/v1", openai_responses: "https://integrate.api.nvidia.com/v1" }, docsUrl: "https://docs.api.nvidia.com/nim/", hasFreeQuota: true },
@@ -696,90 +393,440 @@ const providerPresets: ProviderPreset[] = [
   { id: "ollama-local", name: "Ollama (Local)", urls: { openai: "http://localhost:11434/v1", openai_responses: "http://localhost:11434/v1" }, docsUrl: "https://github.com/ollama/ollama/blob/main/docs/openai.md" },
 ];
 
+const providerList = computed(() => props.config.apiProviders || []);
+const selectedProviderId = computed(() => {
+  const [providerId] = String(props.config.selectedApiConfigId || "").split("::");
+  return providerId || providerList.value[0]?.id || "";
+});
+
+const selectedProvider = computed(() => {
+  const [providerId] = String(props.config.selectedApiConfigId || "").split("::");
+  return providerList.value.find((provider) => provider.id === providerId) ?? providerList.value[0] ?? null;
+});
+const activeCapability = computed<ApiCapability>(() => capabilityFromRequestFormat(selectedProvider.value?.requestFormat || "openai"));
+const scopedProviderList = computed(() =>
+  providerList.value.filter((provider) => capabilityFromRequestFormat(provider.requestFormat) === activeCapability.value),
+);
+const protocolOptions = computed(() => protocolOptionsByCapability[activeCapability.value]);
+
+const selectedModel = computed(() => {
+  const [, modelId] = String(props.config.selectedApiConfigId || "").split("::");
+  const provider = selectedProvider.value;
+  if (!provider) return null;
+  return provider.models.find((model) => model.id === modelId) ?? provider.models[0] ?? null;
+});
+
+const selectedProtocol = computed<ApiRequestFormat>(() => selectedProvider.value?.requestFormat || "openai");
+
 const filteredProviderPresets = computed(() => {
-  const sortFreeFirst = (list: ProviderPreset[]) =>
-    [...list].sort((a, b) => Number(Boolean(b.hasFreeQuota)) - Number(Boolean(a.hasFreeQuota)));
-  return sortFreeFirst(providerPresets.filter((p) => Boolean(p.urls[currentProtocol.value])));
+  const matched = providerPresets.filter((preset) => Boolean(preset.urls[selectedProtocol.value]));
+  return [...matched].sort((a, b) => Number(Boolean(b.hasFreeQuota)) - Number(Boolean(a.hasFreeQuota)));
 });
 
-const selectedProvider = computed(() => providerPresets.find((p) => p.id === selectedProviderId.value) ?? providerPresets[0]);
-const generatedBaseUrl = computed(() => {
-  const urls = selectedProvider.value.urls;
-  return urls[currentProtocol.value] || urls.openai || "";
-});
-
-watch(
-  filteredProviderPresets,
-  (list) => {
-    if (!list.length) return;
-    if (!list.some((item) => item.id === selectedProviderId.value)) {
-      selectedProviderId.value = list[0].id;
-    }
-  },
-  { immediate: true },
+const selectedPreset = computed(() =>
+  providerPresets.find((preset) => preset.id === selectedPresetId.value) ?? filteredProviderPresets.value[0] ?? providerPresets[0],
 );
 
-function applyGeneratedBaseUrl() {
-  if (!props.selectedApiConfig || !generatedBaseUrl.value) return;
-  props.selectedApiConfig.baseUrl = generatedBaseUrl.value;
-  baseUrlHelperOpen.value = false;
+const generatedBaseUrl = computed(() => {
+  const preset = selectedPreset.value;
+  return preset?.urls[selectedProtocol.value] || preset?.urls.openai || "";
+});
+
+const providerModelOptions = computed(() => {
+  const provider = selectedProvider.value;
+  if (!provider) return [];
+  const cached = Array.isArray(provider.cachedModelOptions) ? provider.cachedModelOptions : [];
+  return Array.from(new Set([...props.modelOptions, ...cached].map((item) => String(item || "").trim()).filter(Boolean)));
+});
+
+const filteredModels = computed(() => {
+  const search = modelSearch.value.trim().toLowerCase();
+  if (!search) return providerModelOptions.value;
+  return providerModelOptions.value.filter((item) => item.toLowerCase().includes(search));
+});
+const savedProviderMap = computed(() => {
+  const raw = String(props.lastSavedConfigJson || "").trim();
+  if (!raw) return new Map<string, ApiProviderConfigItem>();
+  try {
+    const parsed = JSON.parse(raw) as { apiProviders?: ApiProviderConfigItem[] };
+    return new Map(
+      (Array.isArray(parsed.apiProviders) ? parsed.apiProviders : [])
+        .map((provider) => [String(provider.id || "").trim(), cloneProvider(provider)] as const)
+        .filter(([id]) => !!id),
+    );
+  } catch {
+    return new Map<string, ApiProviderConfigItem>();
+  }
+});
+const currentProviderDirty = computed(() => {
+  const provider = selectedProvider.value;
+  if (!provider) return false;
+  const savedProvider = savedProviderMap.value.get(String(provider.id || "").trim());
+  if (!savedProvider) return true;
+  return JSON.stringify(normalizeProviderForCompare(provider)) !== JSON.stringify(normalizeProviderForCompare(savedProvider));
+});
+
+function capabilityFromRequestFormat(format: ApiRequestFormat | string): ApiCapability {
+  const normalized = String(format || "").trim().toLowerCase();
+  if (normalized === "openai_stt" || normalized === "openai_tts" || normalized === "stt" || normalized === "tts") {
+    return "voice";
+  }
+  if (
+    normalized === "openai_embedding"
+    || normalized === "gemini_embedding"
+    || normalized === "openai_rerank"
+    || normalized === "embedding"
+    || normalized === "rerank"
+  ) {
+    return "embedding";
+  }
+  return "text";
 }
 
-function switchCapabilityConfig(event: Event) {
-  const id = (event.target as HTMLSelectElement).value;
-  if (!id) return;
-  props.config.selectedApiConfigId = id;
+function cloneProvider(provider: ApiProviderConfigItem): ApiProviderConfigItem {
+  return {
+    id: String(provider.id || "").trim(),
+    name: String(provider.name || "").trim(),
+    requestFormat: provider.requestFormat,
+    enableText: !!provider.enableText,
+    enableImage: !!provider.enableImage,
+    enableAudio: !!provider.enableAudio,
+    enableTools: provider.enableTools !== false,
+    tools: Array.isArray(provider.tools)
+      ? provider.tools.map((tool) => ({
+        id: String(tool.id || "").trim(),
+        command: String(tool.command || "").trim(),
+        args: Array.isArray(tool.args) ? [...tool.args] : [],
+        enabled: tool.enabled !== false,
+        values: { ...(tool.values || {}) },
+      }))
+      : [],
+    baseUrl: String(provider.baseUrl || "").trim(),
+    apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys.map((value) => String(value || "")) : [],
+    keyCursor: Math.max(0, Math.round(Number(provider.keyCursor ?? 0))),
+    cachedModelOptions: Array.isArray(provider.cachedModelOptions)
+      ? provider.cachedModelOptions.map((value) => String(value || "").trim()).filter(Boolean)
+      : [],
+    models: Array.isArray(provider.models)
+      ? provider.models.map((model) => ({
+        id: String(model.id || "").trim(),
+        model: String(model.model || "").trim(),
+        enableImage: !!model.enableImage,
+        enableTools: model.enableTools !== false,
+        temperature: Number(model.temperature ?? 1),
+        customTemperatureEnabled: !!model.customTemperatureEnabled,
+        contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
+        customMaxOutputTokensEnabled: !!model.customMaxOutputTokensEnabled,
+        maxOutputTokens: Number(model.maxOutputTokens ?? 4096),
+      }))
+      : [],
+    failureRetryCount: Math.max(0, Math.round(Number(provider.failureRetryCount ?? 0))),
+  };
+}
+
+function normalizeProviderForCompare(provider: ApiProviderConfigItem) {
+  return {
+    id: String(provider.id || "").trim(),
+    name: String(provider.name || "").trim(),
+    requestFormat: provider.requestFormat,
+    enableText: !!provider.enableText,
+    enableImage: !!provider.enableImage,
+    enableAudio: !!provider.enableAudio,
+    enableTools: provider.enableTools !== false,
+    tools: Array.isArray(provider.tools)
+      ? provider.tools.map((tool) => ({
+        id: String(tool.id || "").trim(),
+        command: String(tool.command || "").trim(),
+        args: Array.isArray(tool.args) ? [...tool.args] : [],
+        enabled: tool.enabled !== false,
+        values: { ...(tool.values || {}) },
+      }))
+      : [],
+    baseUrl: String(provider.baseUrl || "").trim(),
+    apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys.map((value) => String(value || "")) : [],
+    cachedModelOptions: Array.isArray(provider.cachedModelOptions)
+      ? provider.cachedModelOptions.map((value) => String(value || "").trim()).filter(Boolean)
+      : [],
+    models: Array.isArray(provider.models)
+      ? provider.models.map((model) => ({
+        id: String(model.id || "").trim(),
+        model: String(model.model || "").trim(),
+        enableImage: !!model.enableImage,
+        enableTools: model.enableTools !== false,
+        temperature: Number(model.temperature ?? 1),
+        customTemperatureEnabled: !!model.customTemperatureEnabled,
+        contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
+        customMaxOutputTokensEnabled: !!model.customMaxOutputTokensEnabled,
+        maxOutputTokens: Number(model.maxOutputTokens ?? 4096),
+      }))
+      : [],
+    failureRetryCount: Math.max(0, Math.round(Number(provider.failureRetryCount ?? 0))),
+  };
+}
+
+function buildProviderSeed() {
+  return Date.now().toString();
+}
+
+function createModel(seed: string, name = "gpt-4o-mini"): ApiModelConfigItem {
+  return {
+    id: `api-model-${seed}`,
+    model: name,
+    enableImage: false,
+    enableTools: true,
+    temperature: 1,
+    customTemperatureEnabled: false,
+    contextWindowTokens: 128000,
+    customMaxOutputTokensEnabled: false,
+    maxOutputTokens: 4096,
+  };
+}
+
+function createProvider(seed: string, capability: ApiCapability = activeCapability.value): ApiProviderConfigItem {
+  const requestFormat = capabilityDefaultProtocol[capability];
+  return {
+    id: `api-provider-${seed}`,
+    name: `API Provider ${providerList.value.length + 1}`,
+    requestFormat,
+    enableText: capability === "text",
+    enableImage: false,
+    enableAudio: capability === "voice",
+    enableTools: capability === "text",
+    tools: [],
+    baseUrl: providerPresets.find((preset) => preset.urls[requestFormat])?.urls[requestFormat] || "https://api.openai.com/v1",
+    apiKeys: [""],
+    keyCursor: 0,
+    cachedModelOptions: ["gpt-4o-mini"],
+    models: [createModel(seed)],
+    failureRetryCount: 0,
+  };
+}
+
+function selectProvider(providerId: string) {
+  revertUnsavedConfigIfNeeded();
+  const provider = providerList.value.find((item) => item.id === providerId);
+  const model = provider?.models[0];
+  if (!provider || !model) return;
+  props.config.selectedApiConfigId = `${provider.id}::${model.id}`;
+}
+
+function handleProviderChange(event: Event) {
+  const target = event.target as HTMLSelectElement;
+  const providerId = target.value;
+  selectProvider(providerId);
+}
+
+function handleRequestFormatChange(event: Event) {
+  const provider = selectedProvider.value;
+  if (!provider) return;
+  provider.requestFormat = (event.target as HTMLSelectElement).value as ApiRequestFormat;
+}
+
+function selectModelCard(modelId: string) {
+  const provider = selectedProvider.value;
+  if (!provider) return;
+  props.config.selectedApiConfigId = `${provider.id}::${modelId}`;
+}
+
+function addProvider() {
+  const seed = buildProviderSeed();
+  const provider = createProvider(seed, activeCapability.value);
+  props.config.apiProviders.push(provider);
+  props.config.selectedApiConfigId = `${provider.id}::${provider.models[0].id}`;
+}
+
+function removeProvider(providerId: string) {
+  if (scopedProviderList.value.length <= 1) return;
+  const provider = props.config.apiProviders.find((item) => item.id === providerId);
+  pendingDeleteProviderId.value = providerId;
+  pendingDeleteProviderName.value = String(provider?.name || provider?.id || "").trim() || t("config.api.currentProvider");
+  providerDeleteDialogOpen.value = true;
+}
+
+function closeDeleteProviderDialog() {
+  providerDeleteDialogOpen.value = false;
+  pendingDeleteProviderId.value = "";
+  pendingDeleteProviderName.value = "";
+}
+
+function confirmDeleteProvider() {
+  const providerId = String(pendingDeleteProviderId.value || "").trim();
+  if (!providerId) {
+    closeDeleteProviderDialog();
+    return;
+  }
+  const idx = props.config.apiProviders.findIndex((provider) => provider.id === providerId);
+  if (idx < 0) {
+    closeDeleteProviderDialog();
+    return;
+  }
+  props.config.apiProviders.splice(idx, 1);
+  const fallbackProvider = scopedProviderList.value[Math.max(0, idx - 1)] ?? scopedProviderList.value[0] ?? props.config.apiProviders[0];
+  const fallbackModel = fallbackProvider?.models[0];
+  if (fallbackProvider && fallbackModel) {
+    props.config.selectedApiConfigId = `${fallbackProvider.id}::${fallbackModel.id}`;
+  }
+  closeDeleteProviderDialog();
 }
 
 function switchCapabilityTab(capability: ApiCapability) {
-  activeCapability.value = capability;
-  if (!ensureCapabilityConfig(capability)) {
+  revertUnsavedConfigIfNeeded();
+  const nextProvider = providerList.value.find((provider) => capabilityFromRequestFormat(provider.requestFormat) === capability);
+  if (nextProvider) {
+    selectProvider(nextProvider.id);
     return;
   }
-  const selected = props.config.selectedApiConfigId;
-  if (capabilityScopedConfigsWithFallback.value.some((item) => item.id === selected)) return;
-  const nextId = capabilityScopedConfigsWithFallback.value[0]?.id;
-  if (!nextId) return;
-  props.config.selectedApiConfigId = nextId;
+  const seed = buildProviderSeed();
+  const provider = createProvider(seed, capability);
+  props.config.apiProviders.push(provider);
+  props.config.selectedApiConfigId = `${provider.id}::${provider.models[0].id}`;
 }
 
-function handleAddApiConfig() {
-  createConfigForCapability(activeCapability.value);
+function revertUnsavedConfigIfNeeded() {
+  if (!currentProviderDirty.value) return;
+  const currentProviderId = String(selectedProvider.value?.id || "").trim();
+  if (!currentProviderId) return;
+  const providerIndex = props.config.apiProviders.findIndex((provider) => String(provider.id || "").trim() === currentProviderId);
+  if (providerIndex < 0) return;
+  const savedProvider = savedProviderMap.value.get(currentProviderId);
+  if (!savedProvider) {
+    props.config.apiProviders.splice(providerIndex, 1);
+    return;
+  }
+  props.config.apiProviders.splice(providerIndex, 1, cloneProvider(savedProvider));
 }
 
-function ensureCapabilityConfig(capability: ApiCapability): boolean {
-  if (capabilityScopedConfigsWithFallback.value.length > 0) return true;
-  if (creatingCapabilityDefault.value) return false;
-  createConfigForCapability(capability);
-  return false;
+function addApiKey() {
+  selectedProvider.value?.apiKeys.push("");
 }
 
-function createConfigForCapability(capability: ApiCapability) {
-  if (creatingCapabilityDefault.value) return;
-  creatingCapabilityDefault.value = true;
-  const prevIds = new Set(props.config.apiConfigs.map((item) => item.id));
-  const defaultFormat = capabilityDefaultProtocol[capability];
-  const wantedTextMode = capability === "text";
-  const wantedVoiceMode = capability === "voice";
-  emit("addApiConfig");
-  queueMicrotask(() => {
-    const created = props.config.apiConfigs.find((item) => !prevIds.has(item.id));
-    if (!created) return;
-    created.requestFormat = defaultFormat;
-    created.enableText = wantedTextMode;
-    created.enableImage = wantedTextMode ? created.enableImage : false;
-    created.enableTools = wantedTextMode ? created.enableTools : false;
-    if (wantedVoiceMode || capability === "embedding") {
-      created.enableText = false;
+function removeApiKey(index: number) {
+  const provider = selectedProvider.value;
+  if (!provider || provider.apiKeys.length <= 1) return;
+  provider.apiKeys.splice(index, 1);
+}
+
+function toggleApiKeyVisible(providerId: string, index: number) {
+  showApiKeys.value = {
+    ...showApiKeys.value,
+    [providerId]: {
+      ...(showApiKeys.value[providerId] || {}),
+      [index]: !(showApiKeys.value[providerId]?.[index]),
+    },
+  };
+}
+
+function addModelCard() {
+  const provider = selectedProvider.value;
+  if (!provider) return;
+  const seed = buildProviderSeed();
+  const model = createModel(seed, "");
+  provider.models.push(model);
+  props.config.selectedApiConfigId = `${provider.id}::${model.id}`;
+  activeModelPickerId.value = model.id;
+}
+
+function removeModelCard(modelId: string) {
+  const provider = selectedProvider.value;
+  if (!provider || provider.models.length <= 1) return;
+  const idx = provider.models.findIndex((item) => item.id === modelId);
+  if (idx < 0) return;
+  provider.models.splice(idx, 1);
+  const fallback = provider.models[Math.max(0, idx - 1)] ?? provider.models[0];
+  if (fallback) {
+    props.config.selectedApiConfigId = `${provider.id}::${fallback.id}`;
+  }
+}
+
+function openModelPicker(modelId: string) {
+  activeModelPickerId.value = activeModelPickerId.value === modelId ? "" : modelId;
+  modelSearch.value = "";
+  selectModelCard(modelId);
+}
+
+function closeModelPicker() {
+  activeModelPickerId.value = "";
+  modelSearch.value = "";
+}
+
+function contextWindowMax(modelCard: ApiModelConfigItem): number {
+  const raw = Number(modelCapabilityById.value[modelCard.id]?.contextWindowMax ?? 2_000_000);
+  if (!Number.isFinite(raw)) return 2_000_000;
+  return Math.max(SLIDER_CONTEXT_MIN, Math.min(2_000_000, Math.round(raw)));
+}
+
+function maxOutputTokensMax(modelCard: ApiModelConfigItem): number {
+  const raw = Number(modelCapabilityById.value[modelCard.id]?.maxOutputTokensMax ?? 128_000);
+  if (!Number.isFinite(raw)) return 128_000;
+  return Math.max(256, Math.min(128_000, Math.round(raw)));
+}
+
+function clampModelCardValues(modelCard: ApiModelConfigItem) {
+  const nextContext = Math.round(Number(modelCard.contextWindowTokens ?? 128_000));
+  const contextMax = contextWindowMax(modelCard);
+  const contextMin = Math.min(SLIDER_CONTEXT_MIN, contextMax);
+  const clampedContext = Math.max(contextMin, Math.min(contextMax, nextContext));
+  if (Number.isFinite(nextContext) && nextContext !== clampedContext) {
+    modelCard.contextWindowTokens = clampedContext;
+  }
+
+  const nextOutput = Math.round(Number(modelCard.maxOutputTokens ?? 4_096));
+  const clampedOutput = Math.max(256, Math.min(maxOutputTokensMax(modelCard), nextOutput));
+  if (Number.isFinite(nextOutput) && nextOutput !== clampedOutput) {
+    modelCard.maxOutputTokens = clampedOutput;
+  }
+}
+
+function selectModelOption(modelCard: ApiModelConfigItem, option: string) {
+  modelCard.model = option;
+  const provider = selectedProvider.value;
+  if (provider && !provider.cachedModelOptions.includes(option)) {
+    provider.cachedModelOptions.push(option);
+  }
+  void syncModelMetadata(modelCard);
+  closeModelPicker();
+}
+
+async function syncModelMetadata(modelCard: ApiModelConfigItem) {
+  const provider = selectedProvider.value;
+  const model = String(modelCard.model || "").trim();
+  if (!provider || !model) return;
+  try {
+    const metadata = await invokeTauri<FetchModelMetadataResult>("fetch_model_metadata", {
+      input: {
+        requestFormat: provider.requestFormat,
+        model,
+      },
+    });
+    if (!metadata?.found) {
+      modelCard.contextWindowTokens = 200_000;
+      clampModelCardValues(modelCard);
+      return;
     }
-    props.config.selectedApiConfigId = created.id;
-    creatingCapabilityDefault.value = false;
-  });
-  queueMicrotask(() => {
-    if (creatingCapabilityDefault.value) {
-      creatingCapabilityDefault.value = false;
+    const nextLimits: ModelCapabilityLimits = {};
+    if (Number.isFinite(Number(metadata.contextWindowTokens))) {
+      nextLimits.contextWindowMax = Number(metadata.contextWindowTokens);
     }
-  });
+    if (Number.isFinite(Number(metadata.maxOutputTokens))) {
+      nextLimits.maxOutputTokensMax = Number(metadata.maxOutputTokens);
+    }
+    modelCapabilityById.value = {
+      ...modelCapabilityById.value,
+      [modelCard.id]: nextLimits,
+    };
+    clampModelCardValues(modelCard);
+  } catch (error) {
+    console.warn("[API] fetch model metadata failed:", error);
+  }
+}
+
+function applyGeneratedBaseUrl(presetId?: string) {
+  if (!selectedProvider.value) return;
+  if (presetId) {
+    selectedPresetId.value = presetId;
+  }
+  if (!generatedBaseUrl.value) return;
+  selectedProvider.value.baseUrl = generatedBaseUrl.value;
 }
 
 async function openProviderSite(preset: ProviderPreset) {
@@ -790,4 +837,68 @@ async function openProviderSite(preset: ProviderPreset) {
     console.warn("[API] open provider docs failed:", error);
   }
 }
+
+async function handleSaveApiConfig() {
+  const provider = selectedProvider.value;
+  if (provider) {
+    provider.cachedModelOptions = Array.from(new Set(providerModelOptions.value));
+  }
+  await Promise.resolve(props.saveApiConfigAction());
+}
 </script>
+
+<style scoped>
+.api-save-btn {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.api-save-btn::before {
+  content: "";
+  position: absolute;
+  inset: -18px;
+  border-radius: 9999px;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 220deg,
+      rgba(255, 255, 255, 0.95) 280deg,
+      rgba(255, 255, 255, 0.1) 320deg,
+      transparent 360deg
+    );
+  opacity: 0;
+  transform: rotate(0deg);
+  transition: opacity 180ms ease;
+  z-index: -2;
+}
+
+.api-save-btn::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: calc(var(--radius-btn, 0.5rem) - 2px);
+  background: inherit;
+  z-index: -1;
+}
+
+.api-save-btn--dirty {
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25), 0 0 14px rgba(34, 197, 94, 0.2);
+}
+
+.api-save-btn--dirty::before {
+  opacity: 1;
+  animation: api-save-ring-spin 1.8s linear infinite;
+}
+
+@keyframes api-save-ring-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+</style>

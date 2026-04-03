@@ -1,5 +1,5 @@
 import type { ComputedRef } from "vue";
-import type { ApiConfigItem, AppConfig, RemoteImChannelConfig, RemoteImPlatform } from "../../../types/app";
+import type { ApiConfigItem, ApiModelConfigItem, ApiProviderConfigItem, AppConfig, RemoteImChannelConfig, RemoteImPlatform } from "../../../types/app";
 import { defaultToolBindings } from "../utils/builtin-tools";
 
 function normalizeRemoteImPlatform(value: unknown): RemoteImPlatform {
@@ -27,19 +27,12 @@ export function useConfigCore(options: UseConfigCoreOptions) {
     return defaultToolBindings();
   }
 
-  function createApiConfig(seed = Date.now().toString()): ApiConfigItem {
+  function createApiModel(seed = Date.now().toString(), model = "gpt-4o-mini"): ApiModelConfigItem {
     return {
-      id: `api-config-${seed}`,
-      name: `API Config ${options.config.apiConfigs.length + 1}`,
-      requestFormat: "openai",
-      enableText: true,
+      id: `api-model-${seed}`,
+      model,
       enableImage: false,
-      enableAudio: false,
       enableTools: true,
-      tools: defaultApiTools(),
-      baseUrl: "https://api.openai.com/v1",
-      apiKey: "",
-      model: "gpt-4o-mini",
       temperature: 1,
       customTemperatureEnabled: false,
       contextWindowTokens: 128000,
@@ -48,8 +41,176 @@ export function useConfigCore(options: UseConfigCoreOptions) {
     };
   }
 
+  function createApiProvider(seed = Date.now().toString()): ApiProviderConfigItem {
+    return {
+      id: `api-provider-${seed}`,
+      name: `API Provider ${options.config.apiProviders.length + 1}`,
+      requestFormat: "openai",
+      enableText: true,
+      enableImage: false,
+      enableAudio: false,
+      enableTools: true,
+      tools: defaultApiTools(),
+      baseUrl: "https://api.openai.com/v1",
+      apiKeys: [],
+      keyCursor: 0,
+      cachedModelOptions: ["gpt-4o-mini"],
+      models: [createApiModel(seed, "gpt-4o-mini")],
+      failureRetryCount: 0,
+    };
+  }
+
+  function createApiConfig(seed = Date.now().toString()): ApiConfigItem {
+    const provider = createApiProvider(seed);
+    const model = provider.models[0];
+    return {
+      id: `${provider.id}::${model.id}`,
+      name: `${provider.name}/${model.model}`,
+      requestFormat: provider.requestFormat,
+      enableText: provider.enableText,
+      enableImage: model.enableImage,
+      enableAudio: provider.enableAudio,
+      enableTools: model.enableTools,
+      tools: defaultApiTools(),
+      baseUrl: provider.baseUrl,
+      apiKey: "",
+      model: model.model,
+      temperature: model.temperature,
+      customTemperatureEnabled: false,
+      contextWindowTokens: model.contextWindowTokens,
+      customMaxOutputTokensEnabled: false,
+      maxOutputTokens: model.maxOutputTokens,
+    };
+  }
+
   function normalizeApiBindingsLocal() {
-    if (!options.config.apiConfigs.length) return;
+    if (options.config.apiProviders.length === 0) {
+      if (options.config.apiConfigs.length > 0) {
+        console.info("[配置迁移] 开始", {
+          taskName: "legacy_api_configs_to_api_providers",
+          configCount: options.config.apiConfigs.length,
+        });
+        options.config.apiProviders = options.config.apiConfigs.map((api, index) => ({
+          id: `api-provider-legacy-${index + 1}`,
+          name: api.name,
+          requestFormat: api.requestFormat,
+          enableText: !!api.enableText,
+          enableImage: !!api.enableImage,
+          enableAudio: !!api.enableAudio,
+          enableTools: !!api.enableTools,
+          tools: (api.tools || []).map((tool) => ({ ...tool, args: [...(tool.args || [])], values: { ...(tool.values || {}) } })),
+          baseUrl: api.baseUrl,
+          apiKeys: api.apiKey ? [api.apiKey] : [],
+          keyCursor: 0,
+          cachedModelOptions: api.model ? [api.model] : [],
+          models: [{
+            id: `api-model-legacy-${index + 1}`,
+            model: api.model,
+            enableImage: !!api.enableImage,
+            enableTools: !!api.enableTools,
+            temperature: Number(api.temperature ?? 1),
+            customTemperatureEnabled: !!api.customTemperatureEnabled,
+            contextWindowTokens: Math.round(Number(api.contextWindowTokens ?? 128000)),
+            customMaxOutputTokensEnabled: !!api.customMaxOutputTokensEnabled,
+            maxOutputTokens: toFiniteMaxOutputTokens(api.maxOutputTokens),
+          }],
+          failureRetryCount: 0,
+        }));
+      } else {
+        options.config.apiProviders = [createApiProvider()];
+      }
+    }
+
+    const endpointDraftById = new Map(
+      (options.config.apiConfigs || []).map((api) => [String(api.id || "").trim(), api] as const),
+    );
+    for (const provider of options.config.apiProviders) {
+      const models = Array.isArray(provider.models) ? provider.models : [];
+      provider.enableImage = models.some((model) => !!model.enableImage);
+      provider.enableTools = models.some((model) => model.enableTools !== false);
+      for (const model of provider.models || []) {
+        const endpointId = `${provider.id}::${model.id}`;
+        const draft = endpointDraftById.get(endpointId);
+        if (!draft) continue;
+        provider.name = String(provider.name || "").trim() || provider.id;
+        provider.requestFormat = draft.requestFormat;
+        provider.enableText = !!draft.enableText;
+        provider.enableAudio = !!draft.enableAudio;
+        provider.baseUrl = String(draft.baseUrl || "").trim();
+        if (String(draft.apiKey || "").trim()) {
+          provider.apiKeys = [String(draft.apiKey || "").trim(), ...(provider.apiKeys || []).slice(1)];
+        }
+        model.model = String(draft.model || "").trim();
+        model.enableImage = !!draft.enableImage;
+        model.enableTools = !!draft.enableTools;
+        model.temperature = Number(draft.temperature ?? 1);
+        model.customTemperatureEnabled = !!draft.customTemperatureEnabled;
+        model.contextWindowTokens = Math.round(Number(draft.contextWindowTokens ?? 128000));
+        model.customMaxOutputTokensEnabled = !!draft.customMaxOutputTokensEnabled;
+        model.maxOutputTokens = toFiniteMaxOutputTokens(draft.maxOutputTokens);
+      }
+    }
+
+    const nextApiConfigs: ApiConfigItem[] = [];
+    for (const provider of options.config.apiProviders) {
+      const providerName = String(provider.name || "").trim() || provider.id;
+      const apiKey = Array.isArray(provider.apiKeys)
+        ? provider.apiKeys.map((value) => String(value || "").trim()).find(Boolean) || ""
+        : "";
+      const models = Array.isArray(provider.models) ? provider.models : [];
+      for (const model of models) {
+        const modelValue = String(model.model || "").trim();
+        if (!modelValue) continue;
+        nextApiConfigs.push({
+          id: `${provider.id}::${model.id}`,
+          name: `${providerName}/${modelValue}`,
+          requestFormat: provider.requestFormat,
+          enableText: !!provider.enableText,
+          enableImage: !!model.enableImage,
+          enableAudio: !!provider.enableAudio,
+          enableTools: model.enableTools !== false,
+          tools: (provider.tools || []).map((tool) => ({ ...tool, args: [...(tool.args || [])], values: { ...(tool.values || {}) } })),
+          baseUrl: provider.baseUrl,
+          apiKey,
+          model: modelValue,
+          temperature: Number(model.temperature ?? 1),
+          customTemperatureEnabled: !!model.customTemperatureEnabled,
+          contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
+          customMaxOutputTokensEnabled: !!model.customMaxOutputTokensEnabled,
+          maxOutputTokens: toFiniteMaxOutputTokens(model.maxOutputTokens),
+        });
+      }
+    }
+    if (nextApiConfigs.length === 0) {
+      const provider = options.config.apiProviders[0] ?? createApiProvider();
+      const model = Array.isArray(provider.models) ? (provider.models[0] ?? createApiModel()) : createApiModel();
+      const providerTools = Array.isArray(provider.tools)
+        ? provider.tools.map((tool) => ({ ...tool, args: [...(tool.args || [])], values: { ...(tool.values || {}) } }))
+        : [];
+      const providerApiKey = Array.isArray(provider.apiKeys) ? (provider.apiKeys[0] || "") : "";
+      nextApiConfigs.push({
+        id: `${provider.id}::${model.id}`,
+        name: `${provider.name}/${model.model}`,
+        requestFormat: provider.requestFormat,
+        enableText: !!provider.enableText,
+        enableImage: !!model.enableImage,
+        enableAudio: !!provider.enableAudio,
+        enableTools: model.enableTools !== false,
+        tools: providerTools,
+        baseUrl: provider.baseUrl,
+        apiKey: providerApiKey,
+        model: model.model,
+        temperature: Number(model.temperature ?? 1),
+        customTemperatureEnabled: !!model.customTemperatureEnabled,
+        contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
+        customMaxOutputTokensEnabled: !!model.customMaxOutputTokensEnabled,
+        maxOutputTokens: toFiniteMaxOutputTokens(model.maxOutputTokens),
+      });
+    }
+    options.config.apiConfigs.splice(0, options.config.apiConfigs.length, ...nextApiConfigs);
+    if (!nextApiConfigs.some((item) => item.id === options.config.selectedApiConfigId)) {
+      options.config.selectedApiConfigId = nextApiConfigs[0]?.id ?? "";
+    }
   }
 
   function buildConfigPayload(): AppConfig {
@@ -92,6 +253,40 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         showToolCalls: !!item.showToolCalls,
         allowSendFiles: !!item.allowSendFiles,
       })),
+      apiProviders: (options.config.apiProviders || []).map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+        requestFormat: provider.requestFormat,
+        enableText: !!provider.enableText,
+        enableImage: (provider.models || []).some((model) => !!model.enableImage),
+        enableAudio: !!provider.enableAudio,
+        enableTools: (provider.models || []).some((model) => model.enableTools !== false),
+        tools: (provider.tools || []).map((t) => ({
+          id: t.id,
+          command: t.command,
+          args: Array.isArray(t.args) ? t.args : [],
+          enabled: typeof t.enabled === "boolean" ? t.enabled : true,
+          values: t.values ?? {},
+        })),
+        baseUrl: provider.baseUrl,
+        apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys.map((value) => String(value || "").trim()).filter(Boolean) : [],
+        keyCursor: Math.max(0, Math.round(Number(provider.keyCursor ?? 0))),
+        cachedModelOptions: Array.isArray(provider.cachedModelOptions)
+          ? provider.cachedModelOptions.map((value) => String(value || "").trim()).filter(Boolean)
+          : [],
+        models: (provider.models || []).map((model) => ({
+          id: model.id,
+          model: model.model,
+          enableImage: !!model.enableImage,
+          enableTools: model.enableTools !== false,
+          temperature: Number(model.temperature ?? 1),
+          customTemperatureEnabled: !!model.customTemperatureEnabled,
+          contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
+          customMaxOutputTokensEnabled: !!model.customMaxOutputTokensEnabled,
+          maxOutputTokens: toFiniteMaxOutputTokens(model.maxOutputTokens),
+        })),
+        failureRetryCount: Math.max(0, Math.round(Number(provider.failureRetryCount ?? 0))),
+      })),
       apiConfigs: options.config.apiConfigs.map((a) => ({
         id: a.id,
         name: a.name,
@@ -99,7 +294,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         enableText: !!a.enableText,
         enableImage: !!a.enableImage,
         enableAudio: !!a.enableAudio,
-        enableTools: !!a.enableTools,
+        enableTools: a.enableTools !== false,
         tools: (a.tools || []).map((t) => ({
           id: t.id,
           command: t.command,
@@ -138,6 +333,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       departments: [...(options.config.departments || [])],
       mcpServers: [...(options.config.mcpServers || [])],
       remoteImChannels: [...(options.config.remoteImChannels || [])],
+      apiProviders: [...(options.config.apiProviders || [])],
       apiConfigs: options.config.apiConfigs.map((a) => ({
         id: a.id,
         name: a.name,
@@ -167,6 +363,8 @@ export function useConfigCore(options: UseConfigCoreOptions) {
 
   return {
     defaultApiTools,
+    createApiProvider,
+    createApiModel,
     createApiConfig,
     normalizeApiBindingsLocal,
     buildConfigPayload,

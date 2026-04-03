@@ -248,11 +248,54 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
     options.config.remoteImChannels = Array.isArray((cfg as AppConfig).remoteImChannels)
       ? (cfg.remoteImChannels || []).map(mapRemoteImChannel).filter((item) => !!item.id)
       : [];
+    options.config.apiProviders = Array.isArray((cfg as AppConfig).apiProviders)
+      ? (cfg.apiProviders || []).map((provider) => ({
+          id: String((provider as { id?: unknown }).id || "").trim(),
+          name: String((provider as { name?: unknown }).name || "").trim(),
+          requestFormat: (String((provider as { requestFormat?: unknown }).requestFormat || "openai").trim() as AppConfig["apiProviders"][number]["requestFormat"]),
+          enableText: !!(provider as { enableText?: unknown }).enableText,
+          enableImage: !!(provider as { enableImage?: unknown }).enableImage,
+          enableAudio: !!(provider as { enableAudio?: unknown }).enableAudio,
+          enableTools: (provider as { enableTools?: unknown }).enableTools !== false,
+          tools: Array.isArray((provider as { tools?: unknown[] }).tools)
+            ? ((provider as { tools?: unknown[] }).tools || []).map((tool) => ({
+                id: String((tool as { id?: unknown }).id || "").trim(),
+                command: String((tool as { command?: unknown }).command || ""),
+                args: Array.isArray((tool as { args?: unknown[] }).args) ? ((tool as { args?: unknown[] }).args || []).map((arg) => String(arg || "")) : [],
+                enabled: (tool as { enabled?: unknown }).enabled !== false,
+                values: ((tool as { values?: Record<string, unknown> }).values || {}),
+              }))
+            : [],
+          baseUrl: String((provider as { baseUrl?: unknown }).baseUrl || "").trim(),
+          apiKeys: Array.isArray((provider as { apiKeys?: unknown[] }).apiKeys)
+            ? ((provider as { apiKeys?: unknown[] }).apiKeys || []).map((value) => String(value || "").trim()).filter(Boolean)
+            : [],
+          keyCursor: Math.max(0, Number((provider as { keyCursor?: unknown }).keyCursor || 0)),
+          cachedModelOptions: Array.isArray((provider as { cachedModelOptions?: unknown[] }).cachedModelOptions)
+            ? ((provider as { cachedModelOptions?: unknown[] }).cachedModelOptions || []).map((value) => String(value || "").trim()).filter(Boolean)
+            : [],
+          models: Array.isArray((provider as { models?: unknown[] }).models)
+            ? ((provider as { models?: unknown[] }).models || []).map((model) => ({
+                id: String((model as { id?: unknown }).id || "").trim(),
+                model: String((model as { model?: unknown }).model || "").trim(),
+                enableImage: !!(model as { enableImage?: unknown }).enableImage,
+                enableTools: (model as { enableTools?: unknown }).enableTools !== false,
+                temperature: Number((model as { temperature?: unknown }).temperature ?? 1),
+                customTemperatureEnabled: !!(model as { customTemperatureEnabled?: unknown }).customTemperatureEnabled,
+                contextWindowTokens: Math.round(Number((model as { contextWindowTokens?: unknown }).contextWindowTokens ?? 128000)),
+                customMaxOutputTokensEnabled: !!(model as { customMaxOutputTokensEnabled?: unknown }).customMaxOutputTokensEnabled,
+                maxOutputTokens: Math.round(Number((model as { maxOutputTokens?: unknown }).maxOutputTokens ?? 4096)),
+              }))
+            : [],
+          failureRetryCount: Math.max(0, Number((provider as { failureRetryCount?: unknown }).failureRetryCount || 0)),
+        }))
+      : [];
     options.config.apiConfigs.splice(
       0,
       options.config.apiConfigs.length,
       ...(cfg.apiConfigs.length ? cfg.apiConfigs : [options.createApiConfig("default")]),
     );
+    options.normalizeApiBindingsLocal();
     lastConversationApiSettingsJson = JSON.stringify({
       assistantDepartmentApiConfigId: options.config.assistantDepartmentApiConfigId,
       visionApiConfigId: options.config.visionApiConfigId || null,
@@ -387,6 +430,9 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
       options.config.remoteImChannels = Array.isArray((saved as AppConfig).remoteImChannels)
         ? (saved.remoteImChannels || []).map(mapRemoteImChannel).filter((item) => !!item.id)
         : [];
+      options.config.apiProviders = Array.isArray((saved as AppConfig).apiProviders)
+        ? (saved.apiProviders || []).map((provider) => ({ ...provider }))
+        : [];
       options.config.apiConfigs.splice(0, options.config.apiConfigs.length, ...saved.apiConfigs);
       options.normalizeApiBindingsLocal();
       options.lastSavedConfigJson.value = options.buildConfigSnapshotJson();
@@ -415,8 +461,6 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
     const hotkey = String(value || "").trim();
     if (!hotkey) return;
     options.config.hotkey = hotkey;
-    const saved = await saveConfig();
-    if (!saved) return;
     options.setStatus(options.t("status.hotkeyUpdated", { hotkey }));
   }
 
@@ -571,6 +615,21 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
     }
   }
 
+  function restoreLastSavedConfigSnapshot(): boolean {
+    const raw = String(options.lastSavedConfigJson.value || "").trim();
+    if (!raw) return false;
+    try {
+      const snapshot = JSON.parse(raw) as AppConfig;
+      applyLoadedConfig(snapshot);
+      options.setStatus("已还原未保存配置");
+      return true;
+    } catch (e) {
+      console.error("[CONFIG] restore_last_saved_config_snapshot failed:", e);
+      options.setStatusError("status.loadConfigFailed", e);
+      return false;
+    }
+  }
+
   return {
     loadConfig,
     loadBootstrapSnapshot,
@@ -581,5 +640,6 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
     savePersonas,
     saveChatPreferences,
     saveConversationApiSettings,
+    restoreLastSavedConfigSnapshot,
   };
 }

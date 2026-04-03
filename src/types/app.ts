@@ -36,6 +36,35 @@ export type ApiConfigItem = {
   maxOutputTokens?: number;
 };
 
+export type ApiModelConfigItem = {
+  id: string;
+  model: string;
+  enableImage: boolean;
+  enableTools: boolean;
+  temperature: number;
+  customTemperatureEnabled?: boolean;
+  contextWindowTokens: number;
+  customMaxOutputTokensEnabled?: boolean;
+  maxOutputTokens?: number;
+};
+
+export type ApiProviderConfigItem = {
+  id: string;
+  name: string;
+  requestFormat: ApiRequestFormat;
+  enableText: boolean;
+  enableImage: boolean;
+  enableAudio: boolean;
+  enableTools: boolean;
+  tools: ApiToolItem[];
+  baseUrl: string;
+  apiKeys: string[];
+  keyCursor?: number;
+  cachedModelOptions: string[];
+  models: ApiModelConfigItem[];
+  failureRetryCount?: number;
+};
+
 export type ShellWorkspace = {
   name: string;
   path: string;
@@ -99,6 +128,7 @@ export type AppConfig = {
   mcpServers: McpServerConfig[];
   remoteImChannels: RemoteImChannelConfig[];
   departments: DepartmentConfig[];
+  apiProviders: ApiProviderConfigItem[];
   apiConfigs: ApiConfigItem[];
 };
 

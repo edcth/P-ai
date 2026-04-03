@@ -20,6 +20,7 @@ fn candidate_stt_urls(base_url: &str) -> Vec<String> {
 
 async fn call_openai_stt_transcribe(
     api_config: &ApiConfig,
+    resolved_api: &ResolvedApiConfig,
     mime: &str,
     audio_raw: Vec<u8>,
 ) -> Result<String, String> {
@@ -27,7 +28,8 @@ async fn call_openai_stt_transcribe(
     if model.is_empty() {
         return Err("STT model is empty.".to_string());
     }
-    if api_config.api_key.trim().is_empty() {
+    let request_api_key = consume_api_key_for_request(resolved_api);
+    if request_api_key.trim().is_empty() {
         return Err("STT API key is empty.".to_string());
     }
     let urls = candidate_stt_urls(&api_config.base_url);
@@ -55,7 +57,7 @@ async fn call_openai_stt_transcribe(
             .text("model", model.to_string());
         let resp = client
             .post(&url)
-            .bearer_auth(api_config.api_key.trim())
+            .bearer_auth(request_api_key.trim())
             .multipart(form)
             .send()
             .await;
@@ -129,11 +131,12 @@ async fn stt_transcribe(
     if !api.request_format.is_openai_stt() {
         return Err("Selected STT API must use request_format='openai_stt'.".to_string());
     }
+    let resolved = resolve_api_config(&app_config, Some(api.id.as_str()))?;
 
     let audio_raw = B64
         .decode(input.bytes_base64.trim())
         .map_err(|err| format!("Decode audio base64 failed: {err}"))?;
-    let text = call_openai_stt_transcribe(&api, &input.mime, audio_raw).await?;
+    let text = call_openai_stt_transcribe(&api, &resolved, &input.mime, audio_raw).await?;
     Ok(SttTranscribeOutput { text })
 }
 

@@ -219,6 +219,98 @@ fn department_primary_api_config_id(department: &DepartmentConfig) -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ApiModelConfig {
+    id: String,
+    model: String,
+    #[serde(default = "default_false")]
+    enable_image: bool,
+    #[serde(default = "default_true")]
+    enable_tools: bool,
+    #[serde(default = "default_api_temperature")]
+    temperature: f64,
+    #[serde(default = "default_false")]
+    custom_temperature_enabled: bool,
+    #[serde(default = "default_context_window_tokens")]
+    context_window_tokens: u32,
+    #[serde(default = "default_max_output_tokens")]
+    max_output_tokens: u32,
+    #[serde(default = "default_false")]
+    custom_max_output_tokens_enabled: bool,
+}
+
+impl Default for ApiModelConfig {
+    fn default() -> Self {
+        Self {
+            id: "default-model".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            enable_image: false,
+            enable_tools: true,
+            temperature: default_api_temperature(),
+            custom_temperature_enabled: false,
+            context_window_tokens: default_context_window_tokens(),
+            max_output_tokens: default_max_output_tokens(),
+            custom_max_output_tokens_enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiProviderConfig {
+    id: String,
+    name: String,
+    #[serde(default = "default_request_format")]
+    request_format: RequestFormat,
+    #[serde(default = "default_true")]
+    enable_text: bool,
+    #[serde(default = "default_false")]
+    enable_image: bool,
+    #[serde(default = "default_false")]
+    enable_audio: bool,
+    #[serde(default = "default_true")]
+    enable_tools: bool,
+    #[serde(default = "default_api_tools")]
+    tools: Vec<ApiToolConfig>,
+    base_url: String,
+    #[serde(default)]
+    api_keys: Vec<String>,
+    #[serde(default)]
+    key_cursor: u32,
+    #[serde(default)]
+    cached_model_options: Vec<String>,
+    #[serde(default)]
+    models: Vec<ApiModelConfig>,
+    #[serde(default = "default_failure_retry_count")]
+    failure_retry_count: u32,
+}
+
+impl Default for ApiProviderConfig {
+    fn default() -> Self {
+        Self {
+            id: "default-provider-openai".to_string(),
+            name: "Default OpenAI".to_string(),
+            request_format: RequestFormat::OpenAI,
+            enable_text: true,
+            enable_image: false,
+            enable_audio: false,
+            enable_tools: true,
+            tools: default_api_tools(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_keys: Vec::new(),
+            key_cursor: 0,
+            cached_model_options: vec!["gpt-4o-mini".to_string()],
+            models: vec![ApiModelConfig::default()],
+            failure_retry_count: default_failure_retry_count(),
+        }
+    }
+}
+
+fn default_api_providers() -> Vec<ApiProviderConfig> {
+    vec![ApiProviderConfig::default()]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiConfig {
     id: String,
     name: String,
@@ -446,6 +538,9 @@ struct AppConfig {
     departments: Vec<DepartmentConfig>,
     #[serde(default = "default_provider_non_stream_base_urls")]
     provider_non_stream_base_urls: Vec<String>,
+    #[serde(default)]
+    api_providers: Vec<ApiProviderConfig>,
+    #[serde(default)]
     api_configs: Vec<ApiConfig>,
 }
 
@@ -472,6 +567,7 @@ impl Default for AppConfig {
             remote_im_channels: default_remote_im_channels(),
             departments: default_departments(&api_config.id),
             provider_non_stream_base_urls: default_provider_non_stream_base_urls(),
+            api_providers: default_api_providers(),
             api_configs: vec![api_config],
         }
     }

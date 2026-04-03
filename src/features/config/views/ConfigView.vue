@@ -50,8 +50,29 @@
       </ul>
     </div>
 
-    <div class="flex-1 min-w-0 overflow-y-auto scrollbar-gutter-stable">
-      <SettingsContentContainer>
+    <div
+      class="flex-1 min-w-0"
+      :class="props.configTab === 'api' ? 'flex min-h-0 flex-col overflow-hidden' : 'overflow-y-auto scrollbar-gutter-stable'"
+    >
+      <div v-if="props.configTab === 'api'" class="flex-1 min-h-0">
+        <ApiTab
+          :config="config"
+          :base-url-reference="baseUrlReference"
+          :refreshing-models="refreshingModels"
+          :model-options="modelOptions"
+          :model-refresh-ok="modelRefreshOk"
+          :model-refresh-error="modelRefreshError"
+          :config-dirty="configDirty"
+          :saving-config="savingConfig"
+          :save-api-config-action="props.saveConfigAction"
+          :restore-api-config-action="props.restoreConfigAction"
+          :normalize-api-bindings-action="normalizeApiBindingsAction"
+          :last-saved-config-json="props.lastSavedConfigJson"
+          @refresh-models="$emit('refreshModels')"
+        />
+      </div>
+
+      <SettingsContentContainer v-else>
         <WelcomeTab
           v-if="props.configTab === 'welcome'"
           :config="config"
@@ -74,24 +95,6 @@
           @update:record-background-wake-enabled="onRecordBackgroundWakeChanged"
           @update:min-record-seconds="onMinRecordSecondsChanged"
           @update:max-record-seconds="onMaxRecordSecondsChanged"
-        />
-
-        <ApiTab
-          v-else-if="props.configTab === 'api'"
-          :config="config"
-          :selected-api-config="selectedApiConfig"
-          :base-url-reference="baseUrlReference"
-          :refreshing-models="refreshingModels"
-          :model-options="modelOptions"
-          :model-refresh-ok="modelRefreshOk"
-          :model-refresh-error="modelRefreshError"
-          :config-dirty="configDirty"
-          :saving-config="savingConfig"
-          :save-api-config-action="props.saveConfigAction"
-          @save-api-config="$emit('saveApiConfig')"
-          @add-api-config="$emit('addApiConfig')"
-          @remove-selected-api-config="$emit('removeSelectedApiConfig')"
-          @refresh-models="$emit('refreshModels')"
         />
 
         <ToolsTab
@@ -208,7 +211,7 @@
           @open-github="$emit('openGithub')"
         />
       </SettingsContentContainer>
-      </div>
+    </div>
 
     <!-- Dialogs -->
 
@@ -330,11 +333,14 @@ const props = defineProps<{
   personaDirty: boolean;
   configDirty: boolean;
   savingConfig: boolean;
+  normalizeApiBindingsAction: () => void;
   hotkeyTestRecording: boolean;
   hotkeyTestRecordingMs: number;
   hotkeyTestAudioReady: boolean;
   checkingUpdate: boolean;
   saveConfigAction: () => Promise<boolean> | boolean;
+  restoreConfigAction: () => boolean;
+  lastSavedConfigJson: string;
   setStatusAction: (text: string) => void;
 }>();
 
@@ -507,54 +513,30 @@ function closeCropDialog() {
 async function onRecordHotkeyChanged(value: string) {
   const next = String(value || "").trim();
   if (!next) return;
-  const previous = props.config.recordHotkey;
-  if (previous === next) return;
+  if (props.config.recordHotkey === next) return;
   props.config.recordHotkey = next;
-  const saved = await Promise.resolve(props.saveConfigAction());
-  if (!saved) {
-    props.config.recordHotkey = previous;
-  }
 }
 
-async function onRecordBackgroundWakeChanged(value: boolean) {
-  const previous = !!props.config.recordBackgroundWakeEnabled;
+function onRecordBackgroundWakeChanged(value: boolean) {
   const next = !!value;
-  if (previous === next) return;
+  if (!!props.config.recordBackgroundWakeEnabled === next) return;
   props.config.recordBackgroundWakeEnabled = next;
-  const saved = await Promise.resolve(props.saveConfigAction());
-  if (!saved) {
-    props.config.recordBackgroundWakeEnabled = previous;
-  }
 }
 
-async function onMinRecordSecondsChanged(value: number) {
-  const previousMin = props.config.minRecordSeconds;
-  const previousMax = props.config.maxRecordSeconds;
+function onMinRecordSecondsChanged(value: number) {
   const next = Math.max(MIN_RECORD_SECONDS, Math.min(MAX_MIN_RECORD_SECONDS, Math.round(Number(value) || MIN_RECORD_SECONDS)));
   props.config.minRecordSeconds = next;
   if (props.config.maxRecordSeconds < next) {
     props.config.maxRecordSeconds = next;
   }
-  const saved = await Promise.resolve(props.saveConfigAction());
-  if (!saved) {
-    props.config.minRecordSeconds = previousMin;
-    props.config.maxRecordSeconds = previousMax;
-  }
 }
 
-async function onMaxRecordSecondsChanged(value: number) {
-  const previousMin = props.config.minRecordSeconds;
-  const previousMax = props.config.maxRecordSeconds;
+function onMaxRecordSecondsChanged(value: number) {
   const next = Math.max(
     props.config.minRecordSeconds,
     Math.min(MAX_RECORD_SECONDS, Math.round(Number(value) || props.config.minRecordSeconds)),
   );
   props.config.maxRecordSeconds = next;
-  const saved = await Promise.resolve(props.saveConfigAction());
-  if (!saved) {
-    props.config.minRecordSeconds = previousMin;
-    props.config.maxRecordSeconds = previousMax;
-  }
 }
 
 function requestTabChange(nextTab: ConfigTab) {
@@ -697,5 +679,3 @@ onBeforeUnmount(() => {
   scrollbar-gutter: stable;
 }
 </style>
-
-

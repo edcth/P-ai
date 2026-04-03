@@ -10,7 +10,8 @@ async fn call_model_gemini_with_tools(
     auto_compaction_context: Option<&ToolLoopAutoCompactionContext>,
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
-    let mut client_builder = gemini::Client::builder().api_key(&api_config.api_key);
+    let request_api_key = consume_api_key_for_request(api_config);
+    let mut client_builder = gemini::Client::builder().api_key(&request_api_key);
     client_builder = client_builder.http_headers(app_identity_rig_headers());
     let normalized_base = normalize_gemini_rig_base_url(&api_config.base_url);
     if !normalized_base.trim().is_empty() {

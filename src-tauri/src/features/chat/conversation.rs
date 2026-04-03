@@ -1348,6 +1348,7 @@ fn departments_only_config(departments: &[DepartmentConfig]) -> AppConfig {
         remote_im_channels: Vec::new(),
         departments: departments.to_vec(),
         provider_non_stream_base_urls: Vec::new(),
+        api_providers: Vec::new(),
         api_configs: Vec::new(),
     }
 }

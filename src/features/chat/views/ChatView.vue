@@ -227,7 +227,7 @@ import { isDarkAppTheme } from "../../shell/composables/use-app-theme";
 import { ChevronsDown, History, ListTodo } from "lucide-vue-next";
 import "markstream-vue/index.css";
 import { invokeTauri } from "../../../services/tauri-api";
-import type { ChatConversationOverviewItem, ChatMessageBlock, ChatPersonaPresenceChip } from "../../../types/app";
+import type { ApiConfigItem, ChatConversationOverviewItem, ChatMessageBlock, ChatPersonaPresenceChip } from "../../../types/app";
 import ChatMessageItem from "../components/ChatMessageItem.vue";
 import ChatComposerPanel from "../components/ChatComposerPanel.vue";
 import ChatConversationSidebar from "../components/ChatConversationSidebar.vue";
@@ -268,6 +268,8 @@ const props = defineProps<{
   recordingMs: number;
   transcribing: boolean;
   recordHotkey: string;
+  selectedChatModelId: string;
+  chatModelOptions: ApiConfigItem[];
   chatUsagePercent: number;
   forceArchiveTip: string;
   mediaDragActive: boolean;
@@ -372,6 +374,7 @@ const emit = defineEmits<{
   (e: "startRecording"): void;
   (e: "stopRecording"): void;
   (e: "pickAttachments"): void;
+  (e: "update:selectedChatModelId", value: string): void;
   (e: "sendChat"): void;
   (e: "stopChat"): void;
   (e: "forceArchive"): void;

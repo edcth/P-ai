@@ -2,6 +2,7 @@ import type { ComputedRef, Ref } from "vue";
 import { invokeTauri } from "../../../services/tauri-api";
 import type {
   ApiConfigItem,
+  ApiProviderConfigItem,
   ImageTextCacheStats,
   PersonaProfile,
   ToolLoadStatus,
@@ -20,6 +21,7 @@ type UseConfigRuntimeOptions = {
   avatarError: Ref<string>;
   toolPersona: ComputedRef<PersonaProfile | null>;
   selectedApiConfig: ComputedRef<ApiConfigItem | null>;
+  selectedApiProvider: ComputedRef<ApiProviderConfigItem | null>;
   refreshingModels: Ref<boolean>;
   modelRefreshError: Ref<string>;
   apiModelOptions: Ref<Record<string, string[]>>;
@@ -112,18 +114,54 @@ export function useConfigRuntime(options: UseConfigRuntimeOptions) {
   async function refreshModels() {
     if (!options.selectedApiConfig.value) return;
     const apiId = options.selectedApiConfig.value.id;
+    const provider = options.selectedApiProvider.value;
+    const apiKeys = Array.isArray(provider?.apiKeys)
+      ? provider.apiKeys.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    const fallbackApiKey = String(options.selectedApiConfig.value.apiKey || "").trim();
+    const candidateApiKeys = Array.from(new Set([fallbackApiKey, ...apiKeys].filter(Boolean)));
     options.refreshingModels.value = true;
     options.modelRefreshError.value = "";
     try {
-      const models = await invokeTauri<string[]>("refresh_models", {
-        input: {
-          baseUrl: options.selectedApiConfig.value.baseUrl,
-          apiKey: options.selectedApiConfig.value.apiKey,
-          requestFormat: options.selectedApiConfig.value.requestFormat,
-        },
-      });
+      if (candidateApiKeys.length === 0) {
+        throw new Error("API Key 为空，无法刷新模型列表。");
+      }
+      const errors: string[] = [];
+      let models: string[] | null = null;
+      for (const apiKey of candidateApiKeys) {
+        try {
+          models = await invokeTauri<string[]>("refresh_models", {
+            input: {
+              baseUrl: options.selectedApiConfig.value.baseUrl,
+              apiKey,
+              requestFormat: options.selectedApiConfig.value.requestFormat,
+            },
+          });
+          break;
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          const stack = String(err.stack || "").trim();
+          errors.push(
+            [
+              `Key ${apiKey} 刷新模型失败：${err.message}`,
+              stack ? `堆栈：${stack}` : "",
+            ].filter(Boolean).join("\n"),
+          );
+        }
+      }
+      if (!models) {
+        throw new Error(
+          [
+            "刷新模型列表失败。",
+            ...errors.filter(Boolean),
+          ].join("\n\n"),
+        );
+      }
       const normalizedModels = models.map((m) => m.trim()).filter(Boolean);
       options.apiModelOptions.value[apiId] = normalizedModels;
+      if (provider) {
+        provider.cachedModelOptions = normalizedModels;
+      }
       options.modelRefreshOkFlags.value[apiId] = true;
       options.setStatus(options.t("status.modelListRefreshed", { count: normalizedModels.length }));
     } catch (e) {
