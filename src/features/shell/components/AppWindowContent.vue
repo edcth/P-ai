@@ -133,6 +133,7 @@
         :current-workspace-name="currentChatWorkspaceName"
         :workspace-locked="chatWorkspaceLocked"
         :active-conversation-id="currentChatConversationId"
+        :current-todos="currentChatTodos"
         :unarchived-conversation-items="chatUnarchivedConversationItems"
         :create-conversation-department-options="createConversationDepartmentOptions"
         :default-create-conversation-department-id="defaultCreateConversationDepartmentId"
@@ -257,6 +258,7 @@ import type {
   ChatConversationOverviewItem,
   ChatMessage,
   ChatMessageBlock,
+  ChatTodoItem,
   ChatPersonaPresenceChip,
   DelegateConversationSummary,
   RemoteImContactConversationSummary,
@@ -359,6 +361,7 @@ const props = defineProps<{
   currentChatWorkspaceName: string;
   chatWorkspaceLocked: boolean;
   currentChatConversationId: string;
+  currentChatTodos: ChatTodoItem[];
   chatUnarchivedConversationItems: ChatConversationOverviewItem[];
   createConversationDepartmentOptions: Array<{ id: string; name: string; ownerName: string }>;
   defaultCreateConversationDepartmentId: string;

@@ -93,7 +93,7 @@ struct RemoteImActivationSource {
     remote_contact_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConversationTodoItem {
     content: String,

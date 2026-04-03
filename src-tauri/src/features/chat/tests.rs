@@ -1858,6 +1858,71 @@
     }
 
     #[test]
+    fn update_conversation_todos_and_emit_should_persist_conversation_todos() {
+        let state = test_chat_runtime_state();
+        write_config(&state.config_path, &AppConfig::default()).expect("write config");
+        let now = now_utc_rfc3339();
+        let mut data = AppData::default();
+        data.conversations.push(Conversation {
+            id: "conversation-main".to_string(),
+            title: "主会话".to_string(),
+            agent_id: DEFAULT_AGENT_ID.to_string(),
+            department_id: String::new(),
+            last_read_message_id: String::new(),
+            conversation_kind: CONVERSATION_KIND_CHAT.to_string(),
+            root_conversation_id: None,
+            delegate_id: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            last_user_at: None,
+            last_assistant_at: None,
+            last_context_usage_ratio: 0.0,
+            last_effective_prompt_tokens: 0,
+            status: "active".to_string(),
+            summary: String::new(),
+            user_profile_snapshot: String::new(),
+            shell_workspace_path: None,
+            archived_at: None,
+            messages: Vec::new(),
+            current_todos: Vec::new(),
+            memory_recall_table: Vec::new(),
+        });
+        state_write_app_data_cached(&state, &data).expect("write app data");
+
+        update_conversation_todos_and_emit(
+            &state,
+            "conversation-main",
+            vec![
+                ConversationTodoItem {
+                    content: "第一步".to_string(),
+                    status: "completed".to_string(),
+                },
+                ConversationTodoItem {
+                    content: "第二步".to_string(),
+                    status: "in_progress".to_string(),
+                },
+            ],
+        )
+        .expect("update conversation todos");
+
+        let data = state_read_app_data_cached(&state).expect("read app data");
+        let conversation = data
+            .conversations
+            .iter()
+            .find(|item| item.id == "conversation-main")
+            .expect("conversation exists");
+        assert_eq!(conversation.current_todos.len(), 2);
+        assert_eq!(conversation.current_todos[0].content, "第一步");
+        assert_eq!(conversation.current_todos[0].status, "completed");
+        assert_eq!(conversation.current_todos[1].content, "第二步");
+        assert_eq!(conversation.current_todos[1].status, "in_progress");
+        assert_eq!(
+            conversation_current_todo_text(conversation).as_deref(),
+            Some("第二步")
+        );
+    }
+
+    #[test]
     fn runtime_context_request_id_or_new_should_prefer_runtime_context() {
         let runtime_context = RuntimeContext {
             request_id: Some("request-from-context".to_string()),

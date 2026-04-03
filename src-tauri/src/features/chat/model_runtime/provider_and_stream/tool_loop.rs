@@ -108,6 +108,40 @@ fn register_tool_repeat_attempt(
     guard.same_call_streak
 }
 
+fn parse_conversation_todos_from_tool_args(tool_args: &str) -> Vec<ConversationTodoItem> {
+    let trimmed = tool_args.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return Vec::new();
+    };
+    value
+        .get("todos")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let content = item
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?
+                        .to_string();
+                    let status = item
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    Some(ConversationTodoItem { content, status })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone)]
 struct ToolLoopAutoCompactionContext {
     conversation_id: String,
@@ -523,6 +557,23 @@ where
                     };
                     let repeat_streak =
                         register_tool_repeat_attempt(&mut tool_repeat_guard, &tool_name, &tool_args);
+                    if tool_name.trim() == "todo" {
+                        let (_, _, bound_conversation_id) = delegate_parse_session_parts(chat_session_key);
+                        if let (Some(state), Some(conversation_id)) =
+                            (tool_abort_state, bound_conversation_id.as_deref())
+                        {
+                            if let Err(err) = update_conversation_todos_and_emit(
+                                state,
+                                conversation_id,
+                                parse_conversation_todos_from_tool_args(&tool_args),
+                            ) {
+                                runtime_log_error(format!(
+                                    "[Todo] 更新会话步骤失败: conversation_id={}, error={}",
+                                    conversation_id, err
+                                ));
+                            }
+                        }
+                    }
                     send_tool_status_event(
                         on_delta,
                         &tool_name,
@@ -963,4 +1014,3 @@ mod tool_loop_tests {
         );
     }
 }
-

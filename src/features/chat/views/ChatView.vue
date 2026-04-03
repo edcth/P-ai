@@ -227,7 +227,7 @@ import { isDarkAppTheme } from "../../shell/composables/use-app-theme";
 import { ChevronsDown, History, ListTodo } from "lucide-vue-next";
 import "markstream-vue/index.css";
 import { invokeTauri } from "../../../services/tauri-api";
-import type { ApiConfigItem, ChatConversationOverviewItem, ChatMessageBlock, ChatPersonaPresenceChip } from "../../../types/app";
+import type { ApiConfigItem, ChatConversationOverviewItem, ChatMessageBlock, ChatPersonaPresenceChip, ChatTodoItem } from "../../../types/app";
 import ChatMessageItem from "../components/ChatMessageItem.vue";
 import ChatComposerPanel from "../components/ChatComposerPanel.vue";
 import ChatConversationSidebar from "../components/ChatConversationSidebar.vue";
@@ -281,6 +281,7 @@ const props = defineProps<{
   currentWorkspaceName: string;
   workspaceLocked: boolean;
   activeConversationId: string;
+  currentTodos: ChatTodoItem[];
   currentTheme: string;
   unarchivedConversationItems: ChatConversationOverviewItem[];
   createConversationDepartmentOptions: Array<{ id: string; name: string; ownerName: string }>;
@@ -300,12 +301,18 @@ const visibleStreamToolCalls = computed(() =>
 );
 
 const activeConversationTodo = computed(() => {
-  const activeConversationId = String(props.activeConversationId || "").trim();
-  if (!activeConversationId) return "";
-  const matched = props.unarchivedConversationItems.find(
-    (item) => String(item.conversationId || "").trim() === activeConversationId
-  );
-  return String(matched?.currentTodo || "").trim();
+  const todos = Array.isArray(props.currentTodos) ? props.currentTodos : [];
+  const normalized = todos
+    .map((item) => ({
+      content: String(item?.content || "").trim(),
+      status: String(item?.status || "").trim() as ChatTodoItem["status"],
+    }))
+    .filter((item) => item.content && (item.status === "pending" || item.status === "in_progress" || item.status === "completed"));
+  const inProgress = normalized.find((item) => item.status === "in_progress");
+  if (inProgress) return inProgress.content;
+  const pending = normalized.find((item) => item.status === "pending");
+  if (pending) return pending.content;
+  return String(normalized[0]?.content || "").trim();
 });
 
 const organizingContextBannerText = computed(() => {

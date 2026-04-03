@@ -1,5 +1,12 @@
 # 变更日志
 
+## 更新：会话 Todo 改为持久化并实时推送
+
+- 修复（conversation-todo-persistence-and-sync）：补齐会话 Todo 的持久化、实时推送与首次快照恢复链路
+  - 后端新增会话 Todo 原子更新方法，统一负责写入 `current_todos`、写盘并向前端推送 `conversation-todos-updated`
+  - `todo` 工具调用时会立即把步骤列表写回当前会话，不再只停留在流式临时状态，刷新页面后也能恢复
+  - 会话快照与前端状态同步补齐 `currentTodos` 数组链路，首次加载、切换会话与流式过程中都能拿到同一份 Todo 数据
+
 ## 更新：重构供应商配置页与多 Key / 多模型配置链路
 
 - 重构（api-provider-config-refactor）：将 API 配置从单条 `apiConfig` 模式升级为“供应商 + 模型卡片”结构，并补齐迁移、轮询与配置页交互

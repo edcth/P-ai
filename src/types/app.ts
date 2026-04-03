@@ -330,6 +330,11 @@ export type TaskTriggerMessageCard = {
   everyMinutes?: number;
 };
 
+export type ChatTodoItem = {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
@@ -417,6 +422,7 @@ export type UnarchivedConversationSummary = {
   isMainConversation?: boolean;
   runtimeState?: "idle" | "assistant_streaming" | "organizing_context";
   currentTodo?: string;
+  currentTodos?: ChatTodoItem[];
   previewMessages?: ConversationPreviewMessage[];
 };
 
@@ -446,6 +452,7 @@ export type ChatConversationOverviewItem = {
   isMainConversation?: boolean;
   runtimeState?: "idle" | "assistant_streaming" | "organizing_context";
   currentTodo?: string;
+  currentTodos?: ChatTodoItem[];
   color?: string;
   canCreateNew?: boolean;
   backgroundStatus?: "completed" | "failed";

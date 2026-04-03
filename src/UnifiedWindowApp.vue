@@ -113,6 +113,7 @@
       :latest-own-message-align-request="latestOwnMessageAlignRequest"
       :conversation-scroll-to-bottom-request="conversationScrollToBottomRequest"
       :current-chat-conversation-id="currentChatConversationId"
+      :current-chat-todos="currentChatTodos"
       :chat-unarchived-conversation-items="chatUnarchivedConversationItems"
       :create-conversation-department-options="createConversationDepartmentOptions"
       :default-create-conversation-department-id="defaultCreateConversationDepartmentId"
@@ -481,6 +482,7 @@ import type {
   PersonaProfile,
   AppConfig,
   ChatMessage,
+  ChatTodoItem,
   ChatPersonaPresenceChip,
   ImageTextCacheStats,
   RuntimeLogEntry,
@@ -582,6 +584,7 @@ let chatRoundFailedUnlisten: UnlistenFn | null = null;
 let chatAssistantDeltaUnlisten: UnlistenFn | null = null;
 let chatConversationMessagesAfterSyncedUnlisten: UnlistenFn | null = null;
 let chatConversationOverviewUpdatedUnlisten: UnlistenFn | null = null;
+let chatConversationTodosUpdatedUnlisten: UnlistenFn | null = null;
 let foregroundPaintTraceSeq = 0;
 let chatWindowActiveSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let chatMicPrewarmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1151,6 +1154,7 @@ const CONVERSATION_COLORS = [
 ] as const;
 
 const conversationScrollToBottomRequest = ref(0);
+const currentChatTodos = ref<ChatTodoItem[]>([]);
 let pendingConversationScrollToBottomConversationId = "";
 let pendingConversationScrollToBottomTimer = 0;
 
@@ -1158,12 +1162,20 @@ type SwitchConversationSnapshot = {
   conversationId: string;
   messages: ChatMessage[];
   hasMoreHistory: boolean;
+  currentTodo?: string;
+  currentTodos?: ChatTodoItem[];
   unarchivedConversations: UnarchivedConversationSummary[];
 };
 
 type ConversationOverviewUpdatedPayload = {
   unarchivedConversations?: UnarchivedConversationSummary[];
   preferredConversationId?: string | null;
+};
+
+type ConversationTodosUpdatedPayload = {
+  conversationId?: string;
+  currentTodo?: string;
+  currentTodos?: ChatTodoItem[];
 };
 
 function clearPendingConversationScrollToBottomFallback() {
@@ -1214,6 +1226,7 @@ const chatUnarchivedConversationItems = computed(() => {
       isMainConversation: !!item.isMainConversation,
       runtimeState: item.runtimeState,
       currentTodo: String(item.currentTodo || "").trim(),
+      currentTodos: Array.isArray(item.currentTodos) ? item.currentTodos : [],
       updatedAt: item.lastMessageAt || item.updatedAt || "",
       previewMessages: Array.isArray(item.previewMessages) ? item.previewMessages : [],
       backgroundStatus:
@@ -1764,6 +1777,7 @@ function clearForegroundConversation(reason: string) {
   void markConversationRead(previousConversationId);
   cacheConversationMessages(previousConversationId, allMessages.value);
   currentChatConversationId.value = "";
+  currentChatTodos.value = [];
   allMessages.value = [];
   hasMoreBackendHistory.value = false;
   chatFlow.freezeForegroundRoundState();
@@ -2001,6 +2015,14 @@ function applyConversationSnapshot(snapshot: SwitchConversationSnapshot) {
   const nextConversationId = String(snapshot.conversationId || "").trim();
   const nextMessages = freezeConversationMessages(Array.isArray(snapshot.messages) ? snapshot.messages : []);
   currentChatConversationId.value = nextConversationId;
+  currentChatTodos.value = Array.isArray(snapshot.currentTodos)
+    ? snapshot.currentTodos
+      .map((item) => ({
+        content: String(item?.content || "").trim(),
+        status: String(item?.status || "").trim() as ChatTodoItem["status"],
+      }))
+      .filter((item) => item.content && (item.status === "pending" || item.status === "in_progress" || item.status === "completed"))
+    : [];
   allMessages.value = nextMessages;
   hasMoreBackendHistory.value = !!snapshot.hasMoreHistory;
   cacheConversationMessages(nextConversationId, nextMessages);
@@ -2015,6 +2037,32 @@ function applyConversationOverviewPayload(payload?: ConversationOverviewUpdatedP
   unarchivedConversations.value = Array.isArray(payload?.unarchivedConversations)
     ? payload.unarchivedConversations
     : [];
+}
+
+function applyConversationTodosUpdated(payload?: ConversationTodosUpdatedPayload | null) {
+  const conversationId = String(payload?.conversationId || "").trim();
+  if (!conversationId) return;
+  const nextTodos = Array.isArray(payload?.currentTodos)
+    ? payload.currentTodos
+      .map((item) => ({
+        content: String(item?.content || "").trim(),
+        status: String(item?.status || "").trim() as ChatTodoItem["status"],
+      }))
+      .filter((item) => item.content && (item.status === "pending" || item.status === "in_progress" || item.status === "completed"))
+    : [];
+  if (conversationId === String(currentChatConversationId.value || "").trim()) {
+    currentChatTodos.value = nextTodos;
+  }
+  const nextCurrentTodo = String(payload?.currentTodo || "").trim();
+  unarchivedConversations.value = unarchivedConversations.value.map((item) =>
+    String(item.conversationId || "").trim() === conversationId
+      ? {
+        ...item,
+        currentTodo: nextCurrentTodo,
+        currentTodos: nextTodos,
+      }
+      : item
+  );
 }
 
 async function requestConversationSnapshot(conversationId?: string | null): Promise<SwitchConversationSnapshot> {
@@ -2107,6 +2155,7 @@ async function switchUnarchivedConversation(conversationId: string) {
     }
     chatFlow.freezeForegroundRoundState();
     currentChatConversationId.value = cid;
+    currentChatTodos.value = [];
     const cachedDisplay = freezeConversationMessages(conversationMessageCache.value[cid] || []);
     allMessages.value = cachedDisplay;
     hasMoreBackendHistory.value = inferHasMoreHistoryFromSnapshot(cachedDisplay);
@@ -2528,6 +2577,15 @@ onMounted(() => {
       .catch((error) => {
         console.error("[会话概览] 监听器注册失败", error);
       });
+    void listen<ConversationTodosUpdatedPayload>("easy-call:conversation-todos-updated", (event) => {
+      applyConversationTodosUpdated(event.payload);
+    })
+      .then((unlisten) => {
+        chatConversationTodosUpdatedUnlisten = unlisten;
+      })
+      .catch((error) => {
+        console.error("[Todo] 监听器注册失败", error);
+      });
     void listen<unknown>("easy-call:assistant-delta", (event) => {
       const conversationId = readConversationIdFromPayload(event.payload);
       if (hasActiveForegroundConversation(conversationId)) {
@@ -2583,6 +2641,10 @@ onBeforeUnmount(() => {
   if (chatConversationOverviewUpdatedUnlisten) {
     chatConversationOverviewUpdatedUnlisten();
     chatConversationOverviewUpdatedUnlisten = null;
+  }
+  if (chatConversationTodosUpdatedUnlisten) {
+    chatConversationTodosUpdatedUnlisten();
+    chatConversationTodosUpdatedUnlisten = null;
   }
   window.removeEventListener("focus", handleWindowFocusForStateSync);
   window.removeEventListener("blur", handleWindowBlurForStateSync);

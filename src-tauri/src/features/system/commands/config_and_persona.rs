@@ -1698,6 +1698,10 @@ struct SwitchActiveConversationSnapshotOutput {
     conversation_id: String,
     messages: Vec<ChatMessage>,
     has_more_history: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_todo: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    current_todos: Vec<ConversationTodoItem>,
     unarchived_conversations: Vec<UnarchivedConversationSummary>,
 }
 
@@ -1713,6 +1717,16 @@ struct UnarchivedConversationOverviewUpdatedPayload {
     unarchived_conversations: Vec<UnarchivedConversationSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     preferred_conversation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationTodosUpdatedPayload {
+    conversation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_todo: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    current_todos: Vec<ConversationTodoItem>,
 }
 
 fn build_unarchived_conversation_overview_payload(
@@ -1745,6 +1759,87 @@ fn emit_unarchived_conversation_overview_updated_payload(
     if let Err(err) = app_handle.emit(CHAT_CONVERSATION_OVERVIEW_UPDATED_EVENT, payload) {
         eprintln!("[会话概览] 推送失败：错误={}", err);
     }
+}
+
+fn emit_conversation_todos_updated_payload(
+    state: &AppState,
+    payload: &ConversationTodosUpdatedPayload,
+) {
+    let app_handle = match state.app_handle.lock() {
+        Ok(guard) => guard.as_ref().cloned(),
+        Err(_) => None,
+    };
+    let Some(app_handle) = app_handle else {
+        eprintln!("[Todo] 推送跳过：无法获取 app_handle");
+        return;
+    };
+    if let Err(err) = app_handle.emit("easy-call:conversation-todos-updated", payload) {
+        eprintln!("[Todo] 推送失败：错误={}", err);
+    }
+}
+
+fn normalize_conversation_todos(
+    todos: Vec<ConversationTodoItem>,
+) -> Vec<ConversationTodoItem> {
+    todos
+        .into_iter()
+        .filter_map(|item| {
+            let content = item.content.trim().to_string();
+            if content.is_empty() {
+                return None;
+            }
+            let status = item.status.trim().to_ascii_lowercase();
+            if !matches!(status.as_str(), "pending" | "in_progress" | "completed") {
+                return None;
+            }
+            Some(ConversationTodoItem { content, status })
+        })
+        .collect()
+}
+
+fn update_conversation_todos_and_emit(
+    state: &AppState,
+    conversation_id: &str,
+    todos: Vec<ConversationTodoItem>,
+) -> Result<(), String> {
+    let cid = conversation_id.trim();
+    if cid.is_empty() {
+        return Ok(());
+    }
+    let guard = state
+        .conversation_lock
+        .lock()
+        .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+    let mut data = state_read_app_data_cached(state)?;
+    let app_config = state_read_config_cached(state)?;
+    let next_todos = normalize_conversation_todos(todos);
+    let current_todo = {
+        let Some(conversation) = data
+            .conversations
+            .iter_mut()
+            .find(|item| item.id == cid && item.summary.trim().is_empty())
+        else {
+            drop(guard);
+            return Ok(());
+        };
+        if conversation.current_todos == next_todos {
+            drop(guard);
+            return Ok(());
+        }
+        conversation.current_todos = next_todos.clone();
+        conversation_current_todo_text(conversation)
+    };
+    state_write_app_data_cached(state, &data)?;
+    let todo_payload = ConversationTodosUpdatedPayload {
+        conversation_id: cid.to_string(),
+        current_todo,
+        current_todos: next_todos,
+    };
+    let overview_payload = build_unarchived_conversation_overview_payload(state, &app_config, &data);
+    drop(guard);
+    emit_conversation_todos_updated_payload(state, &todo_payload);
+    emit_unarchived_conversation_overview_updated_payload(state, &overview_payload);
+    Ok(())
 }
 
 fn emit_unarchived_conversation_overview_updated_from_state(state: &AppState) -> Result<(), String> {
@@ -1926,6 +2021,15 @@ fn switch_active_conversation_snapshot(
         conversation_id,
         messages,
         has_more_history,
+        current_todo: data
+            .conversations
+            .get(target_idx)
+            .and_then(conversation_current_todo_text),
+        current_todos: data
+            .conversations
+            .get(target_idx)
+            .map(|conversation| conversation.current_todos.clone())
+            .unwrap_or_default(),
         unarchived_conversations,
     })
 }
@@ -2955,4 +3059,3 @@ fn rewind_conversation_from_message(
         recalled_user_message,
     })
 }
-
