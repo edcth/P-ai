@@ -68,6 +68,55 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate signing secrets early
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $privateKey = "$env:TAURI_SIGNING_PRIVATE_KEY".Trim()
+          $privateKeyPassword = "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          $publicKey = "$env:TAURI_UPDATER_PUBLIC_KEY".Trim()
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $configPubkey = "$($config.plugins.updater.pubkey)".Trim()
+
+          if ([string]::IsNullOrWhiteSpace($privateKey)) {
+            throw "缺少 TAURI_SIGNING_PRIVATE_KEY secret。"
+          }
+          if ([string]::IsNullOrWhiteSpace($privateKeyPassword)) {
+            throw "缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret。"
+          }
+          if ([string]::IsNullOrWhiteSpace($publicKey)) {
+            throw "缺少 TAURI_UPDATER_PUBLIC_KEY secret。"
+          }
+          if ($publicKey -ne $configPubkey) {
+            throw "TAURI_UPDATER_PUBLIC_KEY 与 src-tauri/tauri.conf.json 中的 updater.pubkey 不一致。"
+          }
+
+          try {
+            [void][Convert]::FromBase64String($publicKey)
+          } catch {
+            throw "TAURI_UPDATER_PUBLIC_KEY 不是合法 base64。"
+          }
+
+          $signProbePath = Join-Path $env:RUNNER_TEMP "sign-probe.txt"
+          Set-Content -LiteralPath $signProbePath -Value "sign-probe" -Encoding ascii -NoNewline
+
+          try {
+            pnpm tauri signer sign -f $signProbePath | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw "pnpm tauri signer sign 退出码异常：$LASTEXITCODE"
+            }
+            Write-Host "[ok] 签名预检通过"
+          } catch {
+            throw "签名预检失败，请检查私钥、密码、公钥是否匹配。"
+          } finally {
+            Remove-Item -LiteralPath $signProbePath -ErrorAction SilentlyContinue
+          }
+
       - name: Build Tauri app
         run: pnpm tauri build
         env:

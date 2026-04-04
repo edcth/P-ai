@@ -1,5 +1,13 @@
 # 变更日志
 
+## 更新：会话处理补回丢弃入口并提前校验发布签名
+
+- 修复（discard-entry-and-release-signing-precheck）：恢复会话处理弹窗中的正式“丢弃”能力，并让远程发布在开头就校验签名配置
+  - “处理当前会话”弹窗恢复为 `压缩 / 归档 / 丢弃` 三项并列，不再把删除当前会话藏成仅在双禁用时出现的兜底按钮
+  - 前后端预览字段统一从易误读的 `canDiscard` 改为 `canDropConversation`，减少把“丢弃会话”误解成“废弃功能”的风险
+  - 发布工作流新增签名预检步骤，提前校验私钥、私钥密码、公钥、`tauri.conf.json` 中 updater 公钥一致性与实际 signer 探测
+  - 删除 `scripts/run-tauri-with-updater-pubkey.mjs` 包装层，`pnpm tauri` 改回直接调用官方 Tauri CLI，避免构建时再临时改写 `tauri.conf.json`
+
 ## 发布：v0.9.1
 
 - 发布（release-0.9.1）：整合委托功能修复与聊天交互打磨后发布补丁版本

@@ -183,7 +183,7 @@ struct ForceArchiveResult {
 struct ForceArchivePreviewResult {
     conversation_id: String,
     can_archive: bool,
-    can_discard: bool,
+    can_drop_conversation: bool,
     message_count: usize,
     has_assistant_reply: bool,
     is_empty: bool,
@@ -1413,7 +1413,7 @@ fn preview_force_archive_current(
     Ok(ForceArchivePreviewResult {
         conversation_id: source.id,
         can_archive: archive_disabled_reason.is_none(),
-        can_discard: true,
+        can_drop_conversation: true,
         message_count,
         has_assistant_reply,
         is_empty,

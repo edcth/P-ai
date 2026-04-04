@@ -381,7 +381,7 @@
     <dialog class="modal" :class="{ 'modal-open': forceArchiveActionDialogOpen }">
       <div class="modal-box max-w-md">
         <h3 class="font-semibold text-base">处理当前会话</h3>
-        <div v-if="forceArchivePreviewLoading" class="mt-3 text-sm opacity-70">正在判断当前会话是否适合压缩或归档...</div>
+        <div v-if="forceArchivePreviewLoading" class="mt-3 text-sm opacity-70">正在判断当前会话适合压缩、归档还是丢弃...</div>
         <template v-else>
           <div class="mt-3 rounded-box border border-base-300 bg-base-200/40 px-3 py-3 text-sm">
             <div class="font-medium">压缩</div>
@@ -405,6 +405,11 @@
               {{ forceArchivePreview.archiveDisabledReason }}
             </div>
           </div>
+          <div class="mt-3 rounded-box border border-base-300 bg-base-200/40 px-3 py-3 text-sm">
+            <div class="font-medium">丢弃</div>
+            <div class="mt-1 opacity-80">直接删除当前会话，不生成摘要，也不保留归档。</div>
+            <div class="mt-2 text-xs opacity-70">适合测试、误触发，或确认这段内容不需要留痕时使用。</div>
+          </div>
           <div class="mt-3 text-sm opacity-80">
             <div>当前会话消息数：{{ forceArchivePreview?.messageCount ?? 0 }}</div>
             <div>助理是否已回复：{{ forceArchivePreview?.hasAssistantReply ? "是" : "否" }}</div>
@@ -413,15 +418,13 @@
         </template>
         <div class="modal-action">
           <button
-            v-if="showDeleteConversationFallback"
             class="btn btn-sm btn-error"
-            :disabled="forceArchivePreviewLoading || forcingArchive"
+            :disabled="forceArchivePreviewLoading || !forceArchivePreview?.canDropConversation || forcingArchive"
             @click="confirmDeleteConversationFromArchiveDialog"
           >
-            删除会话
+            丢弃
           </button>
           <button
-            v-if="showForceArchiveActionButtons"
             class="btn btn-sm btn-primary"
             :disabled="forceArchivePreviewLoading || !forceCompactionPreview?.canCompact || forcingArchive"
             @click="confirmForceCompactionAction"
@@ -429,7 +432,6 @@
             压缩
           </button>
           <button
-            v-if="showForceArchiveActionButtons"
             class="btn btn-sm btn-secondary"
             :disabled="forceArchivePreviewLoading || !forceArchivePreview?.canArchive || forcingArchive"
             @click="confirmForceArchiveAction"
@@ -533,7 +535,7 @@ type ConversationMessagesAfterSyncedPayload = {
 type ForceArchivePreviewResult = {
   conversationId: string;
   canArchive: boolean;
-  canDiscard: boolean;
+  canDropConversation: boolean;
   messageCount: number;
   hasAssistantReply: boolean;
   isEmpty: boolean;
@@ -2227,15 +2229,6 @@ function closeForceArchiveActionDialog() {
   forceArchivePreview.value = null;
   forceCompactionPreview.value = null;
 }
-
-const showDeleteConversationFallback = computed(() =>
-  !forceArchivePreviewLoading.value
-  && !forcingArchive.value
-  && !forceCompactionPreview.value?.canCompact
-  && !forceArchivePreview.value?.canArchive
-  && !!String(currentChatConversationId.value || "").trim()
-);
-const showForceArchiveActionButtons = computed(() => !showDeleteConversationFallback.value);
 
 async function openForceArchiveActionDialog() {
   const apiConfigId = String(currentForegroundApiConfigId.value || "").trim();
