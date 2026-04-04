@@ -78,41 +78,41 @@
           </div>
         </div>
       </div>
-      <details
-        v-if="!isOwnMessage(block) && block.reasoningStandard"
-        class="collapse mb-2 border-l-2 border-base-content/20 pl-3 rounded-none min-w-55"
-      >
-        <summary class="collapse-title py-0 px-0 min-h-0 text-xs flex items-center gap-1 text-base-content/80">
-          <span
-            :class="['block min-w-0 flex-1 truncate ecall-shimmer-text', reasoningSummaryClass(block)]"
-            :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
-          >
-            {{ reasoningSummaryLabel(block) }}
-          </span>
-        </summary>
-        <div class="collapse-content px-0 py-2 whitespace-pre-wrap text-[11px] leading-relaxed text-base-content/70">
-          {{ block.reasoningStandard }}
-        </div>
-      </details>
-      <details
-        v-if="!isOwnMessage(block) && resolvedInlineReasoning(block)"
-        class="collapse mb-2 border-l-2 border-base-content/20 pl-3 rounded-none min-w-55"
-      >
-        <summary class="collapse-title py-0 px-0 min-h-0 text-[10px] flex items-center gap-1 text-base-content/60 cursor-pointer">
-          <span
-            :class="['block min-w-0 flex-1 truncate ecall-shimmer-text', reasoningSummaryClass(block)]"
-            :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
-          >
-            {{ reasoningSummaryLabel(block) }}
-          </span>
-        </summary>
-        <div class="collapse-content max-w-full px-0 py-2 whitespace-pre-wrap wrap-break-word text-[10px] leading-relaxed text-base-content/60" style="overflow-wrap: anywhere;">
-          {{ resolvedInlineReasoning(block) }}
-        </div>
-      </details>
-      <div v-if="toolCallsForBlock(block).length > 0" class="mb-2 flex flex-col gap-1 text-[11px] opacity-90">
-        <details class="collapse bg-base-200 border-base-300 border">
-          <summary class="collapse-title py-2 px-3 min-h-0 text-[11px] font-semibold flex items-center gap-1.5">
+      <div v-if="!isOwnMessage(block) && block.reasoningStandard" class="flex flex-col opacity-90">
+        <details class="collapse border-l-2 border-base-content/20 pl-3 rounded-none min-w-55">
+          <summary class="collapse-title py-1 px-1 min-h-0 text-xs font-semibold flex items-center gap-1.5 text-base-content/80 hover:bg-base-200">
+            <span class="inline-block shrink-0 text-[10px] leading-none text-success">▲</span>
+            <span
+              :class="['block min-w-0 flex-1 truncate ecall-shimmer-text font-medium', reasoningSummaryClass(block)]"
+              :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
+            >
+              {{ reasoningSummaryLabel(block) }}
+            </span>
+          </summary>
+          <div class="collapse-content px-0 pb-1 pt-2 whitespace-pre-wrap text-xs leading-relaxed text-base-content/70">
+            {{ block.reasoningStandard }}
+          </div>
+        </details>
+      </div>
+      <div v-if="!isOwnMessage(block) && resolvedInlineReasoning(block)" class="flex flex-col opacity-90">
+        <details class="collapse border-l-2 border-base-content/20 pl-3 rounded-none min-w-55">
+          <summary class="collapse-title py-1 px-1 min-h-0 text-xs font-semibold flex items-center gap-1.5 text-base-content/80 cursor-pointer hover:bg-base-200">
+            <span class="inline-block shrink-0 text-[10px] leading-none text-success">▲</span>
+            <span
+              :class="['block min-w-0 flex-1 truncate ecall-shimmer-text font-medium', reasoningSummaryClass(block)]"
+              :data-shimmer-text="block.isStreaming ? '正在思考中' : ''"
+            >
+              {{ reasoningSummaryLabel(block) }}
+            </span>
+          </summary>
+          <div class="collapse-content px-0 pb-1 pt-2 whitespace-pre-wrap text-xs leading-relaxed text-base-content/70">
+            {{ resolvedInlineReasoning(block) }}
+          </div>
+        </details>
+      </div>
+      <div v-if="toolCallsForBlock(block).length > 0" class="flex flex-col opacity-90">
+        <details class="collapse border-l-2 border-base-content/20 pl-3 rounded-none min-w-55">
+          <summary class="collapse-title py-1 px-1 min-h-0 text-xs font-semibold flex items-center gap-1.5 text-base-content/80 hover:bg-base-200">
             <span class="inline-block h-2 w-2 rounded-full bg-success"></span>
             <span
               :class="['ecall-shimmer-text font-medium', toolSummaryClass(block)]"
@@ -120,15 +120,32 @@
             >{{ toolStatusLabel(block) }}</span>
             <span v-if="toolNamesLabel(block)" class="truncate">{{ ` · ${toolNamesLabel(block)}` }}</span>
           </summary>
-          <div class="collapse-content px-3 pb-2 pt-0 text-[10px] text-base-content/70">
-            <div
-              v-for="(toolCall, idx) in toolCallsForBlock(block)"
-              :key="`${block.id}-tool-${idx}`"
-              class="mb-2 last:mb-0"
-            >
-              <div class="mb-1 font-semibold opacity-80">#{{ idx + 1 }} {{ toolCall.name }}</div>
-              <pre class="whitespace-pre-wrap break-all">{{ toolCall.argsText }}</pre>
-            </div>
+          <div class="collapse-content px-0 pb-1 pt-2 text-xs text-base-content/70">
+            <ul class="timeline timeline-vertical timeline-compact">
+              <li
+                v-for="(toolCall, idx) in toolCallsForBlock(block)"
+                :key="`${block.id}-tool-${idx}`"
+              >
+                <div class="timeline-start pr-2 text-xs font-semibold opacity-55">#{{ idx + 1 }}</div>
+                <div class="timeline-middle">
+                  <span
+                    class="inline-block h-2.5 w-2.5 rounded-full"
+                    :class="toolTimelineDotClass(block)"
+                  ></span>
+                </div>
+                <div class="timeline-end mb-3 w-full min-w-0 pb-3 pl-3">
+                  <div class="mb-1 text-xs font-semibold opacity-85">{{ toolCall.name }}</div>
+                  <pre
+                    v-if="toolCall.argsText"
+                    class="whitespace-pre-wrap break-all text-xs leading-relaxed text-base-content/70"
+                  >{{ toolCall.argsText }}</pre>
+                </div>
+                <hr
+                  v-if="idx < toolCallsForBlock(block).length - 1"
+                  :class="toolTimelineHrClass(block)"
+                />
+              </li>
+            </ul>
           </div>
         </details>
       </div>
@@ -457,6 +474,14 @@ function toolCallsForBlock(block: ChatMessageBlock): Array<{ name: string; argsT
 
 function toolStatusLabel(block: ChatMessageBlock): string {
   return showStreamingUi(block) ? "工具执行中" : "工具执行毕";
+}
+
+function toolTimelineDotClass(block: ChatMessageBlock): string {
+  return showStreamingUi(block) ? "bg-primary" : "bg-success";
+}
+
+function toolTimelineHrClass(block: ChatMessageBlock): string {
+  return showStreamingUi(block) ? "bg-primary/35" : "bg-success/35";
 }
 
 function toolNamesLabel(block: ChatMessageBlock): string {
