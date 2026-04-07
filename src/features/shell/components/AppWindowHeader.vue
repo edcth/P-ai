@@ -24,6 +24,7 @@
             :persona-avatar-url-map="personaAvatarUrlMap"
             :user-avatar-url="userAvatarUrl"
             @select-conversation="handleConversationListSelect"
+            @rename-conversation="handleConversationRename"
           />
         </div>
       </div>
@@ -221,6 +222,7 @@ const emit = defineEmits<{
   (e: "minimize-window"): void;
   (e: "toggle-maximize-window"): void;
   (e: "switch-conversation", conversationId: string): void;
+  (e: "rename-conversation", payload: { conversationId: string; title: string }): void;
   (e: "create-conversation", input?: { title?: string; departmentId?: string }): void;
   (e: "force-archive"): void;
   (e: "close-window"): void;
@@ -282,6 +284,13 @@ function toggleConversationList() {
 function handleConversationListSelect(conversationId: string) {
   closeConversationList();
   emit("switch-conversation", String(conversationId || "").trim());
+}
+
+function handleConversationRename(payload: { conversationId: string; title: string }) {
+  emit("rename-conversation", {
+    conversationId: String(payload?.conversationId || "").trim(),
+    title: String(payload?.title || "").trim(),
+  });
 }
 
 function handleDocumentPointerDown(event: PointerEvent) {

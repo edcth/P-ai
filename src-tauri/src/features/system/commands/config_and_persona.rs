@@ -1947,6 +1947,20 @@ struct CreateUnarchivedConversationOutput {
     conversation_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameUnarchivedConversationInput {
+    conversation_id: String,
+    title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameUnarchivedConversationOutput {
+    conversation_id: String,
+    title: String,
+}
+
 #[tauri::command]
 fn create_unarchived_conversation(
     input: CreateUnarchivedConversationInput,
@@ -2031,6 +2045,73 @@ fn create_unarchived_conversation(
     emit_unarchived_conversation_overview_updated_payload(state.inner(), &overview_payload);
 
     Ok(CreateUnarchivedConversationOutput { conversation_id })
+}
+
+#[tauri::command]
+fn rename_unarchived_conversation(
+    input: RenameUnarchivedConversationInput,
+    state: State<'_, AppState>,
+) -> Result<RenameUnarchivedConversationOutput, String> {
+    let conversation_id = input.conversation_id.trim();
+    if conversation_id.is_empty() {
+        return Err("conversationId 不能为空".to_string());
+    }
+    let next_title = clean_text(input.title.trim());
+    if next_title.is_empty() {
+        return Err("会话标题不能为空".to_string());
+    }
+
+    let guard = state
+        .conversation_lock
+        .lock()
+        .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+
+    let app_config = state_read_config_cached(&state)?;
+    let mut data = state_read_app_data_cached(&state)?;
+    let main_conversation_id = data
+        .main_conversation_id
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    if conversation_id == main_conversation_id {
+        drop(guard);
+        return Err("主会话暂不支持改名".to_string());
+    }
+    ensure_unarchived_conversation_not_organizing(state.inner(), conversation_id)?;
+
+    let Some(conversation) = data.conversations.iter_mut().find(|item| {
+        item.id == conversation_id
+            && item.summary.trim().is_empty()
+            && conversation_visible_in_foreground_lists(item)
+    }) else {
+        drop(guard);
+        return Err("未找到可改名的会话".to_string());
+    };
+
+    if conversation.title.trim() == next_title {
+        drop(guard);
+        return Ok(RenameUnarchivedConversationOutput {
+            conversation_id: conversation_id.to_string(),
+            title: next_title,
+        });
+    }
+
+    conversation.title = next_title.clone();
+    state_write_app_data_cached(&state, &data)?;
+    let overview_payload = build_unarchived_conversation_overview_payload(state.inner(), &app_config, &data);
+    drop(guard);
+
+    println!(
+        "[会话] 完成，任务=重命名会话，conversation_id={}，title={}",
+        conversation_id, next_title
+    );
+    emit_unarchived_conversation_overview_updated_payload(state.inner(), &overview_payload);
+
+    Ok(RenameUnarchivedConversationOutput {
+        conversation_id: conversation_id.to_string(),
+        title: next_title,
+    })
 }
 
 #[tauri::command]

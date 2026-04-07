@@ -27,6 +27,7 @@
       @minimize-window="minimizeWindowAndClearForeground"
       @toggle-maximize-window="toggleMaximizeWindow"
       @switch-conversation="switchUnarchivedConversation"
+      @rename-conversation="renameCurrentConversation"
       @create-conversation="createUnarchivedConversation"
       @force-archive="openForceArchiveActionDialog"
       @close-window="closeWindowAndClearForeground"
@@ -198,6 +199,7 @@
       :on-lock-chat-workspace="lockChatWorkspaceFromPicker"
       :on-unlock-chat-workspace="unlockChatWorkspace"
       :on-switch-conversation="switchUnarchivedConversation"
+      :on-rename-conversation="renameCurrentConversation"
       :on-create-conversation="createUnarchivedConversation"
       :on-open-skill-panel="openSkillPlaceholderDialog"
       :load-archives="loadArchives"
@@ -2220,6 +2222,33 @@ async function createUnarchivedConversation(input?: { title?: string; department
     applyConversationSnapshot(snapshot);
   } catch (error) {
     setStatusError("status.loadMessagesFailed", error);
+  }
+}
+
+async function renameCurrentConversation(payload: { conversationId: string; title: string }) {
+  const conversationId = String(payload?.conversationId || "").trim();
+  const title = String(payload?.title || "").trim();
+  if (!conversationId || !title) return;
+  if (conversationId !== String(currentChatConversationId.value || "").trim()) return;
+  try {
+    const result = await invokeTauri<{ conversationId: string; title: string }>("rename_unarchived_conversation", {
+      input: {
+        conversationId,
+        title,
+      },
+    });
+    const nextTitle = String(result?.title || "").trim() || title;
+    unarchivedConversations.value = unarchivedConversations.value.map((item) =>
+      String(item.conversationId || "").trim() === conversationId
+        ? {
+          ...item,
+          title: nextTitle,
+        }
+        : item
+    );
+    setStatus(t("status.conversationRenamed"));
+  } catch (error) {
+    setStatusError("status.renameConversationFailed", error);
   }
 }
 

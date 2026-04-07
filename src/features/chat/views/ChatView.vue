@@ -13,6 +13,7 @@
       :persona-name-map="personaNameMap"
       :persona-avatar-url-map="personaAvatarUrlMap"
       @select="handleConversationListSelect"
+      @rename="handleConversationRename"
     />
 
     <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -442,6 +443,7 @@ const emit = defineEmits<{
   (e: "lockWorkspace"): void;
   (e: "unlockWorkspace"): void;
   (e: "switchConversation", conversationId: string): void;
+  (e: "renameConversation", payload: { conversationId: string; title: string }): void;
   (e: "createConversation", input?: { title?: string; departmentId?: string }): void;
   (e: "openConversationSummary", conversationId: string): void;
   (e: "reachedBottom"): void;
@@ -545,6 +547,17 @@ function handleConversationListSelect(conversationId: string) {
   const isCurrent = normalizedConversationId === String(props.activeConversationId || "").trim();
   if (isCurrent) return;
   emit("switchConversation", normalizedConversationId);
+}
+
+function handleConversationRename(payload: { conversationId: string; title: string }) {
+  const conversationId = String(payload?.conversationId || "").trim();
+  const title = String(payload?.title || "").trim();
+  if (!conversationId || !title) return;
+  if (conversationId !== String(props.activeConversationId || "").trim()) return;
+  emit("renameConversation", {
+    conversationId,
+    title,
+  });
 }
 
 function openConversationSummary() {

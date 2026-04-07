@@ -1,18 +1,19 @@
 <template>
   <aside class="flex h-full w-88 shrink-0 flex-col border-r border-base-300 bg-base-200">
     <div class="flex-1 min-h-0 space-y-2 overflow-y-auto py-2">
-      <button
+      <component
         v-for="item in items"
         :key="item.conversationId"
-        type="button"
+        :is="isCurrentConversation(item) ? 'div' : 'button'"
+        :type="isCurrentConversation(item) ? undefined : 'button'"
         class="mx-2 block w-[calc(100%-1rem)] rounded-box bg-base-200 text-left transition-colors hover:bg-base-100"
         :class="[
           item.conversationId === activeConversationId ? 'bg-base-300 hover:bg-base-300' : '',
-          item.runtimeState === 'organizing_context' ? 'cursor-not-allowed opacity-60' : '',
+          isConversationDisabled(item) ? 'cursor-not-allowed opacity-60' : '',
         ]"
-        :disabled="item.runtimeState === 'organizing_context'"
-        :title="item.runtimeState === 'organizing_context' ? t('chat.organizingContextDisabled') : (item.workspaceLabel || t('chat.defaultWorkspace'))"
-        @click="emit('select', item.conversationId)"
+        :disabled="!isCurrentConversation(item) && isConversationDisabled(item)"
+        :title="conversationItemTitle(item)"
+        @click="handleConversationCardClick(item)"
       >
         <div class="flex items-center gap-3 p-3">
           <div class="shrink-0">
@@ -32,7 +33,28 @@
           <div class="flex-1 min-w-0">
             <div class="flex items-start justify-between gap-2">
               <div class="flex min-w-0 items-center gap-2">
-                <div class="truncate text-sm font-medium">
+                <input
+                  v-if="isEditingTitle(item)"
+                  :ref="setRenameInputRef"
+                  v-model="editingTitleDraft"
+                  type="text"
+                  class="input input-bordered input-sm h-8 min-h-0 w-full max-w-full text-sm font-medium"
+                  @click.stop
+                  @mousedown.stop
+                  @keydown.enter.prevent="commitConversationTitleEdit(item)"
+                  @keydown.esc.prevent="cancelConversationTitleEdit()"
+                  @blur="handleConversationTitleBlur(item)"
+                />
+                <button
+                  v-else-if="canRenameConversation(item)"
+                  type="button"
+                  class="truncate text-left text-sm font-medium hover:underline"
+                  @click.stop="startConversationTitleEdit(item)"
+                  @mousedown.stop
+                >
+                  {{ conversationDisplayTitle(item) }}
+                </button>
+                <div v-else class="truncate text-sm font-medium">
                   {{ conversationDisplayTitle(item) }}
                 </div>
               </div>
@@ -69,13 +91,13 @@
             {{ t("chat.conversationNoPreview") }}
           </div>
         </div>
-      </button>
+      </component>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatConversationOverviewItem, ConversationPreviewMessage } from "../../../types/app";
 import { formatConversationListTime } from "../utils/conversation-time";
@@ -91,21 +113,102 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "select", conversationId: string): void;
+  (e: "rename", payload: { conversationId: string; title: string }): void;
 }>();
 
 const { t, locale } = useI18n();
+const renameInputRef = ref<HTMLInputElement | null>(null);
+const editingConversationId = ref("");
+const editingTitleDraft = ref("");
 
 const conversationPreviewCache = computed(() => new Map(
   props.items.map((item) => [String(item.conversationId || "").trim(), Array.isArray(item.previewMessages) ? item.previewMessages : []]),
 ));
 
+watchEffect(() => {
+  const editingId = String(editingConversationId.value || "").trim();
+  if (!editingId) return;
+  const item = props.items.find((entry) => String(entry.conversationId || "").trim() === editingId);
+  if (!item || !canRenameConversation(item)) {
+    resetConversationTitleEdit();
+  }
+});
+
+function resetConversationTitleEdit() {
+  editingConversationId.value = "";
+  editingTitleDraft.value = "";
+}
+
+function setRenameInputRef(element: Element | { $el?: Element | null } | null) {
+  renameInputRef.value = element instanceof HTMLInputElement ? element : null;
+}
+
 function normalizedPreviewMessages(item: ChatConversationOverviewItem): ConversationPreviewMessage[] {
   return conversationPreviewCache.value.get(String(item.conversationId || "").trim()) || [];
+}
+
+function isCurrentConversation(item: ChatConversationOverviewItem): boolean {
+  return String(item.conversationId || "").trim() === String(props.activeConversationId || "").trim();
+}
+
+function isConversationDisabled(item: ChatConversationOverviewItem): boolean {
+  return item.runtimeState === "organizing_context";
+}
+
+function canRenameConversation(item: ChatConversationOverviewItem): boolean {
+  return isCurrentConversation(item) && !item.isMainConversation && !isConversationDisabled(item);
+}
+
+function isEditingTitle(item: ChatConversationOverviewItem): boolean {
+  return String(item.conversationId || "").trim() === String(editingConversationId.value || "").trim();
 }
 
 function conversationDisplayTitle(item: ChatConversationOverviewItem): string {
   if (item.isMainConversation) return t("chat.mainConversation");
   return item.title || t("chat.untitledConversation");
+}
+
+function conversationItemTitle(item: ChatConversationOverviewItem): string {
+  if (isConversationDisabled(item)) return t("chat.organizingContextDisabled");
+  return item.workspaceLabel || t("chat.defaultWorkspace");
+}
+
+function handleConversationCardClick(item: ChatConversationOverviewItem) {
+  if (isCurrentConversation(item) || isConversationDisabled(item)) return;
+  emit("select", item.conversationId);
+}
+
+async function startConversationTitleEdit(item: ChatConversationOverviewItem) {
+  if (!canRenameConversation(item)) return;
+  editingConversationId.value = String(item.conversationId || "").trim();
+  editingTitleDraft.value = String(item.title || "").trim();
+  await nextTick();
+  renameInputRef.value?.focus();
+  renameInputRef.value?.select();
+}
+
+function cancelConversationTitleEdit() {
+  resetConversationTitleEdit();
+}
+
+function commitConversationTitleEdit(item: ChatConversationOverviewItem) {
+  if (!isEditingTitle(item)) return;
+  const conversationId = String(item.conversationId || "").trim();
+  const currentTitle = String(item.title || "").trim();
+  const nextTitle = String(editingTitleDraft.value || "").trim();
+  if (!conversationId || !nextTitle || nextTitle === currentTitle) {
+    resetConversationTitleEdit();
+    return;
+  }
+  resetConversationTitleEdit();
+  emit("rename", {
+    conversationId,
+    title: nextTitle,
+  });
+}
+
+function handleConversationTitleBlur(item: ChatConversationOverviewItem) {
+  commitConversationTitleEdit(item);
 }
 
 function unreadCountBadge(item: ChatConversationOverviewItem): string {

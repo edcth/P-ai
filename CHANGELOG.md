@@ -6,6 +6,13 @@
   - 前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` 版本统一升级到 `0.9.2`
   - 承接上一轮 `rust-genai` 全量迁移与 `rig-core` 依赖移除后的当前发布状态
 
+## 更新：当前会话标题支持直接改名
+
+- 功能（chat-current-conversation-rename）：支持在会话列表中直接修改当前会话标题，并同步刷新前台未归档会话概览
+  - 侧边会话列表与悬浮会话列表均支持点击当前会话标题进入内联编辑
+  - 新增未归档会话改名命令，保存后立即回写 `app_data.json` 并推送会话概览刷新事件
+  - 主会话与“整理上下文中”的会话保持禁止改名，避免破坏现有固定语义与运行态约束
+
 ## 更新：聊天本地文件链接统一为正斜杠
 
 - 修复（chat-local-link-normalize-slashes）：规范聊天区本地文件链接的路径格式，避免 Windows 反斜杠进入 `href` 后被浏览器编码成 `%5C`

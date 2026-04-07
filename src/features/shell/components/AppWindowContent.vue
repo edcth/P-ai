@@ -155,6 +155,7 @@
         @lock-workspace="onLockChatWorkspace"
         @unlock-workspace="onUnlockChatWorkspace"
         @switch-conversation="onSwitchConversation"
+        @rename-conversation="onRenameConversation"
         @create-conversation="onCreateConversation"
         @open-conversation-summary="openConversationSummary"
       />
@@ -446,6 +447,7 @@ const props = defineProps<{
   onLockChatWorkspace: () => void;
   onUnlockChatWorkspace: () => void;
   onSwitchConversation: (conversationId: string) => void;
+  onRenameConversation: (payload: { conversationId: string; title: string }) => void;
   onCreateConversation: (input?: { title?: string; departmentId?: string }) => void;
   loadArchives: () => void;
   selectArchive: (id: string) => void;
