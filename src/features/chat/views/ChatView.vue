@@ -31,7 +31,7 @@
         class="ecall-chat-scroll-container relative flex flex-1 min-h-0 flex-col overflow-x-hidden overflow-y-auto p-3 scrollbar-gutter-stable"
         @scroll="onScroll"
       >
-        <div v-if="normalizedConversationTodos.length" class="sticky top-0 z-20 flex justify-center pt-1">
+        <div v-if="hasActiveOrPendingTodo" class="sticky top-0 z-20 flex justify-center pt-1">
           <div
             class="ecall-floating-todo pointer-events-auto"
             :aria-label="t('config.task.fields.todo')"
@@ -373,6 +373,10 @@ const normalizedConversationTodos = computed(() => {
       status: String(item?.status || "").trim() as ChatTodoItem["status"],
     }))
     .filter((item) => item.content && (item.status === "pending" || item.status === "in_progress" || item.status === "completed"));
+});
+
+const hasActiveOrPendingTodo = computed(() => {
+  return normalizedConversationTodos.value.some(item => item.status === "pending" || item.status === "in_progress");
 });
 
 const activeConversationTodoIndex = computed(() => {

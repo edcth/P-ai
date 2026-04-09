@@ -1,5 +1,11 @@
 # 变更日志
 
+## 修复：所有todo完成后仍然显示胶囊卡片
+
+- 修复（chat-todo-capsule-hide-when-all-completed）：当会话中所有 todo 均已完成时，隐藏顶部浮动 todo 胶囊卡片
+  - 新增 `hasActiveOrPendingTodo` 计算属性，仅当存在 `pending` 或 `in_progress` 状态的 todo 时才渲染胶囊
+  - 解决全部完成后胶囊仍占位悬浮、影响阅读体验的问题
+
 ## 更新：收拢督工任务语义与任务调度日志
 
 - 修复（supervision-task-semantics-and-scheduler-logging）：统一督工任务的字段语义、提示词结构与任务调度表现
