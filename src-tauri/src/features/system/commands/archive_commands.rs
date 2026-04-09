@@ -161,7 +161,7 @@ fn get_prompt_preview(
             &app_config.ui_language,
             Some(&state.data_path),
             last_archive_summary.as_deref(),
-            terminal_prompt_trusted_roots_block(&state, &api_config),
+            terminal_prompt_trusted_roots_block(&state, &api_config, Some(&conversation)),
             Some(ChatPromptOverrides {
                 system_preamble_blocks: vec![build_hidden_skill_snapshot_block(&state)],
                 ..Default::default()

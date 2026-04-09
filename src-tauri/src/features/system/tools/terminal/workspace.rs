@@ -324,7 +324,7 @@ fn terminal_allowed_project_roots_canonical(state: &AppState) -> Result<Vec<Path
     Ok(roots)
 }
 
-fn terminal_prompt_trusted_roots_block(state: &AppState, selected_api: &ApiConfig) -> Option<String> {
+fn terminal_prompt_trusted_roots_block(state: &AppState, selected_api: &ApiConfig, conversation: Option<&Conversation>) -> Option<String> {
     let terminal_enabled = selected_api.enable_tools
         && selected_api
             .tools
@@ -342,15 +342,38 @@ fn terminal_prompt_trusted_roots_block(state: &AppState, selected_api: &ApiConfi
 
     // Prompt 展示只需要稳定的工作区文本，不应在聊天热路径里重复做
     // read_config + canonicalize 路径求真。真正的执行边界校验仍由 exec 路径负责。
-    let current_root_text = configured_workspace_root_path(state)
+    let current_root_text = if let Some(conv) = conversation {
+        if let Some(path_str) = conv.shell_workspace_path.as_deref() {
+            let path = PathBuf::from(path_str);
+            match path.canonicalize() {
+                Ok(canonical) if canonical.is_dir() => terminal_path_for_user(&canonical),
+                _ => configured_workspace_root_path(state)
+                    .map(|p| terminal_path_for_user(&p))
+                    .unwrap_or_else(|_| terminal_path_for_user(&state.llm_workspace_path)),
+            }
+        } else {
+            configured_workspace_root_path(state)
+                .map(|p| terminal_path_for_user(&p))
+                .unwrap_or_else(|_| terminal_path_for_user(&state.llm_workspace_path))
+        }
+    } else {
+        configured_workspace_root_path(state)
+            .map(|p| terminal_path_for_user(&p))
+            .unwrap_or_else(|_| terminal_path_for_user(&state.llm_workspace_path))
+    };
+    let assistant_root_text = configured_workspace_root_path(state)
         .map(|path| terminal_path_for_user(&path))
         .unwrap_or_else(|_| terminal_path_for_user(&state.llm_workspace_path));
 
     let mut lines = Vec::<String>::new();
-    lines.push(format!("当前工作路径: {}", current_root_text));
+    if current_root_text != assistant_root_text {
+        lines.push(format!("当前会话工作路径: {}", current_root_text));
+        lines.push(format!("助理系统工作目录: {}", assistant_root_text));
+    } else {
+        lines.push(format!("当前工作路径: {}", current_root_text));
+    }
     lines.push("当前 exec 工具默认在当前工作路径执行命令。".to_string());
-    lines.push("请不要在命令中使用绝对路径。".to_string());
-    lines.push("请不要脱离当前工作空间执行任务。".to_string());
+    lines.push("如用户无明确指示，请不要脱离当前工作空间执行任务。".to_string());
     Some(prompt_xml_block("shell workspace", lines.join("\n")))
 }
 
@@ -626,4 +649,3 @@ mod terminal_workspace_tests {
         let _ = std::fs::remove_dir_all(temp_root);
     }
 }
-

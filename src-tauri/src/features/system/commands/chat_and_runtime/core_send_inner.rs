@@ -1832,7 +1832,7 @@ async fn send_chat_message_inner(
             PromptBuildMode::Chat
         };
         let chat_overrides = Some(chat_overrides);
-        let terminal_block = terminal_prompt_trusted_roots_block(&state, &selected_api);
+        let terminal_block = terminal_prompt_trusted_roots_block(&state, &selected_api, Some(&conversation));
         log_run_stage("prepare_context.prompt_build_begin");
         let prepared_prompt = build_prepared_prompt_for_mode(
             prompt_mode,
