@@ -9,6 +9,14 @@
   - `AGENTS.md` 不存在、为空或读取失败时降级跳过，并记录 `[AGENTS注入]` 日志，不阻断聊天主流程
   - 新增回归测试，覆盖用户 main workspace 命中注入、built-in workspace 跳过、仅 secondary workspace 跳过三类边界
 
+## 更新：补齐 Codex 新字段后的测试初始化
+
+- 修复（codex-config-test-fixture-backfill）：补齐测试与辅助构造中因 Codex 新字段引入而缺失的初始化字段，恢复相关单测编译通过
+  - 为 `RefreshModelsInput` 测试补齐 `provider_id / codex_auth_mode / codex_local_auth_path`
+  - 为 `ApiConfig` 测试样例补齐 `codex_auth_mode / codex_local_auth_path / reasoning_effort`
+  - 为 `ApiProviderConfig` 与 `ApiModelConfig` 测试样例补齐 `codex_auth_mode / codex_local_auth_path / reasoning_effort`
+  - 已验证 `build_workspace_agents_md_block`、`fetch_models_openai_should_read_models_from_base_url`、`delegate_target_chat_api_config_ids_should_only_keep_current_department_models` 三组测试可通过
+
 ## 更新：百炼多模态临时 URL 缓存与预览同路
 
 - 功能（aliyun-bailian-multimodal-url-cache）：为阿里云百炼新增多模态临时 URL 缓存，并让请求体预览与真实发送共用同一套媒体注入分支

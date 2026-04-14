@@ -15,6 +15,9 @@
             base_url: server.base_url(),
             api_key: "test-key".to_string(),
             request_format: RequestFormat::OpenAI,
+            provider_id: None,
+            codex_auth_mode: default_codex_auth_mode(),
+            codex_local_auth_path: default_codex_local_auth_path(),
         };
 
         let rt = test_runtime();
@@ -47,6 +50,9 @@
             base_url: server.base_url(),
             api_key: "test-key".to_string(),
             request_format: RequestFormat::OpenAI,
+            provider_id: None,
+            codex_auth_mode: default_codex_auth_mode(),
+            codex_local_auth_path: default_codex_local_auth_path(),
         };
 
         let rt = test_runtime();
