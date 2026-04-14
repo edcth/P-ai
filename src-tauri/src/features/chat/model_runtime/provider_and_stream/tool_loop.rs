@@ -574,7 +574,8 @@ async fn run_genai_tool_loop(
     tool_abort_state: Option<&AppState>,
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
-    let request_api_key = consume_api_key_for_request(api_config);
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
         endpoint: genai::resolver::Endpoint::from_owned(normalize_provider_genai_base_url(
@@ -589,7 +590,10 @@ async fn run_genai_tool_loop(
         .with_capture_content(true)
         .with_capture_reasoning_content(true)
         .with_capture_tool_calls(true)
-        .with_extra_headers(app_identity_genai_headers());
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
     if let Some(temperature) = api_config.temperature {
         options = options.with_temperature(temperature);
     }
@@ -682,6 +686,25 @@ async fn run_genai_tool_loop(
                         .and_then(|usage| usage.prompt_tokens)
                         .and_then(|value| u64::try_from(value).ok())
                         .filter(|value| *value > 0);
+                    if turn_text.is_empty() {
+                        if let Some(captured_texts) = end
+                            .captured_content
+                            .as_ref()
+                            .map(|content| content.texts())
+                            .filter(|texts| !texts.is_empty())
+                        {
+                            let joined = captured_texts.join("\n");
+                            turn_text = joined.clone();
+                            let _ = on_delta.send(AssistantDeltaEvent {
+                                delta: joined,
+                                kind: None,
+                                tool_name: None,
+                                tool_status: None,
+                                tool_args: None,
+                                message: None,
+                            });
+                        }
+                    }
                     if turn_reasoning.is_empty() {
                         if let Some(captured_reasoning) = end
                             .captured_reasoning_content
@@ -695,8 +718,12 @@ async fn run_genai_tool_loop(
                             }
                         }
                     }
-                    if let Some(captured_content) = end.captured_content {
-                        turn_tool_calls = captured_content.into_tool_calls();
+                    if let Some(captured_content) = end.captured_content.as_ref() {
+                        turn_tool_calls = captured_content
+                            .tool_calls()
+                            .into_iter()
+                            .cloned()
+                            .collect::<Vec<_>>();
                     }
                 }
                 Err(err) => return Err(format!("GenAI 流式处理失败：{err}")),
@@ -1024,7 +1051,8 @@ async fn run_genai_tool_loop_non_stream(
     tool_abort_state: Option<&AppState>,
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
-    let request_api_key = consume_api_key_for_request(api_config);
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
         endpoint: genai::resolver::Endpoint::from_owned(normalize_provider_genai_base_url(
@@ -1039,7 +1067,10 @@ async fn run_genai_tool_loop_non_stream(
         .with_capture_content(true)
         .with_capture_reasoning_content(true)
         .with_capture_tool_calls(true)
-        .with_extra_headers(app_identity_genai_headers());
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
     if let Some(temperature) = api_config.temperature {
         options = options.with_temperature(temperature);
     }

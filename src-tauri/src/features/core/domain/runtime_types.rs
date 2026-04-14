@@ -1,3 +1,30 @@
+#[derive(Clone)]
+struct CodexRuntimeAuth {
+    provider_id: String,
+    auth_mode: String,
+    local_auth_path: String,
+    access_token: String,
+    refresh_token: Option<String>,
+    account_id: Option<String>,
+    email: Option<String>,
+    expires_at_ms: Option<i64>,
+}
+
+impl std::fmt::Debug for CodexRuntimeAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodexRuntimeAuth")
+            .field("provider_id", &self.provider_id)
+            .field("auth_mode", &self.auth_mode)
+            .field("local_auth_path", &self.local_auth_path)
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "<redacted>"))
+            .field("account_id", &self.account_id.as_ref().map(|_| "<redacted>"))
+            .field("email", &self.email.as_ref().map(|_| "<redacted>"))
+            .field("expires_at_ms", &self.expires_at_ms.map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedApiConfig {
     provider_id: Option<String>,
@@ -7,8 +34,11 @@ struct ResolvedApiConfig {
     base_url: String,
     api_key: String,
     model: String,
+    reasoning_effort: Option<String>,
     temperature: Option<f64>,
     max_output_tokens: Option<u32>,
+    extra_headers: Vec<(String, String)>,
+    codex_auth: Option<CodexRuntimeAuth>,
 }
 
 #[derive(Debug, Clone)]

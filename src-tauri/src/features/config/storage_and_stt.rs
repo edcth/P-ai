@@ -129,6 +129,8 @@ fn consume_api_key_for_request(resolved_api: &ResolvedApiConfig) -> String {
         enable_tools: false,
         tools: Vec::new(),
         base_url: resolved_api.base_url.clone(),
+        codex_auth_mode: default_codex_auth_mode(),
+        codex_local_auth_path: default_codex_local_auth_path(),
         api_keys: resolved_api.provider_api_keys.clone(),
         key_cursor: resolved_api.provider_key_cursor as u32,
         cached_model_options: Vec::new(),
@@ -172,6 +174,8 @@ fn migrate_legacy_api_configs_into_providers(config: &mut AppConfig) {
                 enable_tools: legacy.enable_tools,
                 tools: legacy.tools.clone(),
                 base_url: legacy.base_url.clone(),
+                codex_auth_mode: legacy.codex_auth_mode.clone(),
+                codex_local_auth_path: legacy.codex_local_auth_path.clone(),
                 api_keys: legacy
                     .api_key
                     .trim()
@@ -190,6 +194,7 @@ fn migrate_legacy_api_configs_into_providers(config: &mut AppConfig) {
                     model: legacy.model.clone(),
                     enable_image: legacy.enable_image,
                     enable_tools: legacy.enable_tools,
+                    reasoning_effort: legacy.reasoning_effort.clone(),
                     temperature: legacy.temperature,
                     custom_temperature_enabled: legacy.custom_temperature_enabled,
                     context_window_tokens: legacy.context_window_tokens,
@@ -228,6 +233,8 @@ fn is_default_placeholder_provider(provider: &ApiProviderConfig) -> bool {
         && provider.enable_tools
         && tools_match
         && provider.base_url == "https://api.openai.com/v1"
+        && provider.codex_auth_mode == default_codex_auth_mode()
+        && provider.codex_local_auth_path == default_codex_local_auth_path()
         && provider.api_keys.is_empty()
         && provider.key_cursor == 0
         && provider.cached_model_options == vec!["gpt-4o-mini".to_string()]
@@ -236,6 +243,7 @@ fn is_default_placeholder_provider(provider: &ApiProviderConfig) -> bool {
         && model.model == "gpt-4o-mini"
         && !model.enable_image
         && model.enable_tools
+        && model.reasoning_effort == default_reasoning_effort()
         && (model.temperature - default_api_temperature()).abs() < f64::EPSILON
         && !model.custom_temperature_enabled
         && model.context_window_tokens == default_context_window_tokens()
@@ -284,7 +292,10 @@ fn expand_api_configs_from_providers(config: &mut AppConfig) {
                 tools: provider.tools.clone(),
                 base_url: provider.base_url.clone(),
                 api_key: provider.api_keys.first().cloned().unwrap_or_default(),
+                codex_auth_mode: provider.codex_auth_mode.clone(),
+                codex_local_auth_path: provider.codex_local_auth_path.clone(),
                 model: model.model.clone(),
+                reasoning_effort: model.reasoning_effort.clone(),
                 temperature: model.temperature,
                 custom_temperature_enabled: model.custom_temperature_enabled,
                 context_window_tokens: model.context_window_tokens,
@@ -360,6 +371,12 @@ fn normalize_api_tools(config: &mut AppConfig) {
         provider.enable_audio = false;
         provider.key_cursor = provider.key_cursor.min(1_000_000);
         provider.failure_retry_count = provider.failure_retry_count.clamp(0, 20);
+        provider.codex_auth_mode = normalize_codex_auth_mode(&provider.codex_auth_mode);
+        provider.codex_local_auth_path =
+            normalize_terminal_path_input_for_current_platform(&provider.codex_local_auth_path);
+        if provider.codex_local_auth_path.trim().is_empty() {
+            provider.codex_local_auth_path = default_codex_local_auth_path();
+        }
         provider.api_keys = provider
             .api_keys
             .iter()
@@ -373,9 +390,21 @@ fn normalize_api_tools(config: &mut AppConfig) {
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>();
         for model in &mut provider.models {
+            model.reasoning_effort = normalize_reasoning_effort(&model.reasoning_effort);
             model.temperature = model.temperature.clamp(0.0, 2.0);
             model.context_window_tokens = model.context_window_tokens.clamp(16_000, 2_000_000);
             model.max_output_tokens = model.max_output_tokens.clamp(256, 32_768);
+            if provider.request_format.is_codex() {
+                model.temperature = default_api_temperature();
+                model.custom_temperature_enabled = false;
+                model.context_window_tokens = default_codex_context_window_tokens();
+                model.max_output_tokens = default_max_output_tokens();
+                model.custom_max_output_tokens_enabled = false;
+            }
+        }
+        if provider.request_format.is_codex() {
+            provider.base_url = DEFAULT_CODEX_BASE_URL.to_string();
+            provider.api_keys.clear();
         }
         let legacy_command_enabled = provider.tools.iter().any(|tool| {
             matches!(
@@ -392,9 +421,25 @@ fn normalize_api_tools(config: &mut AppConfig) {
 
     for api in &mut config.api_configs {
         api.enable_audio = false;
+        api.codex_auth_mode = normalize_codex_auth_mode(&api.codex_auth_mode);
+        api.codex_local_auth_path =
+            normalize_terminal_path_input_for_current_platform(&api.codex_local_auth_path);
+        if api.codex_local_auth_path.trim().is_empty() {
+            api.codex_local_auth_path = default_codex_local_auth_path();
+        }
+        api.reasoning_effort = normalize_reasoning_effort(&api.reasoning_effort);
         api.temperature = api.temperature.clamp(0.0, 2.0);
         api.context_window_tokens = api.context_window_tokens.clamp(16_000, 2_000_000);
         api.max_output_tokens = api.max_output_tokens.clamp(256, 32_768);
+        if api.request_format.is_codex() {
+            api.base_url = DEFAULT_CODEX_BASE_URL.to_string();
+            api.api_key.clear();
+            api.temperature = default_api_temperature();
+            api.custom_temperature_enabled = false;
+            api.context_window_tokens = default_codex_context_window_tokens();
+            api.max_output_tokens = default_max_output_tokens();
+            api.custom_max_output_tokens_enabled = false;
+        }
         api.custom_max_output_tokens_enabled =
             api.request_format.is_anthropic() || api.custom_max_output_tokens_enabled;
         api.failure_retry_count = api.failure_retry_count.clamp(0, 20);
@@ -1273,8 +1318,11 @@ fn resolve_api_config(
                 base_url: debug_cfg.base_url.trim().to_string(),
                 api_key: debug_cfg.api_key.trim().to_string(),
                 model: debug_cfg.model.trim().to_string(),
+                reasoning_effort: None,
                 temperature: debug_cfg.temperature.map(|value| value.clamp(0.0, 2.0)),
                 max_output_tokens: None,
+                extra_headers: Vec::new(),
+                codex_auth: None,
             });
         }
     }
@@ -1283,8 +1331,7 @@ fn resolve_api_config(
         "No API config configured. Please add at least one API config.".to_string()
     })?;
 
-    let selected_provider_id = requested_id
-        .and_then(parse_api_endpoint_id)
+    let selected_provider_id = parse_api_endpoint_id(&selected.id)
         .and_then(|(provider_id, _model_id)| {
             app_config
                 .api_providers
@@ -1298,10 +1345,35 @@ fn resolve_api_config(
             .iter()
             .find(|provider| provider.id == provider_id)
     });
-    let selected_api_key = selected_provider
+    let mut selected_api_key = selected_provider
         .map(peek_provider_api_key)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| selected.api_key.trim().to_string());
+    let mut extra_headers = Vec::<(String, String)>::new();
+    let mut codex_auth = None;
+    if selected.request_format.is_codex() {
+        let provider = selected_provider.ok_or_else(|| {
+            "Codex provider not found. Please save the provider config first.".to_string()
+        })?;
+        let resolved = read_codex_runtime_auth_snapshot(
+            &provider.id,
+            &provider.codex_auth_mode,
+            &provider.codex_local_auth_path,
+        )?;
+        if let Some(account_id) = resolved
+            .account_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            extra_headers.push((
+                "ChatGPT-Account-Id".to_string(),
+                account_id.to_string(),
+            ));
+        }
+        extra_headers.push(("session_id".to_string(), Uuid::new_v4().to_string()));
+        selected_api_key = resolved.access_token.clone();
+        codex_auth = Some(resolved);
+    }
 
     if selected_api_key.trim().is_empty() {
         return Err("Selected API config API key is empty. Please fill it in settings.".to_string());
@@ -1319,12 +1391,20 @@ fn resolve_api_config(
         base_url: selected.base_url.trim().to_string(),
         api_key: selected_api_key,
         model: selected.model.trim().to_string(),
+        reasoning_effort: selected
+            .request_format
+            .is_codex()
+            .then(|| normalize_reasoning_effort(&selected.reasoning_effort)),
         temperature: selected
             .custom_temperature_enabled
-            .then_some(selected.temperature.clamp(0.0, 2.0)),
+            .then_some(selected.temperature.clamp(0.0, 2.0))
+            .filter(|_| !selected.request_format.is_codex()),
         max_output_tokens: (selected.request_format.is_anthropic()
             || selected.custom_max_output_tokens_enabled)
-            .then_some(selected.max_output_tokens.clamp(256, 32_768)),
+            .then_some(selected.max_output_tokens.clamp(256, 32_768))
+            .filter(|_| !selected.request_format.is_codex()),
+        extra_headers,
+        codex_auth,
     })
 }
 

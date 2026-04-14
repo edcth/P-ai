@@ -1,5 +1,14 @@
 # 变更日志
 
+## 更新：新增 Codex 协议与账号登录接入
+
+- 功能（codex-protocol-and-auth-integration）：新增独立 `codex` 协议，完成本地凭证读取、应用内 OAuth 登录、静态模型列表与配置页独立面板接入
+  - 前后端新增 `codex` 协议、`codexAuthMode / codexLocalAuthPath / reasoningEffort` 等配置字段，并将 Codex 纳入文本模型与部门模型选择
+  - 配置页新增独立 Codex 面板，支持“读取本地”与“自行登录”两种认证方式，隐藏 API Key、Base URL、温度、最大输出与手动上下文配置
+  - 后端新增 Codex 凭证解析与托管 OAuth 存储，支持读取 `~/.codex/auth.json`、本地回调登录、运行时 token 刷新与退出登录
+  - Codex 模型列表固定为 `gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex / gpt-5.3-codex-spark / gpt-5.2`，思维强度支持 `low / medium / high / xhigh`
+  - Codex 运行时继续复用 `genai OpenAIResp`，并统一固定 `base_url=https://chatgpt.com/backend-api/codex`、上下文窗口 `272000`
+
 ## 更新：非主会话归档/抛弃时标记关联任务为"会话丢失"
 
 - 修复（task-session-lost-cleanup）：非主会话被归档或抛弃时，绑定到该会话的 active 任务无法继续执行但仍保持 active 状态

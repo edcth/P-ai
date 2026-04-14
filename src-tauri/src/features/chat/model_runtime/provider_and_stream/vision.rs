@@ -83,7 +83,7 @@ async fn describe_image_with_vision_api(
                 }
             }
         }
-        RequestFormat::OpenAIResponses => {
+        RequestFormat::OpenAIResponses | RequestFormat::Codex => {
             call_model_openai_responses(
                 vision_resolved,
                 &vision_api.model,

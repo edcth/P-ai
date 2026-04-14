@@ -204,6 +204,12 @@ struct RefreshModelsInput {
     base_url: String,
     api_key: String,
     request_format: RequestFormat,
+    #[serde(default)]
+    provider_id: Option<String>,
+    #[serde(default = "default_codex_auth_mode")]
+    codex_auth_mode: String,
+    #[serde(default = "default_codex_local_auth_path")]
+    codex_local_auth_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

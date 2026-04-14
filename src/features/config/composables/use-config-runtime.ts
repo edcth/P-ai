@@ -115,15 +115,21 @@ export function useConfigRuntime(options: UseConfigRuntimeOptions) {
     if (!options.selectedApiConfig.value) return;
     const apiId = options.selectedApiConfig.value.id;
     const provider = options.selectedApiProvider.value;
+    const isCodex = options.selectedApiConfig.value.requestFormat === "codex";
+    if (isCodex) {
+      console.info(`[API] Codex mode detected: skipping API key validation; using empty candidate API key for selectedApiConfig=${options.selectedApiConfig.value.id}`);
+    }
     const apiKeys = Array.isArray(provider?.apiKeys)
       ? provider.apiKeys.map((value) => String(value || "").trim()).filter(Boolean)
       : [];
     const fallbackApiKey = String(options.selectedApiConfig.value.apiKey || "").trim();
-    const candidateApiKeys = Array.from(new Set([fallbackApiKey, ...apiKeys].filter(Boolean)));
+    const candidateApiKeys = isCodex
+      ? [""]
+      : Array.from(new Set([fallbackApiKey, ...apiKeys].filter(Boolean)));
     options.refreshingModels.value = true;
     options.modelRefreshError.value = "";
     try {
-      if (candidateApiKeys.length === 0) {
+      if (!isCodex && candidateApiKeys.length === 0) {
         throw new Error("API Key 为空，无法刷新模型列表。");
       }
       const errors: string[] = [];
@@ -135,6 +141,10 @@ export function useConfigRuntime(options: UseConfigRuntimeOptions) {
               baseUrl: options.selectedApiConfig.value.baseUrl,
               apiKey,
               requestFormat: options.selectedApiConfig.value.requestFormat,
+              providerId: String(provider?.id || "").trim() || null,
+              codexAuthMode: String(provider?.codexAuthMode || options.selectedApiConfig.value.codexAuthMode || "read_local").trim() || "read_local",
+              codexLocalAuthPath: String(provider?.codexLocalAuthPath || options.selectedApiConfig.value.codexLocalAuthPath || "~/.codex/auth.json").trim()
+                || "~/.codex/auth.json",
             },
           });
           break;

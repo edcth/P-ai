@@ -4,6 +4,7 @@ import type {
   AppBootstrapSnapshot,
   AppConfig,
   ChatSettings,
+  CodexAuthMode,
   PdfReadMode,
   PersonaProfile,
   RemoteImChannelConfig,
@@ -110,6 +111,13 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
   const MAX_MIN_RECORD_SECONDS = 30;
   const DEFAULT_MAX_RECORD_SECONDS = 60;
   const MAX_RECORD_SECONDS = 600;
+  const DEFAULT_CODEX_AUTH_MODE = "read_local";
+  const DEFAULT_CODEX_LOCAL_AUTH_PATH = "~/.codex/auth.json";
+  const DEFAULT_REASONING_EFFORT = "medium";
+
+  function normalizeCodexAuthMode(value: unknown): CodexAuthMode {
+    return String(value || "").trim() === "managed_oauth" ? "managed_oauth" : "read_local";
+  }
 
   function extractHttpStatus(error: unknown): number | null {
     if (!error || typeof error !== "object") return null;
@@ -270,6 +278,9 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
               }))
             : [],
           baseUrl: String((provider as { baseUrl?: unknown }).baseUrl || "").trim(),
+          codexAuthMode: normalizeCodexAuthMode((provider as { codexAuthMode?: unknown }).codexAuthMode),
+          codexLocalAuthPath: String((provider as { codexLocalAuthPath?: unknown }).codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim()
+            || DEFAULT_CODEX_LOCAL_AUTH_PATH,
           apiKeys: Array.isArray((provider as { apiKeys?: unknown[] }).apiKeys)
             ? ((provider as { apiKeys?: unknown[] }).apiKeys || []).map((value) => String(value || "").trim()).filter(Boolean)
             : [],
@@ -283,6 +294,7 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
                 model: String((model as { model?: unknown }).model || "").trim(),
                 enableImage: !!(model as { enableImage?: unknown }).enableImage,
                 enableTools: (model as { enableTools?: unknown }).enableTools !== false,
+                reasoningEffort: String((model as { reasoningEffort?: unknown }).reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
                 temperature: Number((model as { temperature?: unknown }).temperature ?? 1),
                 customTemperatureEnabled: !!(model as { customTemperatureEnabled?: unknown }).customTemperatureEnabled,
                 contextWindowTokens: Math.round(Number((model as { contextWindowTokens?: unknown }).contextWindowTokens ?? 128000)),

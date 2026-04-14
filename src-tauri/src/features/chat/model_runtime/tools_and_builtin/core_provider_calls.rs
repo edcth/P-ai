@@ -352,6 +352,39 @@ fn normalize_provider_genai_base_url(
     }
 }
 
+fn provider_genai_headers(api_config: &ResolvedApiConfig) -> genai::Headers {
+    let mut headers = app_identity_genai_headers();
+    headers.merge(api_config.extra_headers.clone());
+    headers
+}
+
+fn provider_genai_reasoning_effort(
+    api_config: &ResolvedApiConfig,
+) -> Option<genai::chat::ReasoningEffort> {
+    api_config
+        .reasoning_effort
+        .as_deref()
+        .and_then(|value| value.parse::<genai::chat::ReasoningEffort>().ok())
+}
+
+async fn resolve_request_api_config(
+    api_config: &ResolvedApiConfig,
+) -> Result<ResolvedApiConfig, String> {
+    let Some(codex_auth) = &api_config.codex_auth else {
+        return Ok(api_config.clone());
+    };
+    let fresh_auth = ensure_codex_runtime_auth_fresh(codex_auth).await?;
+    let mut next = api_config.clone();
+    next.api_key = fresh_auth.access_token.clone();
+    next.codex_auth = Some(fresh_auth.clone());
+    next.extra_headers.retain(|(key, _)| key != "ChatGPT-Account-Id");
+    if let Some(account_id) = fresh_auth.account_id.as_deref().filter(|value| !value.is_empty()) {
+        next.extra_headers
+            .push(("ChatGPT-Account-Id".to_string(), account_id.to_string()));
+    }
+    Ok(next)
+}
+
 async fn call_model_openai_stream_internal(
     api_config: &ResolvedApiConfig,
     model_name: &str,
@@ -359,7 +392,8 @@ async fn call_model_openai_stream_internal(
     kind: OpenAiApiKind,
     on_delta: Option<&tauri::ipc::Channel<AssistantDeltaEvent>>,
 ) -> Result<ModelReply, String> {
-    let request_api_key = consume_api_key_for_request(api_config);
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let adapter_kind = match kind {
         OpenAiApiKind::ChatCompletions => genai::adapter::AdapterKind::OpenAI,
@@ -382,7 +416,10 @@ async fn call_model_openai_stream_internal(
         .with_capture_usage(true)
         .with_capture_content(true)
         .with_capture_reasoning_content(true)
-        .with_extra_headers(app_identity_genai_headers());
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
     if let Some(temperature) = api_config.temperature {
         options = options.with_temperature(temperature);
     }
@@ -418,7 +455,8 @@ async fn call_model_openai_non_stream(
     model_name: &str,
     prepared: PreparedPrompt,
 ) -> Result<ModelReply, String> {
-    let request_api_key = consume_api_key_for_request(api_config);
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
         endpoint: genai::resolver::Endpoint::from_owned(normalize_openai_genai_base_url(
@@ -432,7 +470,10 @@ async fn call_model_openai_non_stream(
         .with_capture_usage(true)
         .with_capture_content(true)
         .with_capture_reasoning_content(true)
-        .with_extra_headers(app_identity_genai_headers());
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
     if let Some(temperature) = api_config.temperature {
         options = options.with_temperature(temperature);
     }
@@ -466,7 +507,8 @@ async fn call_model_openai_responses(
     prepared: PreparedPrompt,
     on_delta: Option<&tauri::ipc::Channel<AssistantDeltaEvent>>,
 ) -> Result<ModelReply, String> {
-    let request_api_key = consume_api_key_for_request(api_config);
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
         endpoint: genai::resolver::Endpoint::from_owned(normalize_openai_genai_base_url(
@@ -480,7 +522,10 @@ async fn call_model_openai_responses(
         .with_capture_usage(true)
         .with_capture_content(true)
         .with_capture_reasoning_content(true)
-        .with_extra_headers(app_identity_genai_headers());
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
     if let Some(temperature) = api_config.temperature {
         options = options.with_temperature(temperature);
     }
@@ -501,7 +546,8 @@ async fn call_model_gemini(
     prepared: PreparedPrompt,
 ) -> Result<ModelReply, String> {
     let request = build_gemini_genai_request(&prepared)?;
-    let request_api_key = consume_api_key_for_request(api_config);
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
         endpoint: genai::resolver::Endpoint::from_owned(normalize_provider_genai_base_url(
@@ -515,7 +561,10 @@ async fn call_model_gemini(
         .with_capture_usage(true)
         .with_capture_content(true)
         .with_capture_reasoning_content(true)
-        .with_extra_headers(app_identity_genai_headers());
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
     if let Some(temperature) = api_config.temperature {
         options = options.with_temperature(temperature);
     }
@@ -545,7 +594,8 @@ async fn call_model_anthropic(
     model_name: &str,
     prepared: PreparedPrompt,
 ) -> Result<ModelReply, String> {
-    let request_api_key = consume_api_key_for_request(api_config);
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
         endpoint: genai::resolver::Endpoint::from_owned(normalize_provider_genai_base_url(
@@ -560,7 +610,10 @@ async fn call_model_anthropic(
         .with_capture_usage(true)
         .with_capture_content(true)
         .with_capture_reasoning_content(true)
-        .with_extra_headers(app_identity_genai_headers());
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
     if let Some(temperature) = api_config.temperature {
         options = options.with_temperature(temperature);
     }

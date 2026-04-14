@@ -158,7 +158,7 @@ async fn dispatch_openai_style_call(
     auto_compaction_context: Option<&ToolLoopAutoCompactionContext>,
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
-    if matches!(selected_api.request_format, RequestFormat::OpenAIResponses) {
+    if selected_api.request_format.is_openai_responses_family() {
         call_model_openai_responses_with_tools(
             api_config,
             selected_api,
@@ -271,7 +271,7 @@ async fn execute_openai_style_request(
             }
         }
         _ => {
-            if matches!(selected_api.request_format, RequestFormat::OpenAIResponses) {
+            if selected_api.request_format.is_openai_responses_family() {
                 call_model_openai_responses(api_config, model_name, prepared, Some(on_delta)).await
             } else if prefer_non_stream {
                 call_model_openai_non_stream(api_config, model_name, prepared).await
@@ -342,7 +342,7 @@ async fn call_model_openai_style(
         selected_api.enable_audio,
     );
     let started_at = std::time::Instant::now();
-    if matches!(selected_api.request_format, RequestFormat::OpenAIResponses) {
+    if selected_api.request_format.is_openai_responses_family() {
         apply_cached_system_message_user_fallback_to_prepared(
             &mut prepared,
             &api_config.base_url,
@@ -496,7 +496,7 @@ async fn call_model_openai_style(
                     Ok(reply)
                 }
                 Err(err)
-                    if matches!(selected_api.request_format, RequestFormat::OpenAIResponses)
+                    if selected_api.request_format.is_openai_responses_family()
                         && is_system_message_not_allowed_error(&err) =>
                 {
                     retry_openai_responses_with_system_message_user_fallback(

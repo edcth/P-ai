@@ -1,6 +1,7 @@
 export type ApiRequestFormat =
   | "openai"
   | "openai_responses"
+  | "codex"
   | "openai_tts"
   | "openai_stt"
   | "openai_embedding"
@@ -8,6 +9,22 @@ export type ApiRequestFormat =
   | "gemini"
   | "gemini_embedding"
   | "anthropic";
+
+export type CodexAuthMode = "read_local" | "managed_oauth";
+
+export type CodexAuthStatus = {
+  providerId: string;
+  authMode: CodexAuthMode;
+  authenticated: boolean;
+  status: string;
+  message: string;
+  email: string;
+  accountId: string;
+  accessTokenPreview: string;
+  localAuthPath: string;
+  managedAuthPath: string;
+  expiresAt: string;
+};
 
 export type ApiToolItem = {
   id: string;
@@ -28,7 +45,10 @@ export type ApiConfigItem = {
   tools: ApiToolItem[];
   baseUrl: string;
   apiKey: string;
+  codexAuthMode?: CodexAuthMode;
+  codexLocalAuthPath?: string;
   model: string;
+  reasoningEffort?: string;
   temperature: number;
   customTemperatureEnabled?: boolean;
   contextWindowTokens: number;
@@ -41,6 +61,7 @@ export type ApiModelConfigItem = {
   model: string;
   enableImage: boolean;
   enableTools: boolean;
+  reasoningEffort?: string;
   temperature: number;
   customTemperatureEnabled?: boolean;
   contextWindowTokens: number;
@@ -58,6 +79,8 @@ export type ApiProviderConfigItem = {
   enableTools: boolean;
   tools: ApiToolItem[];
   baseUrl: string;
+  codexAuthMode?: CodexAuthMode;
+  codexLocalAuthPath?: string;
   apiKeys: string[];
   keyCursor?: number;
   cachedModelOptions: string[];

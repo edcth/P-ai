@@ -865,6 +865,7 @@ const textCapableApiConfigs = computed(() =>
       a.enableText
       && (
         a.requestFormat === "openai"
+        || a.requestFormat === "codex"
         || a.requestFormat === "openai_responses"
         || a.requestFormat === "gemini"
         || a.requestFormat === "anthropic"

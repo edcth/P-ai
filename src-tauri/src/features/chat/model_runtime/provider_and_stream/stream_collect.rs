@@ -42,6 +42,27 @@ where
             Ok(genai::chat::ChatStreamEvent::ThoughtSignatureChunk(_)) => {}
             Ok(genai::chat::ChatStreamEvent::ToolCallChunk(_)) => {}
             Ok(genai::chat::ChatStreamEvent::End(end)) => {
+                if assistant_text.is_empty() {
+                    if let Some(captured_texts) = end
+                        .captured_content
+                        .as_ref()
+                        .map(|content| content.texts())
+                        .filter(|texts| !texts.is_empty())
+                    {
+                        let joined = captured_texts.join("\n");
+                        assistant_text = joined.clone();
+                        if let Some(channel) = on_delta {
+                            let _ = channel.send(AssistantDeltaEvent {
+                                delta: joined,
+                                kind: None,
+                                tool_name: None,
+                                tool_status: None,
+                                tool_args: None,
+                                message: None,
+                            });
+                        }
+                    }
+                }
                 if reasoning_standard.is_empty() {
                     if let Some(captured_reasoning) = end
                         .captured_reasoning_content

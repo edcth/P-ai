@@ -14,6 +14,40 @@ fn default_shell_workspace_access() -> String {
     SHELL_WORKSPACE_ACCESS_READ_ONLY.to_string()
 }
 
+const CODEX_AUTH_MODE_READ_LOCAL: &str = "read_local";
+const CODEX_AUTH_MODE_MANAGED_OAUTH: &str = "managed_oauth";
+const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+
+fn default_codex_auth_mode() -> String {
+    CODEX_AUTH_MODE_READ_LOCAL.to_string()
+}
+
+fn normalize_codex_auth_mode(value: &str) -> String {
+    match value.trim() {
+        CODEX_AUTH_MODE_MANAGED_OAUTH => CODEX_AUTH_MODE_MANAGED_OAUTH.to_string(),
+        _ => CODEX_AUTH_MODE_READ_LOCAL.to_string(),
+    }
+}
+
+fn default_codex_local_auth_path() -> String {
+    "~/.codex/auth.json".to_string()
+}
+
+fn default_reasoning_effort() -> String {
+    "medium".to_string()
+}
+
+fn normalize_reasoning_effort(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "low" => "low".to_string(),
+        "high" => "high".to_string(),
+        "xhigh" => "xhigh".to_string(),
+        "none" => "none".to_string(),
+        "minimal" => "minimal".to_string(),
+        _ => "medium".to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ShellWorkspaceConfig {
@@ -248,6 +282,8 @@ struct ApiModelConfig {
     enable_image: bool,
     #[serde(default = "default_true")]
     enable_tools: bool,
+    #[serde(default = "default_reasoning_effort")]
+    reasoning_effort: String,
     #[serde(default = "default_api_temperature")]
     temperature: f64,
     #[serde(default = "default_false")]
@@ -267,6 +303,7 @@ impl Default for ApiModelConfig {
             model: "gpt-4o-mini".to_string(),
             enable_image: false,
             enable_tools: true,
+            reasoning_effort: default_reasoning_effort(),
             temperature: default_api_temperature(),
             custom_temperature_enabled: false,
             context_window_tokens: default_context_window_tokens(),
@@ -294,6 +331,10 @@ struct ApiProviderConfig {
     #[serde(default = "default_api_tools")]
     tools: Vec<ApiToolConfig>,
     base_url: String,
+    #[serde(default = "default_codex_auth_mode")]
+    codex_auth_mode: String,
+    #[serde(default = "default_codex_local_auth_path")]
+    codex_local_auth_path: String,
     #[serde(default)]
     api_keys: Vec<String>,
     #[serde(default)]
@@ -318,6 +359,8 @@ impl Default for ApiProviderConfig {
             enable_tools: true,
             tools: default_api_tools(),
             base_url: "https://api.openai.com/v1".to_string(),
+            codex_auth_mode: default_codex_auth_mode(),
+            codex_local_auth_path: default_codex_local_auth_path(),
             api_keys: Vec::new(),
             key_cursor: 0,
             cached_model_options: vec!["gpt-4o-mini".to_string()],
@@ -350,7 +393,13 @@ struct ApiConfig {
     tools: Vec<ApiToolConfig>,
     base_url: String,
     api_key: String,
+    #[serde(default = "default_codex_auth_mode")]
+    codex_auth_mode: String,
+    #[serde(default = "default_codex_local_auth_path")]
+    codex_local_auth_path: String,
     model: String,
+    #[serde(default = "default_reasoning_effort")]
+    reasoning_effort: String,
     #[serde(default = "default_api_temperature")]
     temperature: f64,
     #[serde(default = "default_false")]
@@ -424,6 +473,10 @@ fn default_context_window_tokens() -> u32 {
     128_000
 }
 
+fn default_codex_context_window_tokens() -> u32 {
+    272_000
+}
+
 fn default_max_output_tokens() -> u32 {
     4_096
 }
@@ -441,7 +494,10 @@ impl Default for ApiConfig {
             tools: default_api_tools(),
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
+            codex_auth_mode: default_codex_auth_mode(),
+            codex_local_auth_path: default_codex_local_auth_path(),
             model: "gpt-4o-mini".to_string(),
+            reasoning_effort: default_reasoning_effort(),
             temperature: default_api_temperature(),
             custom_temperature_enabled: false,
             context_window_tokens: default_context_window_tokens(),

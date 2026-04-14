@@ -284,7 +284,7 @@ async fn fetch_model_metadata(
 
 #[tauri::command]
 async fn refresh_models(input: RefreshModelsInput) -> Result<Vec<String>, String> {
-    if input.api_key.trim().is_empty() {
+    if !input.request_format.is_codex() && input.api_key.trim().is_empty() {
         return Err("API key is empty.".to_string());
     }
     if input.base_url.trim().is_empty() {
@@ -295,6 +295,13 @@ async fn refresh_models(input: RefreshModelsInput) -> Result<Vec<String>, String
         RequestFormat::OpenAI | RequestFormat::OpenAIResponses => {
             fetch_models_openai(&input).await
         }
+        RequestFormat::Codex => Ok(vec![
+            "gpt-5.4".to_string(),
+            "gpt-5.4-mini".to_string(),
+            "gpt-5.3-codex".to_string(),
+            "gpt-5.3-codex-spark".to_string(),
+            "gpt-5.2".to_string(),
+        ]),
         RequestFormat::Gemini => fetch_models_gemini_native(&input).await,
         RequestFormat::GeminiEmbedding => Err(
             "Request format 'gemini_embedding' is for embedding and does not support model list refresh."

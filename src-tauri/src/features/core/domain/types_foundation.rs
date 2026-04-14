@@ -137,6 +137,8 @@ enum RequestFormat {
     OpenAI,
     #[serde(rename = "openai_responses")]
     OpenAIResponses,
+    #[serde(rename = "codex")]
+    Codex,
     #[serde(rename = "openai_tts")]
     OpenAITts,
     #[serde(rename = "openai_stt")]
@@ -158,6 +160,7 @@ impl RequestFormat {
         match value.trim().to_ascii_lowercase().as_str() {
             "openai" => Some(Self::OpenAI),
             "openai_responses" => Some(Self::OpenAIResponses),
+            "codex" => Some(Self::Codex),
             "openai_tts" => Some(Self::OpenAITts),
             "openai_stt" => Some(Self::OpenAIStt),
             "openai_embedding" => Some(Self::OpenAIEmbedding),
@@ -174,6 +177,7 @@ impl RequestFormat {
         match self {
             Self::OpenAI => "openai",
             Self::OpenAIResponses => "openai_responses",
+            Self::Codex => "codex",
             Self::OpenAITts => "openai_tts",
             Self::OpenAIStt => "openai_stt",
             Self::OpenAIEmbedding => "openai_embedding",
@@ -197,7 +201,15 @@ impl RequestFormat {
     }
 
     fn is_openai_style(self) -> bool {
-        matches!(self, Self::OpenAI | Self::OpenAIResponses)
+        matches!(self, Self::OpenAI | Self::OpenAIResponses | Self::Codex)
+    }
+
+    fn is_openai_responses_family(self) -> bool {
+        matches!(self, Self::OpenAIResponses | Self::Codex)
+    }
+
+    fn is_codex(self) -> bool {
+        matches!(self, Self::Codex)
     }
 
     fn is_chat_text(self) -> bool {
@@ -205,6 +217,7 @@ impl RequestFormat {
             self,
             Self::OpenAI
                 | Self::OpenAIResponses
+                | Self::Codex
                 | Self::Gemini
                 | Self::Anthropic
         )

@@ -63,7 +63,7 @@
               </label>
             </div>
 
-            <div class="flex flex-col gap-1">
+            <div v-if="!selectedProviderIsCodex" class="flex flex-col gap-1">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium">{{ t("config.api.baseUrl") }}</span>
                 <button class="btn btn-xs bg-base-200" type="button" @click="baseUrlHelperOpen = !baseUrlHelperOpen">
@@ -92,7 +92,7 @@
           </div>
         </div>
 
-          <div class="card bg-base-100 border border-base-300">
+          <div v-if="!selectedProviderIsCodex" class="card bg-base-100 border border-base-300">
             <div class="card-body gap-3 p-4">
               <div class="flex items-center justify-between gap-2">
                 <div>
@@ -129,7 +129,18 @@
             </div>
           </div>
 
-          <div class="card bg-base-100 border border-base-300">
+          <CodexProviderPanel
+            v-else
+            :provider="selectedProvider"
+            :selected-api-config-id="props.config.selectedApiConfigId"
+            :refreshing-models="props.refreshingModels"
+            :model-options="props.modelOptions"
+            :model-refresh-error="props.modelRefreshError"
+            @refresh-models="$emit('refreshModels')"
+            @select-model="selectModelCard"
+          />
+
+          <div v-if="!selectedProviderIsCodex" class="card bg-base-100 border border-base-300">
             <div class="card-body gap-3 p-4">
               <div class="flex items-center justify-between gap-2">
                 <div>
@@ -285,11 +296,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronsUpDown, ExternalLink, Eye, EyeOff, Link, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
-import type { ApiModelConfigItem, ApiProviderConfigItem, ApiRequestFormat, AppConfig } from "../../../../types/app";
+import { ChevronsUpDown, ExternalLink, Eye, EyeOff, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
+import type { ApiModelConfigItem, ApiProviderConfigItem, ApiRequestFormat, AppConfig, CodexAuthMode, CodexAuthStatus } from "../../../../types/app";
 import { invokeTauri } from "../../../../services/tauri-api";
+import CodexProviderPanel from "./CodexProviderPanel.vue";
 
 type ApiCapability = "text" | "voice" | "embedding";
 type ProviderPreset = {
@@ -316,6 +328,10 @@ type ModelCapabilityLimits = {
 };
 
 const SLIDER_CONTEXT_MIN = 16_000;
+const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
+const DEFAULT_CODEX_AUTH_MODE: CodexAuthMode = "read_local";
+const DEFAULT_CODEX_LOCAL_AUTH_PATH = "~/.codex/auth.json";
+const DEFAULT_REASONING_EFFORT = "medium";
 
 const props = defineProps<{
   config: AppConfig;
@@ -345,6 +361,9 @@ const pendingDeleteProviderId = ref("");
 const pendingDeleteProviderName = ref("");
 const showApiKeys = ref<Record<string, Record<number, boolean>>>({});
 const modelCapabilityById = ref<Record<string, ModelCapabilityLimits>>({});
+const codexAuthBusy = ref(false);
+const codexAuthStatusByProvider = ref<Record<string, CodexAuthStatus>>({});
+const codexAuthPollTimer = ref<number | null>(null);
 const capabilityTabs: Array<{ id: ApiCapability; label: string }> = [
   { id: "text", label: "文本" },
   { id: "voice", label: "语音" },
@@ -354,6 +373,7 @@ const protocolOptionsByCapability: Record<ApiCapability, ProtocolOption[]> = {
   text: [
     { value: "openai", label: "OpenAI Compatible" },
     { value: "openai_responses", label: "OpenAI Responses" },
+    { value: "codex", label: "OpenAI Codex" },
     { value: "gemini", label: "Google Gemini" },
     { value: "anthropic", label: "Anthropic" },
   ],
@@ -375,6 +395,7 @@ const capabilityDefaultProtocol: Record<ApiCapability, ApiRequestFormat> = {
 
 const providerPresets: ProviderPreset[] = [
   { id: "openai-official", name: "OpenAI", urls: { openai: "https://api.openai.com/v1", openai_responses: "https://api.openai.com/v1", openai_stt: "https://api.openai.com/v1", openai_tts: "https://api.openai.com/v1/audio/speech", openai_embedding: "https://api.openai.com/v1", openai_rerank: "https://api.openai.com/v1" }, docsUrl: "https://platform.openai.com/docs/overview" },
+  { id: "openai-codex", name: "OpenAI Codex", urls: { codex: DEFAULT_CODEX_BASE_URL }, docsUrl: "https://chatgpt.com" },
   { id: "anthropic-official", name: "Anthropic", urls: { anthropic: "https://api.anthropic.com" }, docsUrl: "https://docs.anthropic.com/en/api/overview" },
   { id: "google-gemini", name: "Google Gemini", urls: { gemini: "https://generativelanguage.googleapis.com", gemini_embedding: "https://generativelanguage.googleapis.com" }, docsUrl: "https://ai.google.dev/gemini-api/docs", hasFreeQuota: true },
   { id: "deepseek", name: "DeepSeek", urls: { anthropic: "https://api.deepseek.com/anthropic", openai: "https://api.deepseek.com/v1", openai_responses: "https://api.deepseek.com/v1" }, docsUrl: "https://api-docs.deepseek.com/" },
@@ -391,6 +412,16 @@ const providerPresets: ProviderPreset[] = [
   { id: "openrouter", name: "OpenRouter", urls: { openai: "https://openrouter.ai/api/v1", openai_responses: "https://openrouter.ai/api/v1" }, docsUrl: "https://openrouter.ai/docs/api-reference/overview", hasFreeQuota: true },
   { id: "cloudflare-gateway", name: "Cloudflare Gateway", urls: { openai: "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}", openai_responses: "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}" }, docsUrl: "https://developers.cloudflare.com/ai-gateway/" },
   { id: "ollama-local", name: "Ollama (Local)", urls: { openai: "http://localhost:11434/v1", openai_responses: "http://localhost:11434/v1" }, docsUrl: "https://github.com/ollama/ollama/blob/main/docs/openai.md" },
+];
+const reasoningEffortOptions = [
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "xhigh", label: "超高" },
+];
+const codexAuthModeOptions: Array<{ value: CodexAuthMode; label: string }> = [
+  { value: "read_local", label: "读取本地" },
+  { value: "managed_oauth", label: "自行登录" },
 ];
 
 const providerList = computed(() => props.config.apiProviders || []);
@@ -417,6 +448,11 @@ const selectedModel = computed(() => {
 });
 
 const selectedProtocol = computed<ApiRequestFormat>(() => selectedProvider.value?.requestFormat || "openai");
+const selectedProviderIsCodex = computed(() => selectedProtocol.value === "codex");
+const currentCodexAuthStatus = computed(() => {
+  const providerId = String(selectedProvider.value?.id || "").trim();
+  return providerId ? codexAuthStatusByProvider.value[providerId] ?? null : null;
+});
 
 const filteredProviderPresets = computed(() => {
   const matched = providerPresets.filter((preset) => Boolean(preset.urls[selectedProtocol.value]));
@@ -502,6 +538,8 @@ function cloneProvider(provider: ApiProviderConfigItem): ApiProviderConfigItem {
       }))
       : [],
     baseUrl: String(provider.baseUrl || "").trim(),
+    codexAuthMode: (String(provider.codexAuthMode || DEFAULT_CODEX_AUTH_MODE).trim() || DEFAULT_CODEX_AUTH_MODE) as CodexAuthMode,
+    codexLocalAuthPath: String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
     apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys.map((value) => String(value || "")) : [],
     keyCursor: Math.max(0, Math.round(Number(provider.keyCursor ?? 0))),
     cachedModelOptions: Array.isArray(provider.cachedModelOptions)
@@ -513,6 +551,7 @@ function cloneProvider(provider: ApiProviderConfigItem): ApiProviderConfigItem {
         model: String(model.model || "").trim(),
         enableImage: !!model.enableImage,
         enableTools: model.enableTools !== false,
+        reasoningEffort: String(model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
         temperature: Number(model.temperature ?? 1),
         customTemperatureEnabled: !!model.customTemperatureEnabled,
         contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
@@ -543,6 +582,8 @@ function normalizeProviderForCompare(provider: ApiProviderConfigItem) {
       }))
       : [],
     baseUrl: String(provider.baseUrl || "").trim(),
+    codexAuthMode: (String(provider.codexAuthMode || DEFAULT_CODEX_AUTH_MODE).trim() || DEFAULT_CODEX_AUTH_MODE) as CodexAuthMode,
+    codexLocalAuthPath: String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
     apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys.map((value) => String(value || "")) : [],
     cachedModelOptions: Array.isArray(provider.cachedModelOptions)
       ? provider.cachedModelOptions.map((value) => String(value || "").trim()).filter(Boolean)
@@ -553,6 +594,7 @@ function normalizeProviderForCompare(provider: ApiProviderConfigItem) {
         model: String(model.model || "").trim(),
         enableImage: !!model.enableImage,
         enableTools: model.enableTools !== false,
+        reasoningEffort: String(model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
         temperature: Number(model.temperature ?? 1),
         customTemperatureEnabled: !!model.customTemperatureEnabled,
         contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
@@ -568,12 +610,47 @@ function buildProviderSeed() {
   return Date.now().toString();
 }
 
+function stopCodexAuthPolling() {
+  if (codexAuthPollTimer.value !== null) {
+    window.clearInterval(codexAuthPollTimer.value);
+    codexAuthPollTimer.value = null;
+  }
+}
+
+function applyProtocolDefaults(provider: ApiProviderConfigItem) {
+  const isCodex = provider.requestFormat === "codex";
+  if (isCodex) {
+    provider.baseUrl = DEFAULT_CODEX_BASE_URL;
+    provider.codexAuthMode = (String(provider.codexAuthMode || DEFAULT_CODEX_AUTH_MODE).trim() || DEFAULT_CODEX_AUTH_MODE) as CodexAuthMode;
+    provider.codexLocalAuthPath = String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH;
+    provider.apiKeys = [];
+    provider.models = (provider.models || []).map((model) => ({
+      ...model,
+      reasoningEffort: String(model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
+      temperature: 1,
+      customTemperatureEnabled: false,
+      contextWindowTokens: 128000,
+      customMaxOutputTokensEnabled: false,
+      maxOutputTokens: 4096,
+    }));
+    return;
+  }
+  if (!Array.isArray(provider.apiKeys) || provider.apiKeys.length === 0) {
+    provider.apiKeys = [""];
+  }
+  provider.models = (provider.models || []).map((model) => ({
+    ...model,
+    reasoningEffort: String(model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
+  }));
+}
+
 function createModel(seed: string, name = "gpt-4o-mini"): ApiModelConfigItem {
   return {
     id: `api-model-${seed}`,
     model: name,
     enableImage: false,
     enableTools: true,
+    reasoningEffort: DEFAULT_REASONING_EFFORT,
     temperature: 1,
     customTemperatureEnabled: false,
     contextWindowTokens: 128000,
@@ -584,6 +661,7 @@ function createModel(seed: string, name = "gpt-4o-mini"): ApiModelConfigItem {
 
 function createProvider(seed: string, capability: ApiCapability = activeCapability.value): ApiProviderConfigItem {
   const requestFormat = capabilityDefaultProtocol[capability];
+  const isCodex = requestFormat === "codex";
   return {
     id: `api-provider-${seed}`,
     name: `API Provider ${providerList.value.length + 1}`,
@@ -593,11 +671,13 @@ function createProvider(seed: string, capability: ApiCapability = activeCapabili
     enableAudio: capability === "voice",
     enableTools: capability === "text",
     tools: [],
-    baseUrl: providerPresets.find((preset) => preset.urls[requestFormat])?.urls[requestFormat] || "https://api.openai.com/v1",
-    apiKeys: [""],
+    baseUrl: providerPresets.find((preset) => preset.urls[requestFormat])?.urls[requestFormat] || (isCodex ? DEFAULT_CODEX_BASE_URL : "https://api.openai.com/v1"),
+    codexAuthMode: DEFAULT_CODEX_AUTH_MODE,
+    codexLocalAuthPath: DEFAULT_CODEX_LOCAL_AUTH_PATH,
+    apiKeys: isCodex ? [] : [""],
     keyCursor: 0,
-    cachedModelOptions: ["gpt-4o-mini"],
-    models: [createModel(seed)],
+    cachedModelOptions: isCodex ? ["gpt-5.4"] : ["gpt-4o-mini"],
+    models: [createModel(seed, isCodex ? "gpt-5.4" : "gpt-4o-mini")],
     failureRetryCount: 0,
   };
 }
@@ -620,6 +700,12 @@ function handleRequestFormatChange(event: Event) {
   const provider = selectedProvider.value;
   if (!provider) return;
   provider.requestFormat = (event.target as HTMLSelectElement).value as ApiRequestFormat;
+  applyProtocolDefaults(provider);
+  if (provider.requestFormat !== "codex") {
+    stopCodexAuthPolling();
+  } else {
+    void refreshCodexAuthStatus(provider);
+  }
 }
 
 function selectModelCard(modelId: string) {
@@ -631,6 +717,7 @@ function selectModelCard(modelId: string) {
 function addProvider() {
   const seed = buildProviderSeed();
   const provider = createProvider(seed, activeCapability.value);
+  applyProtocolDefaults(provider);
   props.config.apiProviders.push(provider);
   props.config.selectedApiConfigId = `${provider.id}::${provider.models[0].id}`;
 }
@@ -678,6 +765,7 @@ function switchCapabilityTab(capability: ApiCapability) {
   }
   const seed = buildProviderSeed();
   const provider = createProvider(seed, capability);
+  applyProtocolDefaults(provider);
   props.config.apiProviders.push(provider);
   props.config.selectedApiConfigId = `${provider.id}::${provider.models[0].id}`;
 }
@@ -721,7 +809,11 @@ function addModelCard() {
   if (!provider) return;
   const seed = buildProviderSeed();
   const model = createModel(seed, "");
+  if (provider.requestFormat === "codex") {
+    model.model = "gpt-5.4";
+  }
   provider.models.push(model);
+  applyProtocolDefaults(provider);
   props.config.selectedApiConfigId = `${provider.id}::${model.id}`;
   activeModelPickerId.value = model.id;
 }
@@ -783,6 +875,9 @@ function selectModelOption(modelCard: ApiModelConfigItem, option: string) {
   if (provider && !provider.cachedModelOptions.includes(option)) {
     provider.cachedModelOptions.push(option);
   }
+  if (provider) {
+    applyProtocolDefaults(provider);
+  }
   void syncModelMetadata(modelCard);
   closeModelPicker();
 }
@@ -820,6 +915,129 @@ async function syncModelMetadata(modelCard: ApiModelConfigItem) {
   }
 }
 
+function resolveCodexProvider(provider?: ApiProviderConfigItem | null): ApiProviderConfigItem | null {
+  if (!provider || provider.requestFormat !== "codex") return null;
+  applyProtocolDefaults(provider);
+  return provider;
+}
+
+function storeCodexAuthStatus(status: CodexAuthStatus) {
+  const providerId = String(status.providerId || "").trim();
+  if (!providerId) return;
+  codexAuthStatusByProvider.value = {
+    ...codexAuthStatusByProvider.value,
+    [providerId]: status,
+  };
+  if (status.authenticated || status.status === "error" || status.status === "expired") {
+    stopCodexAuthPolling();
+  }
+}
+
+function codexAuthFailureStatus(provider: ApiProviderConfigItem, error: unknown): CodexAuthStatus {
+  const message = String(error || "Codex 登录状态检查失败。");
+  const normalized = message.toLowerCase();
+  const status = normalized.includes("auth.json")
+    || normalized.includes("读取托管 codex 凭证失败")
+    || normalized.includes("读取 codex 本地凭证失败")
+    ? "unauthenticated"
+    : "error";
+  return {
+    providerId: provider.id,
+    authMode: (String(provider.codexAuthMode || DEFAULT_CODEX_AUTH_MODE).trim() || DEFAULT_CODEX_AUTH_MODE) as CodexAuthMode,
+    authenticated: false,
+    status,
+    message,
+    email: "",
+    accountId: "",
+    accessTokenPreview: "",
+    localAuthPath: String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
+    managedAuthPath: "",
+    expiresAt: "",
+  };
+}
+
+async function refreshCodexAuthStatus(providerArg?: ApiProviderConfigItem | null) {
+  const provider = resolveCodexProvider(providerArg ?? selectedProvider.value);
+  if (!provider) return null;
+  try {
+    const status = await invokeTauri<CodexAuthStatus>("codex_get_auth_status", {
+      input: {
+        providerId: provider.id,
+        authMode: provider.codexAuthMode || DEFAULT_CODEX_AUTH_MODE,
+        localAuthPath: provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH,
+      },
+    });
+    storeCodexAuthStatus(status);
+    return status;
+  } catch (error) {
+    const status = codexAuthFailureStatus(provider, error);
+    storeCodexAuthStatus(status);
+    return status;
+  }
+}
+
+function startCodexAuthPolling(providerId: string) {
+  stopCodexAuthPolling();
+  codexAuthPollTimer.value = window.setInterval(() => {
+    const provider = providerList.value.find((item) => item.id === providerId) ?? null;
+    void refreshCodexAuthStatus(provider);
+  }, 2500);
+}
+
+async function checkLocalCodexAuth() {
+  await refreshCodexAuthStatus();
+}
+
+async function startCodexOAuthLogin() {
+  const provider = resolveCodexProvider(selectedProvider.value);
+  if (!provider) return;
+  codexAuthBusy.value = true;
+  try {
+    const status = await invokeTauri<CodexAuthStatus>("codex_start_oauth_login", {
+      input: {
+        providerId: provider.id,
+      },
+    });
+    storeCodexAuthStatus(status);
+    startCodexAuthPolling(provider.id);
+  } catch (error) {
+    storeCodexAuthStatus(codexAuthFailureStatus(provider, error));
+  } finally {
+    codexAuthBusy.value = false;
+  }
+}
+
+async function logoutCodex() {
+  const provider = resolveCodexProvider(selectedProvider.value);
+  if (!provider) return;
+  codexAuthBusy.value = true;
+  try {
+    await invokeTauri("codex_logout", {
+      input: {
+        providerId: provider.id,
+      },
+    });
+    stopCodexAuthPolling();
+    storeCodexAuthStatus({
+      providerId: provider.id,
+      authMode: (String(provider.codexAuthMode || DEFAULT_CODEX_AUTH_MODE).trim() || DEFAULT_CODEX_AUTH_MODE) as CodexAuthMode,
+      authenticated: false,
+      status: "unauthenticated",
+      message: "已退出 Codex 登录。",
+      email: "",
+      accountId: "",
+      accessTokenPreview: "",
+      localAuthPath: String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
+      managedAuthPath: "",
+      expiresAt: "",
+    });
+  } catch (error) {
+    storeCodexAuthStatus(codexAuthFailureStatus(provider, error));
+  } finally {
+    codexAuthBusy.value = false;
+  }
+}
+
 function applyGeneratedBaseUrl(presetId?: string) {
   if (!selectedProvider.value) return;
   if (presetId) {
@@ -841,10 +1059,33 @@ async function openProviderSite(preset: ProviderPreset) {
 async function handleSaveApiConfig() {
   const provider = selectedProvider.value;
   if (provider) {
+    applyProtocolDefaults(provider);
     provider.cachedModelOptions = Array.from(new Set(providerModelOptions.value));
   }
   await Promise.resolve(props.saveApiConfigAction());
 }
+
+watch(
+  () => selectedProvider.value?.id,
+  (providerId) => {
+    const provider = selectedProvider.value;
+    if (!providerId || !provider) {
+      stopCodexAuthPolling();
+      return;
+    }
+    applyProtocolDefaults(provider);
+    if (provider.requestFormat === "codex") {
+      void refreshCodexAuthStatus(provider);
+      return;
+    }
+    stopCodexAuthPolling();
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => {
+  stopCodexAuthPolling();
+});
 </script>
 
 <style scoped>

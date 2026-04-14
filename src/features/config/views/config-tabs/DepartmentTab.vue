@@ -208,7 +208,7 @@ const selectedDepartmentIsPrivateWorkspace = computed(
   () => selectedDepartment.value?.source === "private_workspace",
 );
 const textDepartmentApiConfigs = computed(() =>
-  props.apiConfigs.filter((api) => !!api.enableText && ["openai", "openai_responses", "gemini", "anthropic"].includes(api.requestFormat)),
+  props.apiConfigs.filter((api) => !!api.enableText && ["openai", "codex", "openai_responses", "gemini", "anthropic"].includes(api.requestFormat)),
 );
 const selectedDepartmentApiConfigIds = computed(() =>
   currentDepartmentApiConfigIdsForEditor(selectedDepartment.value),

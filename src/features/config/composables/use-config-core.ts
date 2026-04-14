@@ -1,5 +1,5 @@
 import type { ComputedRef } from "vue";
-import type { ApiConfigItem, ApiModelConfigItem, ApiProviderConfigItem, AppConfig, RemoteImChannelConfig, RemoteImPlatform } from "../../../types/app";
+import type { ApiConfigItem, ApiModelConfigItem, ApiProviderConfigItem, AppConfig, CodexAuthMode, RemoteImChannelConfig, RemoteImPlatform } from "../../../types/app";
 import { defaultToolBindings } from "../utils/builtin-tools";
 
 function normalizeRemoteImPlatform(value: unknown): RemoteImPlatform {
@@ -17,6 +17,9 @@ type UseConfigCoreOptions = {
 
 export function useConfigCore(options: UseConfigCoreOptions) {
   const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+  const DEFAULT_CODEX_AUTH_MODE = "read_local";
+  const DEFAULT_CODEX_LOCAL_AUTH_PATH = "~/.codex/auth.json";
+  const DEFAULT_REASONING_EFFORT = "medium";
 
   function toFiniteMaxOutputTokens(value: unknown): number {
     const parsed = Number(value);
@@ -27,12 +30,17 @@ export function useConfigCore(options: UseConfigCoreOptions) {
     return defaultToolBindings();
   }
 
+  function normalizeCodexAuthMode(value: unknown): CodexAuthMode {
+    return String(value || "").trim() === "managed_oauth" ? "managed_oauth" : "read_local";
+  }
+
   function createApiModel(seed = Date.now().toString(), model = "gpt-4o-mini"): ApiModelConfigItem {
     return {
       id: `api-model-${seed}`,
       model,
       enableImage: false,
       enableTools: true,
+      reasoningEffort: DEFAULT_REASONING_EFFORT,
       temperature: 1,
       customTemperatureEnabled: false,
       contextWindowTokens: 128000,
@@ -52,6 +60,8 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       enableTools: true,
       tools: defaultApiTools(),
       baseUrl: "https://api.openai.com/v1",
+      codexAuthMode: DEFAULT_CODEX_AUTH_MODE,
+      codexLocalAuthPath: DEFAULT_CODEX_LOCAL_AUTH_PATH,
       apiKeys: [],
       keyCursor: 0,
       cachedModelOptions: ["gpt-4o-mini"],
@@ -74,7 +84,10 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       tools: defaultApiTools(),
       baseUrl: provider.baseUrl,
       apiKey: "",
+      codexAuthMode: normalizeCodexAuthMode(provider.codexAuthMode),
+      codexLocalAuthPath: String(provider.codexLocalAuthPath || "").trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
       model: model.model,
+      reasoningEffort: String(model.reasoningEffort || "").trim() || DEFAULT_REASONING_EFFORT,
       temperature: model.temperature,
       customTemperatureEnabled: false,
       contextWindowTokens: model.contextWindowTokens,
@@ -100,6 +113,8 @@ export function useConfigCore(options: UseConfigCoreOptions) {
           enableTools: !!api.enableTools,
           tools: (api.tools || []).map((tool) => ({ ...tool, args: [...(tool.args || [])], values: { ...(tool.values || {}) } })),
           baseUrl: api.baseUrl,
+          codexAuthMode: normalizeCodexAuthMode(api.codexAuthMode),
+          codexLocalAuthPath: String(api.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
           apiKeys: api.apiKey ? [api.apiKey] : [],
           keyCursor: 0,
           cachedModelOptions: api.model ? [api.model] : [],
@@ -108,6 +123,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
             model: api.model,
             enableImage: !!api.enableImage,
             enableTools: !!api.enableTools,
+            reasoningEffort: String(api.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
             temperature: Number(api.temperature ?? 1),
             customTemperatureEnabled: !!api.customTemperatureEnabled,
             contextWindowTokens: Math.round(Number(api.contextWindowTokens ?? 128000)),
@@ -137,12 +153,16 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         provider.enableText = !!draft.enableText;
         provider.enableAudio = !!draft.enableAudio;
         provider.baseUrl = String(draft.baseUrl || "").trim();
+        provider.codexAuthMode = normalizeCodexAuthMode(draft.codexAuthMode || provider.codexAuthMode);
+        provider.codexLocalAuthPath = String(draft.codexLocalAuthPath || provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim()
+          || DEFAULT_CODEX_LOCAL_AUTH_PATH;
         if (String(draft.apiKey || "").trim()) {
           provider.apiKeys = [String(draft.apiKey || "").trim(), ...(provider.apiKeys || []).slice(1)];
         }
         model.model = String(draft.model || "").trim();
         model.enableImage = !!draft.enableImage;
         model.enableTools = !!draft.enableTools;
+        model.reasoningEffort = String(draft.reasoningEffort || model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT;
         model.temperature = Number(draft.temperature ?? 1);
         model.customTemperatureEnabled = !!draft.customTemperatureEnabled;
         model.contextWindowTokens = Math.round(Number(draft.contextWindowTokens ?? 128000));
@@ -172,7 +192,10 @@ export function useConfigCore(options: UseConfigCoreOptions) {
           tools: (provider.tools || []).map((tool) => ({ ...tool, args: [...(tool.args || [])], values: { ...(tool.values || {}) } })),
           baseUrl: provider.baseUrl,
           apiKey,
+          codexAuthMode: normalizeCodexAuthMode(provider.codexAuthMode),
+          codexLocalAuthPath: String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
           model: modelValue,
+          reasoningEffort: String(model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
           temperature: Number(model.temperature ?? 1),
           customTemperatureEnabled: !!model.customTemperatureEnabled,
           contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
@@ -199,7 +222,10 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         tools: providerTools,
         baseUrl: provider.baseUrl,
         apiKey: providerApiKey,
+        codexAuthMode: normalizeCodexAuthMode(provider.codexAuthMode),
+        codexLocalAuthPath: String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
         model: model.model,
+        reasoningEffort: String(model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
         temperature: Number(model.temperature ?? 1),
         customTemperatureEnabled: !!model.customTemperatureEnabled,
         contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
@@ -269,6 +295,8 @@ export function useConfigCore(options: UseConfigCoreOptions) {
           values: t.values ?? {},
         })),
         baseUrl: provider.baseUrl,
+        codexAuthMode: normalizeCodexAuthMode(provider.codexAuthMode),
+        codexLocalAuthPath: String(provider.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
         apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys.map((value) => String(value || "").trim()).filter(Boolean) : [],
         keyCursor: Math.max(0, Math.round(Number(provider.keyCursor ?? 0))),
         cachedModelOptions: Array.isArray(provider.cachedModelOptions)
@@ -279,6 +307,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
           model: model.model,
           enableImage: !!model.enableImage,
           enableTools: model.enableTools !== false,
+          reasoningEffort: String(model.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
           temperature: Number(model.temperature ?? 1),
           customTemperatureEnabled: !!model.customTemperatureEnabled,
           contextWindowTokens: Math.round(Number(model.contextWindowTokens ?? 128000)),
@@ -304,7 +333,10 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         })),
         baseUrl: a.baseUrl,
         apiKey: a.apiKey,
+        codexAuthMode: normalizeCodexAuthMode(a.codexAuthMode),
+        codexLocalAuthPath: String(a.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
         model: a.model,
+        reasoningEffort: String(a.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
         temperature: Number(a.temperature ?? 1),
         customTemperatureEnabled: !!a.customTemperatureEnabled,
         contextWindowTokens: Math.round(Number(a.contextWindowTokens ?? 128000)),
@@ -351,7 +383,10 @@ export function useConfigCore(options: UseConfigCoreOptions) {
         })),
         baseUrl: a.baseUrl,
         apiKey: a.apiKey,
+        codexAuthMode: normalizeCodexAuthMode(a.codexAuthMode),
+        codexLocalAuthPath: String(a.codexLocalAuthPath || DEFAULT_CODEX_LOCAL_AUTH_PATH).trim() || DEFAULT_CODEX_LOCAL_AUTH_PATH,
         model: a.model,
+        reasoningEffort: String(a.reasoningEffort || DEFAULT_REASONING_EFFORT).trim() || DEFAULT_REASONING_EFFORT,
         temperature: a.temperature,
         customTemperatureEnabled: !!a.customTemperatureEnabled,
         contextWindowTokens: a.contextWindowTokens,

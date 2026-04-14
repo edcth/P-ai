@@ -178,7 +178,7 @@ async fn invoke_model_by_format(
 ) -> Result<ModelReply, String> {
     match resolved_api.request_format {
         RequestFormat::OpenAI => call_model_openai_stream(resolved_api, model_name, prepared).await,
-        RequestFormat::OpenAIResponses => {
+        RequestFormat::OpenAIResponses | RequestFormat::Codex => {
             call_model_openai_responses(resolved_api, model_name, prepared, None).await
         }
         RequestFormat::Gemini => call_model_gemini(resolved_api, model_name, prepared).await,
@@ -263,7 +263,7 @@ async fn invoke_model_with_policy(
         &resolved_api.base_url,
         model_name,
     );
-    if matches!(resolved_api.request_format, RequestFormat::OpenAIResponses)
+    if resolved_api.request_format.is_openai_responses_family()
         && provider_system_message_user_fallback(app_state, &resolved_api.base_url)
         && move_system_preamble_to_user_prompt(&mut prepared)
     {
@@ -321,7 +321,7 @@ async fn invoke_model_with_policy(
     let result = match first_result {
         Ok(reply) => Ok(reply),
         Err(err)
-            if matches!(resolved_api.request_format, RequestFormat::OpenAIResponses)
+            if resolved_api.request_format.is_openai_responses_family()
                 && is_system_message_not_allowed_error(&err) =>
         {
             if let Err(mark_err) =

@@ -1,6 +1,9 @@
 // ==================== 配置与人格命令 ====================
 include!("commands/config_and_persona.rs");
 
+// ==================== Codex OAuth 命令 ====================
+include!("commands/codex_auth.rs");
+
 // ==================== 提示词组装层 ====================
 include!("commands/prompt_assembly.rs");
 
