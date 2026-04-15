@@ -333,28 +333,55 @@
       </form>
     </dialog>
     <dialog class="modal" :class="{ 'modal-open': terminalApprovalDialogOpen }">
-      <div class="modal-box max-w-md">
+      <div class="modal-box max-w-2xl">
         <h3 class="font-semibold text-base">
           {{ terminalApprovalDialogTitle }}
         </h3>
-        <pre class="mt-2 whitespace-pre-wrap text-sm text-base-content">{{ terminalApprovalDialogBody }}</pre>
+        <TerminalApprovalImpactPanel
+          :approval-kind="terminalApprovalCurrent?.approvalKind"
+          :command="terminalApprovalCurrent?.command"
+          :impact-summary="terminalApprovalImpactSummary"
+          :patch-kinds="terminalApprovalPatchKinds"
+        />
+        <div v-if="terminalApprovalShouldShowCodePreview" class="mt-4">
+          <TerminalApprovalPatchSample
+            :lines="terminalApprovalShowDiffOnly ? terminalApprovalCurrentPatchLines : terminalApprovalPreviewLines"
+            :diff-only="terminalApprovalShowDiffOnly"
+          />
+        </div>
+        <div v-if="terminalApprovalPatchBlocks.length > 1" class="mt-3 flex justify-center">
+          <div class="join">
+            <button
+              v-for="index in terminalApprovalPatchBlocks.length"
+              :key="index"
+              class="join-item"
+              :class="[
+                'btn btn-xs',
+                terminalApprovalCurrentPatchIndex + 1 === index ? 'btn-active' : 'btn-ghost',
+              ]"
+              @click="goToTerminalApprovalPatch(index - 1)"
+            >
+              {{ index }}
+            </button>
+          </div>
+        </div>
         <div v-if="terminalApprovalQueue.length > 1" class="text-sm opacity-70 mt-2">
           {{ t("status.terminalApprovalQueueHint", { count: terminalApprovalQueue.length }) }}
         </div>
-        <div class="modal-action">
+        <div class="modal-action justify-center">
           <button
-            class="btn btn-sm"
+            class="btn btn-sm btn-warning text-warning-content min-w-24"
             :disabled="terminalApprovalResolving"
             @click="denyTerminalApproval"
           >
-            {{ t("common.cancel") }}
+            拒绝
           </button>
           <button
-            class="btn btn-sm btn-primary"
+            class="btn btn-sm btn-primary text-primary-content min-w-24"
             :disabled="terminalApprovalResolving"
             @click="approveTerminalApproval"
           >
-            {{ t("common.confirm") }}
+            批准
           </button>
         </div>
       </div>
@@ -529,6 +556,8 @@ import { formatDateToLocalRfc3339 } from "./utils/time";
 import AppWindowContent from "./features/shell/components/AppWindowContent.vue";
 import AppWindowHeader from "./features/shell/components/AppWindowHeader.vue";
 import RuntimeLogsDialog from "./features/shell/components/RuntimeLogsDialog.vue";
+import TerminalApprovalImpactPanel from "./features/shell/components/TerminalApprovalImpactPanel.vue";
+import TerminalApprovalPatchSample from "./features/shell/components/TerminalApprovalPatchSample.vue";
 import type { TaskEntry } from "./features/config/views/config-tabs/task-editor";
 import type { ChatWorkspaceChoice } from "./features/chat/composables/use-chat-workspace";
 import type {
@@ -734,6 +763,7 @@ const configSaveErrorDialogBody = ref("");
 const configSaveErrorDialogKind = ref<"warning" | "error">("error");
 const terminalApprovalQueue = ref<TerminalApprovalRequestPayload[]>([]);
 const terminalApprovalResolving = ref(false);
+const terminalApprovalCurrentPatchIndex = ref(0);
 const skillPlaceholderDialogOpen = ref(false);
 const forceArchiveActionDialogOpen = ref(false);
 const forceArchivePreviewLoading = ref(false);
@@ -1969,6 +1999,7 @@ const { visibleMessageBlocks, chatContextUsageRatio, chatUsagePercent } = useCha
 });
 const displayMessageBlocks = computed(() => visibleMessageBlocks.value);
 const {
+  terminalApprovalCurrent,
   terminalApprovalDialogOpen,
   terminalApprovalDialogTitle,
   terminalApprovalDialogBody,
@@ -1979,6 +2010,210 @@ const {
   queue: terminalApprovalQueue,
   resolving: terminalApprovalResolving,
 });
+
+function splitTerminalApprovalPatches(raw: string): string[][] {
+  const normalized = String(raw || "").replace(/\r/g, "");
+  const lines = normalized.split("\n");
+  if (!normalized.trim()) return [[]];
+
+  const patches: string[][] = [];
+  let currentPatch: string[] = [];
+  let inPatchBlock = false;
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || "");
+    const trimmedLine = line.trim();
+    if (trimmedLine.startsWith("*** Begin Patch")) {
+      if (currentPatch.length > 0) {
+        patches.push(currentPatch);
+      }
+      currentPatch = [line];
+      inPatchBlock = true;
+      continue;
+    }
+
+    if (inPatchBlock && trimmedLine.startsWith("*** End Patch")) {
+      currentPatch.push(line);
+      patches.push(currentPatch);
+      currentPatch = [];
+      inPatchBlock = false;
+      continue;
+    }
+
+    currentPatch.push(line);
+  }
+
+  if (currentPatch.length > 0) {
+    patches.push(currentPatch);
+  }
+
+  return patches.length > 0 ? patches : [lines];
+}
+
+const terminalApprovalPatchBlocks = computed(() => {
+  const current = terminalApprovalCurrent.value;
+  const raw = String(current?.callPreview || current?.command || current?.summary || current?.message || "").replace(/\r/g, "");
+  if (!raw.trim()) return [[]];
+  return splitTerminalApprovalPatches(raw);
+});
+
+const terminalApprovalPreviewLines = computed(() => {
+  const current = terminalApprovalCurrent.value;
+  const raw = String(current?.callPreview || current?.command || current?.summary || current?.message || "").replace(/\r/g, "");
+  if (!raw.trim()) return [];
+  return raw.split("\n");
+});
+
+type TerminalApprovalImpactItem = {
+  path: string;
+  adds: number;
+  removes: number;
+  kind: "update" | "add" | "delete" | "other";
+};
+
+function getTerminalApprovalPatchPath(lines: string[]): string {
+  for (const rawLine of lines) {
+    const line = String(rawLine || "").trim();
+    if (line.startsWith("*** Update File:")) {
+      return line.replace("*** Update File:", "").trim();
+    }
+    if (line.startsWith("*** Add File:")) {
+      return line.replace("*** Add File:", "").trim();
+    }
+    if (line.startsWith("*** Delete File:")) {
+      return line.replace("*** Delete File:", "").trim();
+    }
+  }
+  return "";
+}
+
+function getTerminalApprovalPatchKind(lines: string[]): "update" | "add" | "delete" | "other" {
+  for (const rawLine of lines) {
+    const line = String(rawLine || "").trim();
+    if (line.startsWith("*** Update File:")) return "update";
+    if (line.startsWith("*** Add File:")) return "add";
+    if (line.startsWith("*** Delete File:")) return "delete";
+  }
+  return "other";
+}
+
+function countTerminalApprovalPatchDelta(lines: string[]) {
+  let adds = 0;
+  let removes = 0;
+  for (const rawLine of lines) {
+    const line = String(rawLine || "");
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      adds += 1;
+      continue;
+    }
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      removes += 1;
+    }
+  }
+  return { adds, removes };
+}
+
+const terminalApprovalImpactSummary = computed(() => {
+  const patchItems = terminalApprovalPatchBlocks.value
+    .map((lines) => {
+      const path = getTerminalApprovalPatchPath(lines);
+      if (!path) return null;
+      return {
+        path,
+        kind: getTerminalApprovalPatchKind(lines),
+        ...countTerminalApprovalPatchDelta(lines),
+      };
+    })
+    .filter((item): item is TerminalApprovalImpactItem => !!item);
+  if (patchItems.length > 0) return patchItems;
+
+  const current = terminalApprovalCurrent.value;
+  if (!current) return [];
+  const paths = Array.from(
+    new Set([
+      ...(Array.isArray(current.targetPaths) ? current.targetPaths : []),
+      ...(Array.isArray(current.existingPaths) ? current.existingPaths : []),
+      String(current.requestedPath || "").trim(),
+    ].filter(Boolean)),
+  );
+  return paths.map((path) => ({
+    path,
+    adds: 0,
+    removes: 0,
+    kind: "other" as const,
+  }));
+});
+
+const terminalApprovalCurrentPatchLines = computed(() => {
+  const blocks = terminalApprovalPatchBlocks.value;
+  if (blocks.length === 0) return [];
+  const maxIndex = blocks.length - 1;
+  const safeIndex = Math.min(Math.max(terminalApprovalCurrentPatchIndex.value, 0), maxIndex);
+  return blocks[safeIndex] || [];
+});
+
+const terminalApprovalCurrentPatchKind = computed(() =>
+  getTerminalApprovalPatchKind(terminalApprovalCurrentPatchLines.value),
+);
+
+const terminalApprovalPatchKinds = computed(() =>
+  terminalApprovalPatchBlocks.value.map((lines) => getTerminalApprovalPatchKind(lines)),
+);
+
+const terminalApprovalShowDiffOnly = computed(() =>
+  String(terminalApprovalCurrent.value?.approvalKind || "").trim() === "apply_patch_workspace_write",
+);
+
+const terminalApprovalCurrentDiffLineCount = computed(() =>
+  terminalApprovalCurrentPatchLines.value.reduce((count, rawLine) => {
+    const line = String(rawLine || "");
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      return count + 1;
+    }
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      return count + 1;
+    }
+    return count;
+  }, 0),
+);
+
+const terminalApprovalShouldShowCodePreview = computed(() => {
+  if (terminalApprovalShowDiffOnly.value) {
+    return terminalApprovalCurrentDiffLineCount.value > 0;
+  }
+  return terminalApprovalPreviewLines.value.length > 0;
+});
+
+watch(
+  () => terminalApprovalCurrent.value?.requestId,
+  () => {
+    terminalApprovalCurrentPatchIndex.value = 0;
+  },
+);
+
+function clampTerminalApprovalPatchIndex() {
+  const total = terminalApprovalPatchBlocks.value.length;
+  if (total <= 1) {
+    terminalApprovalCurrentPatchIndex.value = 0;
+    return;
+  }
+  const maxIndex = total - 1;
+  if (terminalApprovalCurrentPatchIndex.value < 0) {
+    terminalApprovalCurrentPatchIndex.value = 0;
+    return;
+  }
+  if (terminalApprovalCurrentPatchIndex.value > maxIndex) {
+    terminalApprovalCurrentPatchIndex.value = maxIndex;
+  }
+}
+
+watch(terminalApprovalPatchBlocks, clampTerminalApprovalPatchIndex);
+
+function goToTerminalApprovalPatch(index: number) {
+  const maxIndex = Math.max(0, terminalApprovalPatchBlocks.value.length - 1);
+  const nextIndex = Math.min(maxIndex, Math.max(0, Math.floor(index)));
+  terminalApprovalCurrentPatchIndex.value = nextIndex;
+}
 
 function syncUserAliasFromPersona() {
   const next = (userPersona.value?.name || "").trim() || t("archives.roleUser");

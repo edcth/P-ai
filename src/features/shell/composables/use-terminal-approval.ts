@@ -7,6 +7,15 @@ export type TerminalApprovalRequestPayload = {
   message?: string;
   approvalKind?: string;
   sessionId?: string;
+  toolName?: string;
+  summary?: string;
+  callPreview?: string;
+  cwd?: string;
+  command?: string;
+  requestedPath?: string;
+  reason?: string;
+  existingPaths?: string[];
+  targetPaths?: string[];
 };
 
 type UseTerminalApprovalOptions = {
@@ -34,6 +43,19 @@ export function useTerminalApproval(options: UseTerminalApprovalOptions) {
       message: String(payload.message || ""),
       approvalKind: String(payload.approvalKind || "unknown"),
       sessionId: String(payload.sessionId || ""),
+      toolName: String(payload.toolName || ""),
+      summary: String(payload.summary || ""),
+      callPreview: String(payload.callPreview || ""),
+      cwd: String(payload.cwd || ""),
+      command: String(payload.command || ""),
+      requestedPath: String(payload.requestedPath || ""),
+      reason: String(payload.reason || ""),
+      existingPaths: Array.isArray(payload.existingPaths)
+        ? payload.existingPaths.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
+      targetPaths: Array.isArray(payload.targetPaths)
+        ? payload.targetPaths.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
     });
   }
 

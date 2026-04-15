@@ -125,30 +125,6 @@ async fn terminal_live_exec_command(
     })
 }
 
-fn terminal_is_approval_timeout_error(err: &str) -> bool {
-    err.contains("terminal_approval_timeout")
-}
-
-fn terminal_approval_timeout_blocked_result(
-    normalized_session: &str,
-    session_root_text: &str,
-    workspace_path_text: &str,
-    cwd: &Path,
-    cmd: &str,
-) -> Value {
-    serde_json::json!({
-        "ok": false,
-        "approved": false,
-        "blockedReason": "approval_timeout_local_required",
-        "message": "审核超时：当前本地并无管理员监守，非默认工作目录禁止高危操作。请在本机完成审批；如无法审批，请改用其他方式修改（例如先备份再新生成）。",
-        "sessionId": normalized_session,
-        "rootPath": session_root_text,
-        "workspacePath": workspace_path_text,
-        "cwd": terminal_path_for_user(cwd),
-        "command": cmd,
-    })
-}
-
 fn terminal_workspace_access_rank(access: &str) -> i32 {
     match access {
         SHELL_WORKSPACE_ACCESS_READ_ONLY => 3,
@@ -384,32 +360,28 @@ async fn builtin_shell_exec(
             if effective_write_access == SHELL_WORKSPACE_ACCESS_APPROVAL {
                 let message = format!(
                     "该命令将创建或改写文件，是否批准本次执行？\n会话: {normalized_session}\n工作目录: {}\n命令: {cmd}",
-                    cwd.to_string_lossy()
+                    terminal_path_for_user(&cwd)
                 );
+                let summary = format!("该命令将创建或改写 {} 个新路径。", count);
                 let approved = match terminal_request_user_approval(
                     state,
                     "终端执行审批",
                     &message,
                     &normalized_session,
                     "new_write_risk",
+                    Some("shell_exec"),
+                    Some(&summary),
+                    Some(cmd),
                     Some(&cwd),
                     Some(cmd),
                     None,
                     None,
                     &[],
+                    &[],
                 )
                 .await
                 {
                     Ok(v) => v,
-                    Err(err) if terminal_is_approval_timeout_error(&err) => {
-                        return Ok(terminal_approval_timeout_blocked_result(
-                            &normalized_session,
-                            &session_root_text,
-                            &workspace_path_text,
-                            &cwd,
-                            cmd,
-                        ));
-                    }
                     Err(err) => return Err(err),
                 };
                 if !approved {
@@ -432,40 +404,36 @@ async fn builtin_shell_exec(
                 let mut lines = vec![
                     "该命令将修改/删除已有文件，是否批准本次执行？".to_string(),
                     format!("会话: {normalized_session}"),
-                    format!("工作目录: {}", cwd.to_string_lossy()),
+                    format!("工作目录: {}", terminal_path_for_user(&cwd)),
                     format!("命令: {cmd}"),
                     "命中已有路径：".to_string(),
                 ];
                 for path in paths.iter().take(8) {
-                    lines.push(format!("- {}", path.to_string_lossy()));
+                    lines.push(format!("- {}", terminal_path_for_user(path)));
                 }
                 if paths.len() > 8 {
                     lines.push(format!("... 其余 {} 项已省略", paths.len() - 8));
                 }
+                let summary = format!("该命令将修改或删除 {} 个已有路径。", paths.len());
                 let approved = match terminal_request_user_approval(
                     state,
                     "终端执行审批",
                     &lines.join("\n"),
                     &normalized_session,
                     "existing_write_risk",
+                    Some("shell_exec"),
+                    Some(&summary),
+                    Some(cmd),
                     Some(&cwd),
                     Some(cmd),
                     None,
                     None,
                     &paths,
+                    &paths,
                 )
                 .await
                 {
                     Ok(v) => v,
-                    Err(err) if terminal_is_approval_timeout_error(&err) => {
-                        return Ok(terminal_approval_timeout_blocked_result(
-                            &normalized_session,
-                            &session_root_text,
-                            &workspace_path_text,
-                            &cwd,
-                            cmd,
-                        ));
-                    }
                     Err(err) => return Err(err),
                 };
                 if !approved {
@@ -776,24 +744,6 @@ mod terminal_exec_tests {
         if let Err(err) = verify_default_workspace_skip_for_shell("git-bash").await {
             panic!("git-bash default-workspace skip check failed: {err}");
         }
-    }
-
-    #[test]
-    fn approval_timeout_should_map_to_local_required_block() {
-        let err = "terminal_approval_timeout: 审核超时（60000ms）";
-        assert!(terminal_is_approval_timeout_error(err));
-        let result = terminal_approval_timeout_blocked_result(
-            "s1",
-            "r1",
-            "w1",
-            std::path::Path::new("."),
-            "echo 1 > a.txt",
-        );
-        assert_eq!(
-            result.get("blockedReason").and_then(Value::as_str),
-            Some("approval_timeout_local_required")
-        );
-        assert_eq!(result.get("approved").and_then(Value::as_bool), Some(false));
     }
 
     #[cfg(target_os = "windows")]

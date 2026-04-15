@@ -24,12 +24,15 @@ export type TerminalApprovalRequestPayload = {
   message: string;
   approvalKind: string;
   sessionId: string;
+  toolName?: string;
+  summary?: string;
+  callPreview?: string;
   cwd?: string;
   command?: string;
   requestedPath?: string;
   reason?: string;
   existingPaths?: string[];
-  timeoutMs?: number;
+  targetPaths?: string[];
 };
 
 type AppBootstrapOptions = {
@@ -146,4 +149,3 @@ export function useAppBootstrap(options: AppBootstrapOptions) {
     unmount,
   };
 }
-

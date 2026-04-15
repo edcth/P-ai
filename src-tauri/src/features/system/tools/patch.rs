@@ -1,5 +1,3 @@
-const APPLY_PATCH_APPROVAL_TIMEOUT_REASON: &str = "apply_patch_approval_timeout";
-
 #[derive(Debug, Clone)]
 enum ApplyPatchSafetyCheck {
     AutoApprove,
@@ -657,6 +655,158 @@ fn apply_patch_collect_existing_paths(ops: &[ApplyPatchResolvedOp]) -> Vec<PathB
     terminal_dedup_paths(out)
 }
 
+fn apply_patch_collect_target_paths(ops: &[ApplyPatchResolvedOp]) -> Vec<PathBuf> {
+    let mut out = Vec::<PathBuf>::new();
+    for op in ops {
+        match op {
+            ApplyPatchResolvedOp::Add { path, .. } | ApplyPatchResolvedOp::Delete { path } => {
+                out.push(path.clone());
+            }
+            ApplyPatchResolvedOp::Update { from, to, .. } => {
+                out.push(from.clone());
+                if let Some(next) = to {
+                    out.push(next.clone());
+                }
+            }
+        }
+    }
+    terminal_dedup_paths(out)
+}
+
+fn apply_patch_operation_summary(ops: &[ApplyPatchResolvedOp]) -> String {
+    let mut add_count = 0usize;
+    let mut delete_count = 0usize;
+    let mut update_count = 0usize;
+    let mut move_count = 0usize;
+    for op in ops {
+        match op {
+            ApplyPatchResolvedOp::Add { .. } => add_count += 1,
+            ApplyPatchResolvedOp::Delete { .. } => delete_count += 1,
+            ApplyPatchResolvedOp::Update { to, .. } => {
+                if to.is_some() {
+                    move_count += 1;
+                } else {
+                    update_count += 1;
+                }
+            }
+        }
+    }
+    let total = ops.len();
+    let mut parts = Vec::<String>::new();
+    if add_count > 0 {
+        parts.push(format!("新增 {add_count}"));
+    }
+    if update_count > 0 {
+        parts.push(format!("修改 {update_count}"));
+    }
+    if delete_count > 0 {
+        parts.push(format!("删除 {delete_count}"));
+    }
+    if move_count > 0 {
+        parts.push(format!("重命名 {move_count}"));
+    }
+    if parts.is_empty() {
+        "计划执行补丁操作。".to_string()
+    } else {
+        format!("计划执行 {total} 项补丁操作（{}）。", parts.join("，"))
+    }
+}
+
+fn apply_patch_hunk_sequences(hunk: &ApplyPatchHunk) -> (Vec<String>, Vec<String>, usize, usize) {
+    let mut old_seq = Vec::<String>::new();
+    let mut new_seq = Vec::<String>::new();
+    let mut old_count = 0usize;
+    let mut new_count = 0usize;
+    for line in &hunk.lines {
+        match line {
+            ApplyPatchLine::Context(v) => {
+                old_seq.push(v.clone());
+                new_seq.push(v.clone());
+                old_count += 1;
+                new_count += 1;
+            }
+            ApplyPatchLine::Remove(v) => {
+                old_seq.push(v.clone());
+                old_count += 1;
+            }
+            ApplyPatchLine::Add(v) => {
+                new_seq.push(v.clone());
+                new_count += 1;
+            }
+        }
+    }
+    (old_seq, new_seq, old_count, new_count)
+}
+
+fn apply_patch_build_preview(ops: &[ApplyPatchResolvedOp]) -> Result<String, String> {
+    let mut out = Vec::<String>::new();
+    out.push("*** Begin Patch".to_string());
+    for op in ops {
+        match op {
+            ApplyPatchResolvedOp::Add { path, content } => {
+                let (lines, _trailing_newline) = apply_patch_split_file_lines(content);
+                out.push(format!("*** Add File: {}", terminal_path_for_user(path)));
+                out.push(format!("@@ -0,0 +1,{} @@", lines.len()));
+                for line in lines {
+                    out.push(format!("+{line}"));
+                }
+            }
+            ApplyPatchResolvedOp::Delete { path } => {
+                let content = apply_patch_read_utf8_file(path).map_err(|err| {
+                    format!("Delete File 预检失败：{err}")
+                })?;
+                let (lines, _trailing_newline) = apply_patch_split_file_lines(&content);
+                out.push(format!("*** Delete File: {}", terminal_path_for_user(path)));
+                out.push(format!("@@ -1,{} +0,0 @@", lines.len()));
+                for line in lines {
+                    out.push(format!("-{line}"));
+                }
+            }
+            ApplyPatchResolvedOp::Update { from, to, hunks } => {
+                let content = apply_patch_read_utf8_file(from).map_err(|err| {
+                    format!("Update File 预检失败：{err}")
+                })?;
+                let (mut current_lines, _trailing_newline) = apply_patch_split_file_lines(&content);
+                let mut cumulative_delta = 0isize;
+                out.push(format!("*** Update File: {}", terminal_path_for_user(from)));
+                if let Some(dest) = to {
+                    out.push(format!("*** Move to: {}", terminal_path_for_user(dest)));
+                }
+                for hunk in hunks {
+                    let (old_seq, new_seq, old_count, new_count) = apply_patch_hunk_sequences(hunk);
+                    let Some(start_current) = apply_patch_find_subsequence(&current_lines, &old_seq) else {
+                        return Err(format!(
+                            "Update File 预检失败，hunk 上下文不匹配：{}",
+                            terminal_path_for_user(from)
+                        ));
+                    };
+                    let new_start = start_current + 1;
+                    let old_start = ((start_current as isize) - cumulative_delta + 1).max(0) as usize;
+                    out.push(format!(
+                        "@@ -{},{} +{},{} @@",
+                        old_start, old_count, new_start, new_count
+                    ));
+                    for line in &hunk.lines {
+                        match line {
+                            ApplyPatchLine::Context(v) => out.push(format!(" {v}")),
+                            ApplyPatchLine::Remove(v) => out.push(format!("-{v}")),
+                            ApplyPatchLine::Add(v) => out.push(format!("+{v}")),
+                        }
+                    }
+                    let end = start_current + old_seq.len();
+                    current_lines.splice(start_current..end, new_seq);
+                    cumulative_delta += new_count as isize - old_count as isize;
+                    if hunk.end_of_file {
+                        out.push("*** End of File".to_string());
+                    }
+                }
+            }
+        }
+    }
+    out.push("*** End Patch".to_string());
+    Ok(out.join("\n"))
+}
+
 fn apply_patch_assess_safety(
     state: &AppState,
     _session_id: &str,
@@ -849,25 +999,6 @@ async fn apply_patch_execute_ops(ops: &[ApplyPatchResolvedOp]) -> Result<Vec<Val
     Ok(changed)
 }
 
-fn apply_patch_timeout_blocked_result(
-    session_id: &str,
-    cwd: &Path,
-    existing_paths: &[PathBuf],
-) -> Value {
-    serde_json::json!({
-        "ok": false,
-        "approved": false,
-        "blockedReason": APPLY_PATCH_APPROVAL_TIMEOUT_REASON,
-        "message": "审核超时：用户工具区修改需要本机确认。",
-        "sessionId": session_id,
-        "cwd": terminal_path_for_user(cwd),
-        "existingPaths": existing_paths
-            .iter()
-            .map(|path| terminal_path_for_user(path))
-            .collect::<Vec<_>>(),
-    })
-}
-
 async fn builtin_apply_patch(
     state: &AppState,
     session_id: &str,
@@ -877,6 +1008,7 @@ async fn builtin_apply_patch(
     let cwd = resolve_terminal_cwd(state, &normalized_session, None)?;
     let parsed = apply_patch_parse(input)?;
     let resolved = apply_patch_resolve_ops(&cwd, parsed)?;
+    let preview = apply_patch_build_preview(&resolved)?;
 
     let safety = apply_patch_assess_safety(state, &normalized_session, &cwd, &resolved);
     match safety {
@@ -891,17 +1023,19 @@ async fn builtin_apply_patch(
             }));
         }
         ApplyPatchSafetyCheck::AskUser { existing_paths } => {
+            let target_paths = apply_patch_collect_target_paths(&resolved);
+            let summary = apply_patch_operation_summary(&resolved);
             let mut lines = vec![
                 "该补丁将在用户工具区执行，是否批准本次修改？".to_string(),
                 format!("会话: {}", normalized_session),
-                format!("工作目录: {}", cwd.to_string_lossy()),
+                format!("工作目录: {}", terminal_path_for_user(&cwd)),
                 "命中已有文件：".to_string(),
             ];
             if existing_paths.is_empty() {
                 lines.push("- 未识别到已存在文件，但该区域仍需确认。".to_string());
             } else {
                 for path in existing_paths.iter().take(8) {
-                    lines.push(format!("- {}", path.to_string_lossy()));
+                    lines.push(format!("- {}", terminal_path_for_user(path)));
                 }
             }
             let approved = match terminal_request_user_approval(
@@ -910,22 +1044,19 @@ async fn builtin_apply_patch(
                 &lines.join("\n"),
                 &normalized_session,
                 "apply_patch_workspace_write",
+                Some("apply_patch"),
+                Some(&summary),
+                Some(&preview),
                 Some(&cwd),
                 None,
                 None,
                 Some("用户工具区修改需要审批"),
                 &existing_paths,
+                &target_paths,
             )
             .await
             {
                 Ok(v) => v,
-                Err(err) if terminal_is_approval_timeout_error(&err) => {
-                    return Ok(apply_patch_timeout_blocked_result(
-                        &normalized_session,
-                        &cwd,
-                        &existing_paths,
-                    ));
-                }
                 Err(err) => return Err(err),
             };
             if !approved {

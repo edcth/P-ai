@@ -283,6 +283,42 @@ fn terminal_task_complete_result(tool_name: &str, tool_args: &str, tool_result: 
     }))
 }
 
+fn terminal_approval_rejected_result(
+    tool_name: &str,
+    tool_result: &ProviderToolResult,
+) -> Option<String> {
+    if tool_result.is_error {
+        return None;
+    }
+    if tool_name != "exec" && tool_name != "apply_patch" {
+        return None;
+    }
+
+    let result_value = serde_json::from_str::<Value>(&tool_result.display_text).ok()?;
+    let approved = result_value.get("approved").and_then(Value::as_bool);
+    if approved != Some(false) {
+        return None;
+    }
+
+    let blocked_reason = json_string_field(&result_value, &["blockedReason", "blocked_reason"])
+        .unwrap_or_default();
+    let message = json_string_field(&result_value, &["message", "error", "reason"]);
+
+    let lead = match tool_name {
+        "apply_patch" => "补丁执行已被拒绝，本轮调度已终止。".to_string(),
+        "exec" => "终端命令执行已被拒绝，本轮调度已终止。".to_string(),
+        _ => "工具执行已被拒绝，本轮调度已终止。".to_string(),
+    };
+
+    if let Some(message) = message {
+        return Some(format!("{lead}\n{message}"));
+    }
+    if !blocked_reason.is_empty() {
+        return Some(format!("{lead}\n原因：{blocked_reason}"));
+    }
+    Some(lead)
+}
+
 fn terminal_plan_result(
     tool_name: &str,
     tool_args: &str,
@@ -958,6 +994,19 @@ async fn run_genai_tool_loop(
                     trusted_input_tokens,
                 });
             }
+            if let Some(final_text) =
+                terminal_approval_rejected_result(&tool_name, &tool_result)
+            {
+                return Ok(ModelReply {
+                    assistant_text: final_text,
+                    reasoning_standard: full_reasoning_standard,
+                    reasoning_inline: String::new(),
+                    assistant_provider_meta: None,
+                    tool_history_events,
+                    suppress_assistant_message: false,
+                    trusted_input_tokens,
+                });
+            }
             if let Some(plan_result) = terminal_plan_result(&tool_name, &tool_args, &tool_result) {
                 return Ok(ModelReply {
                     assistant_text: plan_result.assistant_text,
@@ -1371,6 +1420,19 @@ async fn run_genai_tool_loop_non_stream(
             }
             if let Some(final_text) =
                 terminal_task_complete_result(&tool_name, &tool_args, &tool_result)
+            {
+                return Ok(ModelReply {
+                    assistant_text: final_text,
+                    reasoning_standard: full_reasoning_standard,
+                    reasoning_inline: String::new(),
+                    assistant_provider_meta: None,
+                    tool_history_events,
+                    suppress_assistant_message: false,
+                    trusted_input_tokens,
+                });
+            }
+            if let Some(final_text) =
+                terminal_approval_rejected_result(&tool_name, &tool_result)
             {
                 return Ok(ModelReply {
                     assistant_text: final_text,

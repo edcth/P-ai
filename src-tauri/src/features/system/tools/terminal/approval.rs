@@ -1,5 +1,3 @@
-const TERMINAL_APPROVAL_TIMEOUT_MS: u64 = 60_000;
-
 #[derive(Debug, Clone)]
 enum TerminalWriteRisk {
     None,
@@ -17,6 +15,12 @@ struct TerminalApprovalRequestPayload {
     approval_kind: String,
     session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     command: Option<String>,
@@ -26,7 +30,8 @@ struct TerminalApprovalRequestPayload {
     reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     existing_paths: Vec<String>,
-    timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    target_paths: Vec<String>,
 }
 
 fn terminal_has_output_redirection(command: &str) -> bool {
@@ -231,11 +236,15 @@ async fn terminal_request_user_approval(
     message: &str,
     session_id: &str,
     approval_kind: &str,
+    tool_name: Option<&str>,
+    summary: Option<&str>,
+    call_preview: Option<&str>,
     cwd: Option<&Path>,
     command: Option<&str>,
     requested_path: Option<&Path>,
     reason: Option<&str>,
     existing_paths: &[PathBuf],
+    target_paths: &[PathBuf],
 ) -> Result<bool, String> {
     let request_id = Uuid::new_v4().to_string();
     let app_handle = {
@@ -264,12 +273,24 @@ async fn terminal_request_user_approval(
         message: message.to_string(),
         approval_kind: approval_kind.to_string(),
         session_id: session_id.to_string(),
-        cwd: cwd.map(|v| v.to_string_lossy().to_string()),
+        tool_name: tool_name
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string),
+        summary: summary
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string),
+        call_preview: call_preview
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string),
+        cwd: cwd.map(terminal_path_for_user),
         command: command
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(ToString::to_string),
-        requested_path: requested_path.map(|v| v.to_string_lossy().to_string()),
+        requested_path: requested_path.map(terminal_path_for_user),
         reason: reason
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -277,9 +298,13 @@ async fn terminal_request_user_approval(
         existing_paths: existing_paths
             .iter()
             .take(32)
-            .map(|v| v.to_string_lossy().to_string())
+            .map(|path| terminal_path_for_user(path))
             .collect(),
-        timeout_ms: TERMINAL_APPROVAL_TIMEOUT_MS,
+        target_paths: target_paths
+            .iter()
+            .take(32)
+            .map(|path| terminal_path_for_user(path))
+            .collect(),
     };
 
     if let Err(err) = app_handle.emit("easy-call:terminal-approval-request", &payload) {
@@ -289,23 +314,15 @@ async fn terminal_request_user_approval(
         return Err(format!("Emit terminal approval request failed: {err}"));
     }
 
-    let wait = tokio::time::timeout(
-        std::time::Duration::from_millis(TERMINAL_APPROVAL_TIMEOUT_MS),
-        rx,
-    )
-    .await;
+    let wait_result = rx.await;
 
     if let Ok(mut pending) = state.terminal_pending_approvals.lock() {
         pending.remove(&request_id);
     }
 
-    match wait {
-        Ok(Ok(approved)) => Ok(approved),
-        Ok(Err(_)) => Err("Terminal approval channel closed unexpectedly.".to_string()),
-        Err(_) => Err(format!(
-            "terminal_approval_timeout: 审核超时（{}ms）",
-            TERMINAL_APPROVAL_TIMEOUT_MS
-        )),
+    match wait_result {
+        Ok(approved) => Ok(approved),
+        Err(_) => Err("Terminal approval channel closed unexpectedly.".to_string()),
     }
 }
 
