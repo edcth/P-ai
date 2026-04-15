@@ -1,4 +1,18 @@
 impl WeixinOcManager {
+    async fn channel_lifecycle_guard(
+        &self,
+        channel_id: &str,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.lifecycle_locks.lock().await;
+            locks
+                .entry(channel_id.to_string())
+                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
+    }
+
     async fn add_log(&self, channel_id: &str, level: &str, message: &str) {
         onebot_v11_ws_manager().add_log(channel_id, level, message).await;
     }
@@ -95,7 +109,7 @@ impl WeixinOcManager {
             .cloned()
     }
 
-    async fn stop_channel(&self, channel_id: &str) {
+    async fn stop_channel_inner(&self, channel_id: &str) {
         if let Some(tx) = self.stop_senders.write().await.remove(channel_id) {
             let _ = tx.send(true);
         }
@@ -107,6 +121,11 @@ impl WeixinOcManager {
             state.connected = false;
         })
         .await;
+    }
+
+    async fn stop_channel(&self, channel_id: &str) {
+        let _guard = self.channel_lifecycle_guard(channel_id).await;
+        self.stop_channel_inner(channel_id).await;
     }
 
     pub(crate) async fn start_typing(
@@ -344,12 +363,13 @@ impl WeixinOcManager {
         channel: &RemoteImChannelConfig,
         state: AppState,
     ) -> Result<(), String> {
+        let _guard = self.channel_lifecycle_guard(&channel.id).await;
         eprintln!(
             "[个人微信] reconcile_channel_runtime: channel_id={}, enabled={}, platform={:?}",
             channel.id, channel.enabled, channel.platform
         );
         self.load_state_from_channel(channel).await;
-        self.stop_channel(&channel.id).await;
+        self.stop_channel_inner(&channel.id).await;
         if channel.platform != RemoteImPlatform::WeixinOc || !channel.enabled {
             eprintln!("[个人微信] 渠道已停用: channel_id={}", channel.id);
             self.add_log(&channel.id, "info", "[个人微信] 渠道已停用").await;
@@ -378,16 +398,17 @@ impl WeixinOcManager {
         eprintln!("[个人微信] 渠道已启用，正在启动轮询: channel_id={}", channel.id);
         self.add_log(&channel.id, "info", "[个人微信] 渠道已启用，正在启动轮询")
             .await;
-        self.start_channel(channel.clone(), state).await
+        self.start_channel_inner(channel.clone(), state).await
     }
 
-    async fn start_channel(
+    async fn start_channel_inner(
         &self,
         channel: RemoteImChannelConfig,
         state: AppState,
     ) -> Result<(), String> {
         let channel_id = channel.id.clone();
         eprintln!("[个人微信] start_channel: channel_id={}", channel_id);
+        self.stop_channel_inner(&channel_id).await;
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         self.stop_senders
             .write()
@@ -467,5 +488,15 @@ impl WeixinOcManager {
         });
         self.tasks.write().await.insert(channel_id, handle);
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    async fn start_channel(
+        &self,
+        channel: RemoteImChannelConfig,
+        state: AppState,
+    ) -> Result<(), String> {
+        let _guard = self.channel_lifecycle_guard(&channel.id).await;
+        self.start_channel_inner(channel, state).await
     }
 }

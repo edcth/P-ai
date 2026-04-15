@@ -295,6 +295,11 @@ pub struct WeixinOcManager {
     typing_states: std::sync::Arc<
         tokio::sync::RwLock<std::collections::HashMap<String, WeixinOcTypingState>>,
     >,
+    lifecycle_locks: std::sync::Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    >,
 }
 
 impl WeixinOcManager {
@@ -306,6 +311,7 @@ impl WeixinOcManager {
             tasks: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             context_tokens: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             typing_states: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            lifecycle_locks: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 }

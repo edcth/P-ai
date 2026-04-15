@@ -1,5 +1,11 @@
 # 变更日志
 
+## 更新：远程 IM 渠道启停竞态修复
+
+- 修复（remote-im-channel-lifecycle-locking）：收紧 OneBot / 个人微信 / 钉钉 Stream 渠道服务的启停生命周期管理，避免快速启停时并发穿透导致同一渠道被重复启动、旧任务失管或出现假死
+  - 为每个 `channel_id` 增加渠道级生命周期锁，把 `start / stop / reconcile` 串行化到同一条执行链中，确保“先停旧实例，再起新实例”不再被并发打断
+  - OneBot、个人微信、钉钉 Stream 的生命周期锁 key 已统一与现有运行态 map 使用同一份原始 `channel_id` 表示，避免锁表与 `states / tasks / stop_senders / channel_shutdowns` 等 map 出现 key 规则不一致
+
 ## 更新：存储层分片读写重构与兼容层收口
 
 - 重构（storage-shard-write-refactor）：保留现有 `config/state/chat/conversations` 文件结构，仅重写 `app_data` 服务层边界，把热路径从整份 `AppData` 读改写切到分片读写、分片缓存与分片持久化

@@ -6,7 +6,22 @@ impl OnebotV11WsManager {
             channel_logs: Arc::new(RwLock::new(HashMap::new())),
             listen_addrs: Arc::new(RwLock::new(HashMap::new())),
             channel_tasks: Arc::new(RwLock::new(HashMap::new())),
+            lifecycle_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    async fn channel_lifecycle_guard(
+        &self,
+        channel_id: &str,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.lifecycle_locks.lock().await;
+            locks
+                .entry(channel_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
     }
 
     /// 添加日志
@@ -28,6 +43,11 @@ impl OnebotV11WsManager {
 
     /// 停止单个渠道的 WebSocket 服务器
     pub async fn stop_channel(&self, channel_id: &str) -> Result<(), String> {
+        let _guard = self.channel_lifecycle_guard(channel_id).await;
+        self.stop_channel_inner(channel_id).await
+    }
+
+    async fn stop_channel_inner(&self, channel_id: &str) -> Result<(), String> {
         // 发送关闭信号给该渠道的 accept 循环
         if let Some(tx) = self.channel_shutdowns.write().await.remove(channel_id) {
             let _ = tx.send(());
@@ -60,10 +80,11 @@ impl OnebotV11WsManager {
         &self,
         channel: &RemoteImChannelConfig,
     ) -> Result<(), String> {
-        self.stop_channel(&channel.id).await?;
+        let _guard = self.channel_lifecycle_guard(&channel.id).await;
+        self.stop_channel_inner(&channel.id).await?;
         if channel.enabled && channel.platform == RemoteImPlatform::OnebotV11 {
             let credentials = OnebotV11WsCredentials::from_credentials(&channel.credentials);
-            self.start(channel.id.clone(), credentials).await?;
+            self.start_inner(channel.id.clone(), credentials).await?;
         }
         Ok(())
     }
@@ -116,6 +137,16 @@ impl OnebotV11WsManager {
         channel_id: String,
         credentials: OnebotV11WsCredentials,
     ) -> Result<(), String> {
+        let _guard = self.channel_lifecycle_guard(&channel_id).await;
+        self.start_inner(channel_id, credentials).await
+    }
+
+    async fn start_inner(
+        &self,
+        channel_id: String,
+        credentials: OnebotV11WsCredentials,
+    ) -> Result<(), String> {
+        self.stop_channel_inner(&channel_id).await?;
         let addr: SocketAddr = format!("{}:{}", credentials.ws_host, credentials.ws_port)
             .parse()
             .map_err(|e| format!("无效地址: {}", e))?;

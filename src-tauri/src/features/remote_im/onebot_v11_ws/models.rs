@@ -130,6 +130,8 @@ pub struct OnebotV11WsManager {
     listen_addrs: Arc<RwLock<HashMap<String, String>>>,
     /// 渠道 accept 循环的 JoinHandle，用于 stop 时等待旧服务器释放端口
     channel_tasks: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// 渠道生命周期锁，确保同一 channel 的 start/stop/reconcile 串行化
+    lifecycle_locks: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 type WsStream = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;

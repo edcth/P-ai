@@ -30,6 +30,11 @@ pub struct DingtalkStreamManager {
     tasks: std::sync::Arc<
         tokio::sync::RwLock<std::collections::HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
     >,
+    lifecycle_locks: std::sync::Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    >,
 }
 
 impl DingtalkStreamManager {
@@ -38,7 +43,22 @@ impl DingtalkStreamManager {
             states: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             stop_senders: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             tasks: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            lifecycle_locks: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    async fn channel_lifecycle_guard(
+        &self,
+        channel_id: &str,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.lifecycle_locks.lock().await;
+            locks
+                .entry(channel_id.to_string())
+                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        lock.lock_owned().await
     }
 
     async fn set_state(
@@ -72,7 +92,7 @@ impl DingtalkStreamManager {
         manager.add_log(channel_id, level, message).await;
     }
 
-    pub(crate) async fn stop_channel(&self, channel_id: &str) {
+    async fn stop_channel_inner(&self, channel_id: &str) {
         if let Some(tx) = self.stop_senders.write().await.remove(channel_id) {
             let _ = tx.send(true);
         }
@@ -89,17 +109,24 @@ impl DingtalkStreamManager {
         self.set_state(channel_id, false, None, None).await;
     }
 
+    #[allow(dead_code)]
+    pub(crate) async fn stop_channel(&self, channel_id: &str) {
+        let _guard = self.channel_lifecycle_guard(channel_id).await;
+        self.stop_channel_inner(channel_id).await;
+    }
+
     pub(crate) async fn reconcile_channel_runtime(&self, channel: &RemoteImChannelConfig, state: AppState) -> Result<(), String> {
-        self.stop_channel(&channel.id).await;
+        let _guard = self.channel_lifecycle_guard(&channel.id).await;
+        self.stop_channel_inner(&channel.id).await;
         if channel.enabled && channel.platform == RemoteImPlatform::Dingtalk {
-            self.start_channel(channel.clone(), state).await?;
+            self.start_channel_inner(channel.clone(), state).await?;
         }
         Ok(())
     }
 
-    pub(crate) async fn start_channel(&self, channel: RemoteImChannelConfig, state: AppState) -> Result<(), String> {
+    async fn start_channel_inner(&self, channel: RemoteImChannelConfig, state: AppState) -> Result<(), String> {
         let channel_id = channel.id.clone();
-        self.stop_channel(&channel_id).await;
+        self.stop_channel_inner(&channel_id).await;
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         self.stop_senders
             .write()
@@ -188,6 +215,11 @@ impl DingtalkStreamManager {
         });
         self.tasks.write().await.insert(channel_id, handle);
         Ok(())
+    }
+
+    pub(crate) async fn start_channel(&self, channel: RemoteImChannelConfig, state: AppState) -> Result<(), String> {
+        let _guard = self.channel_lifecycle_guard(&channel.id).await;
+        self.start_channel_inner(channel, state).await
     }
 
     pub(crate) async fn get_channel_status(&self, channel_id: &str) -> ChannelConnectionStatus {
