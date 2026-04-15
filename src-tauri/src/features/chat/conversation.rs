@@ -614,14 +614,28 @@ fn archive_conversation_now(
     Some(archive_id)
 }
 
-fn compress_image_to_webp(bytes: &[u8]) -> Result<Vec<u8>, String> {
+const CHAT_UPLOAD_IMAGE_MAX_EDGE: u32 = 1280;
+const CHAT_UPLOAD_IMAGE_WEBP_QUALITY: f32 = 75.0;
+
+fn normalize_image_for_chat_upload(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let image =
         image::load_from_memory(bytes).map_err(|err| format!("Decode image failed: {err}"))?;
-    let mut cursor = Cursor::new(Vec::<u8>::new());
-    image
-        .write_to(&mut cursor, ImageFormat::WebP)
-        .map_err(|err| format!("Encode image to WebP failed: {err}"))?;
-    Ok(cursor.into_inner())
+    let width = image.width();
+    let height = image.height();
+    let normalized = if width.max(height) > CHAT_UPLOAD_IMAGE_MAX_EDGE {
+        image.resize(
+            CHAT_UPLOAD_IMAGE_MAX_EDGE,
+            CHAT_UPLOAD_IMAGE_MAX_EDGE,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        image
+    };
+    let encoder = webp::Encoder::from_image(&normalized)
+        .map_err(|err| format!("Init WebP encoder failed: {err}"))?;
+    let webp = encoder.encode(CHAT_UPLOAD_IMAGE_WEBP_QUALITY);
+    let webp_bytes: &[u8] = webp.as_ref();
+    Ok(webp_bytes.to_vec())
 }
 
 fn is_supported_image_upload_mime(mime: &str) -> bool {
@@ -676,7 +690,7 @@ fn build_user_parts(
             let raw = B64
                 .decode(bytes_base64)
                 .map_err(|err| format!("Decode image base64 failed: {err}"))?;
-            let webp = compress_image_to_webp(&raw)?;
+            let webp = normalize_image_for_chat_upload(&raw)?;
             total_binary += webp.len();
             parts.push(MessagePart::Image {
                 mime: "image/webp".to_string(),

@@ -2384,3 +2384,28 @@
             latest_extra_len
         );
     }
+
+    #[test]
+    fn normalize_image_for_chat_upload_should_resize_large_png_and_encode_webp() {
+        let source = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            4000,
+            2000,
+            image::Rgb([12, 34, 56]),
+        ));
+        let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+        source
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .expect("encode png");
+
+        let normalized =
+            normalize_image_for_chat_upload(&cursor.into_inner()).expect("normalize image");
+
+        assert_eq!(
+            image::guess_format(&normalized).expect("guess format"),
+            image::ImageFormat::WebP
+        );
+
+        let decoded = image::load_from_memory(&normalized).expect("decode webp");
+        assert_eq!(decoded.width(), CHAT_UPLOAD_IMAGE_MAX_EDGE);
+        assert_eq!(decoded.height(), 640);
+    }
