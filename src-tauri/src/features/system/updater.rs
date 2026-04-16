@@ -415,6 +415,7 @@ fn spawn_detached_hidden(command: &mut Command) -> Result<(), String> {
 }
 
 async fn start_installer_update(app: &AppHandle, force: bool) -> Result<(), String> {
+    let runtime = detect_update_runtime_paths()?;
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let runtime_kind = UpdateRuntimeKind::Installer;
     emit_update_progress(
@@ -430,9 +431,18 @@ async fn start_installer_update(app: &AppHandle, force: bool) -> Result<(), Stri
             None,
         ),
     );
-    let mut builder = app
-        .updater_builder()
-        .pubkey(updater_public_key()?)
+    let mut builder = app.updater_builder().pubkey(updater_public_key()?);
+    #[cfg(target_os = "windows")]
+    {
+        // NSIS 自动更新如果不显式传入当前安装目录，安装器可能会回落到默认目录。
+        // `/D=...` 需要作为最后一个 NSIS 参数传入，tauri-plugin-updater 会把额外 installer_args
+        // 追加在内部参数之后，这里正好满足要求。
+        builder = builder.installer_arg(std::ffi::OsString::from(format!(
+            "/D={}",
+            runtime.exe_dir.display()
+        )));
+    }
+    let mut builder = builder
         .endpoints(vec![reqwest::Url::parse(
             UPDATER_GITHUB_INSTALLER_MANIFEST_URL,
         )
