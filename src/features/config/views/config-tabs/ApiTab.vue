@@ -160,7 +160,16 @@
                 </div>
               </div>
 
-              <div class="text-[11px] text-error">{{ props.modelRefreshError || " " }}</div>
+              <div
+                class="text-[11px]"
+                :class="props.modelRefreshError
+                  ? 'text-error'
+                  : props.modelRefreshOk
+                    ? 'text-success'
+                    : 'text-transparent'"
+              >
+                {{ props.modelRefreshError || (props.modelRefreshOk ? t("status.modelListRefreshed", { count: providerModelOptions.length }) : " ") }}
+              </div>
 
               <div class="grid gap-3">
                 <div v-for="modelCard in selectedProvider.models" :key="modelCard.id"
@@ -186,59 +195,52 @@
                             placeholder="model" @focus="selectModelCard(modelCard.id)"
                             @blur="void syncModelMetadata(modelCard)"
                             @keydown.enter.prevent="void syncModelMetadata(modelCard)" />
-                          <button class="btn btn-sm join-item bg-base-200" type="button"
+                          <button class="btn btn-sm join-item bg-base-300" type="button"
                             :disabled="providerModelOptions.length === 0" @click="openModelPicker(modelCard.id)">
-                            <ChevronsUpDown class="h-3.5 w-3.5" />
+                            <ChevronDown class="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </label>
+                      <div v-if="activeModelPickerId === modelCard.id"
+                        class="rounded-box border border-base-300 bg-base-200/50 p-3">
+                        <input v-model="modelSearch" class="input input-bordered input-sm mb-2 w-full"
+                          :placeholder="t('config.api.searchModel')" @keydown.esc.stop.prevent="closeModelPicker" />
+                        <div class="max-h-48 overflow-auto">
+                          <button v-for="option in filteredModels" :key="`${modelCard.id}-${option}`"
+                            class="btn btn-ghost btn-sm mb-1 mr-1" type="button"
+                            @click="selectModelOption(modelCard, option)">
+                            {{ option }}
+                          </button>
+                          <div v-if="filteredModels.length === 0" class="px-2 py-3 text-sm opacity-50">{{
+                            t("config.api.noModelFound") }}</div>
+                        </div>
+                      </div>
                     </div>
 
-                    <div v-if="activeCapability === 'text'" class="grid gap-2 md:grid-cols-2">
+                    <div v-if="activeCapability === 'text'" class="grid gap-2 md:grid-cols-4">
                       <label
-                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-200 px-3 py-2">
+                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-300 px-3 py-2">
                         <span class="text-sm">{{ t("config.api.capImage") }}</span>
                         <input v-model="modelCard.enableImage" type="checkbox" class="toggle toggle-sm" />
                       </label>
                       <label
-                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-200 px-3 py-2">
+                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-300 px-3 py-2">
                         <span class="text-sm">{{ t("config.api.capTools") }}</span>
                         <input v-model="modelCard.enableTools" type="checkbox" class="toggle toggle-sm" />
                       </label>
-                    </div>
-
-                    <div v-if="activeModelPickerId === modelCard.id"
-                      class="rounded-box border border-base-300 bg-base-200/50 p-3">
-                      <input v-model="modelSearch" class="input input-bordered input-sm mb-2 w-full"
-                        :placeholder="t('config.api.searchModel')" @keydown.esc.stop.prevent="closeModelPicker" />
-                      <div class="max-h-48 overflow-auto">
-                        <button v-for="option in filteredModels" :key="`${modelCard.id}-${option}`"
-                          class="btn btn-ghost btn-sm mb-1 mr-1" type="button"
-                          @click="selectModelOption(modelCard, option)">
-                          {{ option }}
-                        </button>
-                        <div v-if="filteredModels.length === 0" class="px-2 py-3 text-sm opacity-50">{{
-                          t("config.api.noModelFound") }}</div>
-                      </div>
+                      <label
+                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-300 px-3 py-2">
+                        <span class="text-sm">{{ t("config.api.temperature") }}</span>
+                        <input v-model="modelCard.customTemperatureEnabled" type="checkbox" class="toggle toggle-sm" />
+                      </label>
+                      <label
+                        class="flex items-center justify-between rounded-box border border-base-300 bg-base-300 px-3 py-2">
+                        <span class="text-sm">{{ t("config.api.maxOutputTokens") }}</span>
+                        <input v-model="modelCard.customMaxOutputTokensEnabled" type="checkbox" class="toggle toggle-sm" />
+                      </label>
                     </div>
 
                     <div v-if="activeCapability === 'text'" class="grid gap-3">
-                      <label class="flex flex-col gap-1">
-                        <span class="text-sm font-medium">{{ t("config.api.temperature") }}</span>
-                        <div class="flex items-center gap-2">
-                          <input :value="modelCard.temperature"
-                            @input="modelCard.temperature = Number(($event.target as HTMLInputElement).value)"
-                            type="range" min="0" max="2" step="0.1" class="range range-sm flex-1"
-                            :disabled="!modelCard.customTemperatureEnabled" />
-                          <span class="text-xs font-mono w-8 text-right">{{ modelCard.temperature.toFixed(1) }}</span>
-                          <label class="flex items-center text-xs opacity-70">
-                            <input v-model="modelCard.customTemperatureEnabled" type="checkbox"
-                              class="checkbox checkbox-sm" :aria-label="t('config.api.useCustomTemperature')"
-                              :title="t('config.api.useCustomTemperature')" />
-                          </label>
-                        </div>
-                      </label>
-
                       <label class="flex flex-col gap-1">
                         <span class="text-sm font-medium">{{ t("config.api.contextWindow") }}</span>
                         <div class="flex items-center gap-2">
@@ -246,25 +248,33 @@
                             @input="modelCard.contextWindowTokens = Number(($event.target as HTMLInputElement).value)"
                             type="range" :min="SLIDER_CONTEXT_MIN" :max="contextWindowMax(modelCard)" step="1000"
                             class="range range-sm flex-1" />
-                          <span class="text-xs font-mono w-24 text-right">{{
-                            Number(modelCard.contextWindowTokens).toLocaleString() }}</span>
+                          <input :value="modelCard.contextWindowTokens"
+                            @input="modelCard.contextWindowTokens = Number(($event.target as HTMLInputElement).value)"
+                            @blur="clampModelCardValues(modelCard)"
+                            type="number" :min="SLIDER_CONTEXT_MIN" :max="contextWindowMax(modelCard)" step="1000"
+                            class="input input-bordered input-sm w-28 text-right font-mono" />
                         </div>
                       </label>
 
-                      <label class="flex flex-col gap-1">
+                      <label v-if="modelCard.customTemperatureEnabled" class="flex flex-col gap-1">
+                        <span class="text-sm font-medium">{{ t("config.api.temperature") }}</span>
+                        <div class="flex items-center gap-2">
+                          <input :value="modelCard.temperature"
+                            @input="modelCard.temperature = Number(($event.target as HTMLInputElement).value)"
+                            type="range" min="0" max="2" step="0.1" class="range range-sm flex-1" />
+                          <span class="text-xs font-mono w-8 text-right">{{ modelCard.temperature.toFixed(1) }}</span>
+                        </div>
+                      </label>
+
+                      <label v-if="modelCard.customMaxOutputTokensEnabled" class="flex flex-col gap-1">
                         <span class="text-sm font-medium">{{ t("config.api.maxOutputTokens") }}</span>
                         <div class="flex items-center gap-2">
                           <input :value="modelCard.maxOutputTokens"
                             @input="modelCard.maxOutputTokens = Number(($event.target as HTMLInputElement).value)"
                             type="range" min="256" :max="maxOutputTokensMax(modelCard)" step="256"
-                            class="range range-sm flex-1" :disabled="!modelCard.customMaxOutputTokensEnabled" />
+                            class="range range-sm flex-1" />
                           <span class="text-xs font-mono w-24 text-right">{{
                             Number(modelCard.maxOutputTokens).toLocaleString() }}</span>
-                          <label class="flex items-center text-xs opacity-70">
-                            <input v-model="modelCard.customMaxOutputTokensEnabled" type="checkbox"
-                              class="checkbox checkbox-sm" :aria-label="t('config.api.useCustomMaxOutputTokens')"
-                              :title="t('config.api.useCustomMaxOutputTokens')" />
-                          </label>
                         </div>
                       </label>
                     </div>
@@ -298,7 +308,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronsUpDown, ExternalLink, Eye, EyeOff, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
+import { ChevronDown, ExternalLink, Eye, EyeOff, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
 import type { ApiModelConfigItem, ApiProviderConfigItem, ApiRequestFormat, AppConfig, CodexAuthMode, CodexAuthStatus } from "../../../../types/app";
 import { invokeTauri } from "../../../../services/tauri-api";
 import CodexProviderPanel from "./CodexProviderPanel.vue";

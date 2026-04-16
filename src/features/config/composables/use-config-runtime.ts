@@ -115,7 +115,15 @@ export function useConfigRuntime(options: UseConfigRuntimeOptions) {
     if (!options.selectedApiConfig.value) return;
     const apiId = options.selectedApiConfig.value.id;
     const provider = options.selectedApiProvider.value;
-    const isCodex = options.selectedApiConfig.value.requestFormat === "codex";
+    const effectiveRequestFormat = provider?.requestFormat ?? options.selectedApiConfig.value.requestFormat;
+    const effectiveBaseUrl = String(provider?.baseUrl || options.selectedApiConfig.value.baseUrl || "").trim();
+    const effectiveCodexAuthMode = String(
+      provider?.codexAuthMode || options.selectedApiConfig.value.codexAuthMode || "read_local",
+    ).trim() || "read_local";
+    const effectiveCodexLocalAuthPath = String(
+      provider?.codexLocalAuthPath || options.selectedApiConfig.value.codexLocalAuthPath || "~/.codex/auth.json",
+    ).trim() || "~/.codex/auth.json";
+    const isCodex = effectiveRequestFormat === "codex";
     if (isCodex) {
       console.info(`[API] Codex mode detected: skipping API key validation; using empty candidate API key for selectedApiConfig=${options.selectedApiConfig.value.id}`);
     }
@@ -138,13 +146,12 @@ export function useConfigRuntime(options: UseConfigRuntimeOptions) {
         try {
           models = await invokeTauri<string[]>("refresh_models", {
             input: {
-              baseUrl: options.selectedApiConfig.value.baseUrl,
+              baseUrl: effectiveBaseUrl,
               apiKey,
-              requestFormat: options.selectedApiConfig.value.requestFormat,
+              requestFormat: effectiveRequestFormat,
               providerId: String(provider?.id || "").trim() || null,
-              codexAuthMode: String(provider?.codexAuthMode || options.selectedApiConfig.value.codexAuthMode || "read_local").trim() || "read_local",
-              codexLocalAuthPath: String(provider?.codexLocalAuthPath || options.selectedApiConfig.value.codexLocalAuthPath || "~/.codex/auth.json").trim()
-                || "~/.codex/auth.json",
+              codexAuthMode: effectiveCodexAuthMode,
+              codexLocalAuthPath: effectiveCodexLocalAuthPath,
             },
           });
           break;

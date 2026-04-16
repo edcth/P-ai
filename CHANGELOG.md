@@ -2,6 +2,7 @@
 
 ## 发布：v0.9.10
 
+- 优化（config-api-model-card）：API 配置页模型卡片调整下拉区位置与展开图标，补齐模型刷新成功提示，支持刷新模型时直接使用当前草稿中的协议与 Base URL，无需先保存即可生效
 - 性能（chat-send-hotpath-persist）：发送热路径改为“单会话快速写入”，不再走整份 `before/after` 运行态比较；会话概览从消息链路中移出，工具审查批次改为首次进入会话与轮次完成时刷新，显著降低发送前锁持有与无意义后端轮询
 - 性能（conversation-rewind-fast-persist）：会话撤回热路径改为单会话快速写入，不再为当前会话撤回走整份 `before/after` 运行态比较，降低撤回时的锁持有时间
 - 修复（runtime-log-visibility）：补齐 `app_handle` 锁异常日志，工具审查批次读取聚合耗时改为 debug 级结构化日志，避免静默吞错与高频 stderr 噪音
