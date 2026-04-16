@@ -112,55 +112,6 @@ export function useChatMedia(options: UseChatMediaOptions) {
     return files;
   }
 
-  function parseClipboardFilePaths(event: ClipboardEvent): string[] {
-    const data = event.clipboardData;
-    if (!data) return [];
-    const out: string[] = [];
-
-    const uriList = String(data.getData("text/uri-list") || "").trim();
-    if (uriList) {
-      for (const raw of uriList.split(/\r?\n/).map((v) => v.trim()).filter(Boolean)) {
-        if (raw.startsWith("#")) continue;
-        if (raw.startsWith("file://")) {
-          try {
-            const url = new URL(raw);
-            if (url.protocol === "file:") {
-              let decoded = decodeURIComponent(url.pathname || "");
-              if (!decoded) continue;
-              if (url.host) {
-                const uncPath = `\\\\${url.host}${decoded.replace(/\//g, "\\")}`;
-                out.push(uncPath);
-                continue;
-              }
-              const isWindowsDrivePath = /^\/[a-zA-Z]:\//.test(decoded) || /^[a-zA-Z]:\//.test(decoded);
-              if (isWindowsDrivePath) {
-                if (/^\/[a-zA-Z]:\//.test(decoded)) decoded = decoded.slice(1);
-                out.push(decoded.replace(/\//g, "\\"));
-              } else {
-                out.push(decoded);
-              }
-            }
-          } catch {
-            // ignore invalid uri
-          }
-        }
-      }
-    }
-
-    const plain = String(data.getData("text/plain") || "").trim();
-    if (plain) {
-      for (const raw of plain.split(/\r?\n/).map((v) => v.trim()).filter(Boolean)) {
-        const candidate = raw.replace(/^"(.*)"$/, "$1");
-        if (/^[a-zA-Z]:\\/.test(candidate) || /^\\\\/.test(candidate)) {
-          out.push(candidate);
-        }
-      }
-    }
-
-    const deduped = Array.from(new Set(out));
-    return deduped;
-  }
-
   function collectDroppedFiles(
     event: DragEvent,
   ): Array<{ file: File; mime: string }> {
@@ -248,14 +199,6 @@ export function useChatMedia(options: UseChatMediaOptions) {
           }
         }
       })();
-      return;
-    }
-
-    const pastedPaths = parseClipboardFilePaths(event);
-    if (pastedPaths.length > 0) {
-      event.preventDefault();
-      options.setChatError("");
-      void onNativeFileDrop(pastedPaths);
       return;
     }
 
