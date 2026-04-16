@@ -34,6 +34,10 @@ fn delegate_resolve_context(
         .find(|id| !id.trim().is_empty())
         .cloned()
         .ok_or_else(|| format!("目标部门没有可用委任人，departmentId={target_department_id}"))?;
+    if target_agent_id.trim() == source_agent_id.trim() {
+        drop(guard);
+        return Err("该部门主管就是你自己，自己解决。".to_string());
+    }
     if !data
         .agents
         .iter()

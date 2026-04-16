@@ -1519,6 +1519,14 @@ fn prompt_department_context_from_provider_meta(
     let mut available = departments
         .iter()
         .filter(|department| department.id != current_department.id)
+        .filter(|department| {
+            department
+                .agent_ids
+                .iter()
+                .find(|id| !id.trim().is_empty())
+                .map(|id| id.trim() != agent.id.trim())
+                .unwrap_or(true)
+        })
         .filter(|department| !call_stack.contains(department.id.as_str()))
         .map(|department| prompt_department_card_from_config(department, empty_summary))
         .collect::<Vec<_>>();
@@ -1548,14 +1556,21 @@ fn build_departments_prompt_block(
         labels.empty_summary,
     )
     .or_else(|| {
-        current_department.map(|department| PromptDepartmentContext {
-            current: prompt_department_card_from_config(department, labels.empty_summary),
-            available: departments
-                .iter()
-                .filter(|item| item.id != department.id)
-                .map(|item| prompt_department_card_from_config(item, labels.empty_summary))
-                .collect::<Vec<_>>(),
-        })
+            current_department.map(|department| PromptDepartmentContext {
+                current: prompt_department_card_from_config(department, labels.empty_summary),
+                available: departments
+                    .iter()
+                    .filter(|item| item.id != department.id)
+                    .filter(|item| {
+                        item.agent_ids
+                            .iter()
+                            .find(|id| !id.trim().is_empty())
+                            .map(|id| id.trim() != agent.id.trim())
+                            .unwrap_or(true)
+                    })
+                    .map(|item| prompt_department_card_from_config(item, labels.empty_summary))
+                    .collect::<Vec<_>>(),
+            })
     });
     let Some(prompt_context) = prompt_context else {
         return String::new();
