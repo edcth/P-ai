@@ -870,6 +870,7 @@ mod terminal_workspace_tests {
             provider_system_message_user_fallback_keys: Arc::new(Mutex::new(HashSet::new())),
             hidden_skill_snapshot_cache: Arc::new(Mutex::new(String::new())),
             preferred_release_source: Arc::new(Mutex::new(String::new())),
+            migration_preview_dirs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

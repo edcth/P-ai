@@ -874,8 +874,9 @@ fn test_read_file_state() -> AppState {
             )),
             hidden_skill_snapshot_cache: Arc::new(Mutex::new(String::new())),
             preferred_release_source: Arc::new(Mutex::new("github".to_string())),
+            migration_preview_dirs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
-    }
+}
 
 #[cfg(test)]
 #[test]

@@ -98,6 +98,7 @@
                 },
             ],
             api_providers: Vec::new(),
+            tool_review_api_config_id: None,
         };
         normalize_app_config(&mut cfg);
         assert_eq!(cfg.record_hotkey, "Alt");
@@ -177,6 +178,7 @@
                 },
             ],
             api_providers: Vec::new(),
+            tool_review_api_config_id: None,
         };
         normalize_app_config(&mut cfg);
         assert_eq!(cfg.selected_api_config_id, "edit-b::edit-b-model-default".to_string());
@@ -231,6 +233,7 @@
                 failure_retry_count: 0,
             }],
             api_providers: Vec::new(),
+            tool_review_api_config_id: None,
         };
         normalize_app_config(&mut cfg);
         let api = &cfg.api_configs[0];
@@ -364,6 +367,7 @@
                 },
             ],
             api_providers: Vec::new(),
+            tool_review_api_config_id: None,
         };
 
         normalize_app_config(&mut cfg);
@@ -444,6 +448,7 @@
                 failure_retry_count: 0,
             }],
             api_providers: Vec::new(),
+            tool_review_api_config_id: None,
         };
 
         normalize_app_config(&mut cfg);
@@ -504,6 +509,7 @@
             selected_api_config_id: "legacy-openai".to_string(),
             assistant_department_api_config_id: "legacy-openai".to_string(),
             api_providers: Vec::new(),
+            tool_review_api_config_id: None,
             api_configs: vec![ApiConfig {
                 id: "legacy-openai".to_string(),
                 name: "Legacy OpenAI".to_string(),

@@ -12,6 +12,8 @@ include!("terminal/workspace.rs");
 
 include!("terminal/matcher.rs");
 
+include!("terminal/analyzer.rs");
+
 include!("terminal/approval.rs");
 
 include!("terminal/guards.rs");

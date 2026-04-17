@@ -5,61 +5,7 @@ struct TerminalCommandPathCandidate {
 }
 
 fn terminal_tokenize(command: &str) -> Vec<String> {
-    let mut tokens = Vec::<String>::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    let mut chars = command.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if let Some(q) = quote {
-            if ch == q {
-                quote = None;
-            } else if ch == '\\' {
-                if let Some(next) = chars.peek().copied() {
-                    if next == q || next == '\\' {
-                        current.push(next);
-                        chars.next();
-                    } else {
-                        current.push(ch);
-                    }
-                } else {
-                    current.push(ch);
-                }
-            } else {
-                current.push(ch);
-            }
-            continue;
-        }
-
-        if ch == '\'' || ch == '"' {
-            quote = Some(ch);
-            continue;
-        }
-        if ch.is_whitespace() {
-            if !current.is_empty() {
-                tokens.push(current.clone());
-                current.clear();
-            }
-            continue;
-        }
-        if matches!(ch, '>' | '<' | '|' | ';') {
-            if !current.is_empty() {
-                tokens.push(current.clone());
-                current.clear();
-            }
-            if ch == '>' && chars.peek().copied() == Some('>') {
-                chars.next();
-                tokens.push(">>".to_string());
-            } else {
-                tokens.push(ch.to_string());
-            }
-            continue;
-        }
-        current.push(ch);
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
+    terminal_lex_command(command)
 }
 
 fn terminal_unquote_token(token: &str) -> String {
@@ -90,39 +36,6 @@ fn terminal_has_windows_drive_prefix(token: &str) -> bool {
 #[cfg(not(target_os = "windows"))]
 fn terminal_has_windows_drive_prefix(_token: &str) -> bool {
     false
-}
-
-fn terminal_is_explicit_path_token(token: &str) -> bool {
-    let trimmed = token.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    if trimmed.starts_with('-') {
-        return false;
-    }
-    if trimmed.contains("://") {
-        return false;
-    }
-    if matches!(
-        trimmed,
-        "|" | "||" | "&" | "&&" | ";" | ">" | ">>" | "<" | "2>" | "1>"
-    ) {
-        return false;
-    }
-    if PathBuf::from(trimmed).is_absolute() {
-        return true;
-    }
-    if terminal_has_windows_drive_prefix(trimmed) {
-        return true;
-    }
-    trimmed.starts_with("./")
-        || trimmed.starts_with(".\\")
-        || trimmed.starts_with("../")
-        || trimmed.starts_with("..\\")
-        || trimmed.starts_with("~/")
-        || trimmed.starts_with("~\\")
-        || trimmed.contains('\\')
-        || trimmed.contains('/')
 }
 
 fn terminal_is_posix_style_shell(shell_kind: &str) -> bool {
@@ -217,84 +130,6 @@ fn terminal_dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-fn terminal_collect_command_path_candidate_details(
-    cwd: &Path,
-    command: &str,
-    shell_kind: &str,
-) -> Vec<TerminalCommandPathCandidate> {
-    let tokens = terminal_tokenize(command);
-    if tokens.is_empty() {
-        return Vec::new();
-    }
-
-    let mut raw_paths = Vec::<String>::new();
-    let mut idx = 0usize;
-    while idx < tokens.len() {
-        let token = terminal_unquote_token(&tokens[idx]);
-        let lower = token.to_ascii_lowercase();
-
-        if (lower == ">" || lower == ">>")
-            && tokens
-                .get(idx + 1)
-                .map(|next| !next.trim().is_empty())
-                .unwrap_or(false)
-        {
-            if !terminal_is_virtual_sink_path(&tokens[idx + 1], shell_kind) {
-                raw_paths.push(tokens[idx + 1].clone());
-            }
-            idx += 2;
-            continue;
-        }
-
-        if matches!(
-            lower.as_str(),
-            "-path"
-                | "-literalpath"
-                | "--path"
-                | "-file"
-                | "--file"
-                | "-output"
-                | "--output"
-        ) && tokens
-            .get(idx + 1)
-            .map(|next| !next.trim().is_empty())
-            .unwrap_or(false)
-        {
-            raw_paths.push(tokens[idx + 1].clone());
-            idx += 2;
-            continue;
-        }
-
-        if terminal_is_explicit_path_token(&token) {
-            if terminal_is_virtual_sink_path(&token, shell_kind) {
-                idx += 1;
-                continue;
-            }
-            raw_paths.push(token);
-        }
-
-        idx += 1;
-    }
-
-    let mut out = Vec::<TerminalCommandPathCandidate>::new();
-    for raw in raw_paths {
-        if let Some(path) = terminal_resolve_candidate_path(cwd, &raw) {
-            out.push(TerminalCommandPathCandidate {
-                path,
-                is_absolute: terminal_raw_token_is_absolute_path(&raw),
-            });
-        }
-    }
-    let mut deduped = Vec::<TerminalCommandPathCandidate>::new();
-    let mut seen = std::collections::HashSet::<String>::new();
-    for item in out {
-        let key = normalize_terminal_path_for_compare(&item.path);
-        if seen.insert(key) {
-            deduped.push(item);
-        }
-    }
-    deduped
-}
 
 #[cfg(test)]
 fn terminal_collect_command_path_candidates(
@@ -302,7 +137,8 @@ fn terminal_collect_command_path_candidates(
     command: &str,
     shell_kind: &str,
 ) -> Vec<PathBuf> {
-    terminal_collect_command_path_candidate_details(cwd, command, shell_kind)
+    terminal_analyze_command(cwd, command, shell_kind)
+        .path_candidates()
         .into_iter()
         .map(|item| item.path)
         .collect()

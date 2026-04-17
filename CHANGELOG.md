@@ -3,6 +3,7 @@
 ## 发布：v0.9.11
 
 - 发布（release-0.9.11）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.11`，用于触发本轮版本更新构建
+- 重构（terminal-command-analyzer）：新增终端命令语义分析器，按 shell 语义区分读取白名单、重定向与路径访问意图；读取类白名单命令允许跨目录读取，非白名单命令再按工作目录权限等级处理，`full_access` 下跳过 AI 审查但仍保留路径边界校验；同时修复 `2>/dev/null` / `2>nul` 误判、补齐相关测试，并让终端/补丁拒绝结果继续回给模型而不再非人为打断整轮工具调用
 
 ## 发布：v0.9.10
 

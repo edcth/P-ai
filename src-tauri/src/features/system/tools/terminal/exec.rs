@@ -179,44 +179,97 @@ enum TerminalSmartReviewOutcome {
     },
 }
 
-fn terminal_command_is_clearly_safe(command: &str, write_risk: &TerminalWriteRisk) -> bool {
-    if terminal_is_python_like_command(command) || !matches!(write_risk, TerminalWriteRisk::None) {
-        return false;
-    }
-    let trimmed = command.trim();
-    if trimmed.is_empty()
-        || trimmed.contains("&&")
-        || trimmed.contains("||")
-        || trimmed.contains('|')
-        || trimmed.contains(';')
-        || trimmed.contains('>')
-        || trimmed.contains('<')
+fn terminal_command_is_read_whitelist(
+    command: &str,
+    shell_kind: &str,
+    analysis: &TerminalCommandAnalysis,
+) -> bool {
+    if terminal_is_python_like_command(command)
+        || !matches!(analysis.write_risk, TerminalWriteRisk::None)
+        || analysis.has_directory_change
+        || analysis.unresolved_write_targets
     {
         return false;
     }
-    let tokens = terminal_tokenize(trimmed);
-    let Some(first) = tokens.first() else {
+
+    if analysis.accesses.iter().any(|item| item.intent != TerminalPathIntent::Read) {
         return false;
-    };
-    let first = terminal_unquote_token(first).to_ascii_lowercase();
-    let second = tokens
-        .get(1)
-        .map(|item| terminal_unquote_token(item).to_ascii_lowercase())
-        .unwrap_or_default();
-    matches!(
-        first.as_str(),
-        "pwd"
-            | "ls"
-            | "dir"
-            | "cat"
-            | "type"
-            | "rg"
-            | "findstr"
-            | "get-childitem"
-            | "select-string"
-            | "where"
-            | "which"
-    ) || (first == "git" && matches!(second.as_str(), "status" | "diff" | "show" | "log"))
+    }
+
+    let family = terminal_shell_family(shell_kind);
+    for simple in terminal_split_simple_commands(command) {
+        let base_cmd = match family {
+            TerminalShellFamily::PowerShell => {
+                let Some(first) = simple.argv.first() else {
+                    return false;
+                };
+                terminal_powershell_alias_base(
+                    &terminal_unquote_token(first).to_ascii_lowercase(),
+                )
+                .to_string()
+            }
+            TerminalShellFamily::Posix | TerminalShellFamily::Other => {
+                let start_idx = terminal_skip_bash_wrappers(&simple.argv);
+                let Some(first) = simple.argv.get(start_idx) else {
+                    return false;
+                };
+                terminal_unquote_token(first).to_ascii_lowercase()
+            }
+        };
+
+        let second = simple
+            .argv
+            .get(1)
+            .map(|item| terminal_unquote_token(item).to_ascii_lowercase())
+            .unwrap_or_default();
+
+        let allowed = match family {
+            TerminalShellFamily::PowerShell => matches!(
+                base_cmd.as_str(),
+                "get-childitem"
+                    | "get-content"
+                    | "select-string"
+                    | "select-object"
+                    | "where-object"
+                    | "sort-object"
+                    | "measure-object"
+                    | "get-item"
+                    | "test-path"
+                    | "resolve-path"
+                    | "pwd"
+                    | "where"
+            ),
+            TerminalShellFamily::Posix | TerminalShellFamily::Other => {
+                matches!(
+                    base_cmd.as_str(),
+                    "pwd"
+                        | "ls"
+                        | "dir"
+                        | "cat"
+                        | "type"
+                        | "head"
+                        | "tail"
+                        | "sort"
+                        | "uniq"
+                        | "wc"
+                        | "find"
+                        | "rg"
+                        | "grep"
+                        | "findstr"
+                        | "stat"
+                        | "which"
+                        | "where"
+                ) || (base_cmd == "git"
+                    && matches!(second.as_str(), "status" | "diff" | "show" | "log"))
+            }
+        };
+
+        if !allowed {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn terminal_smart_review_language(ui_language: &str) -> &'static str {
@@ -472,8 +525,10 @@ async fn builtin_shell_exec(
         Err(err) => return Err(err),
     };
     let timeout_ms = normalize_terminal_timeout_ms(timeout_ms);
-    let command_paths =
-        terminal_collect_command_path_candidate_details(&cwd, cmd, &runtime_shell.kind);
+    let command_analysis = terminal_analyze_command(&cwd, cmd, &runtime_shell.kind);
+    let is_read_whitelist =
+        terminal_command_is_read_whitelist(cmd, &runtime_shell.kind, &command_analysis);
+    let command_paths = command_analysis.path_candidates();
     let mut unmatched_paths = Vec::<TerminalCommandPathCandidate>::new();
     let mut matched_accesses = Vec::<String>::new();
     for candidate in &command_paths {
@@ -483,7 +538,7 @@ async fn builtin_shell_exec(
             unmatched_paths.push(candidate.clone());
         }
     }
-    let (write_target_paths, _) = terminal_collect_write_target_paths(&cwd, cmd);
+    let write_target_paths = command_analysis.write_target_paths();
     let mut matched_write_accesses = Vec::<String>::new();
     let mut unmatched_write_targets = Vec::<PathBuf>::new();
     for path in &write_target_paths {
@@ -506,30 +561,53 @@ async fn builtin_shell_exec(
     } else {
         terminal_strictest_workspace_access(&matched_write_accesses)
     };
-    let relative_unmatched_paths = unmatched_paths
-        .iter()
-        .filter(|item| !item.is_absolute)
-        .map(|item| terminal_path_for_user(&item.path))
-        .collect::<Vec<_>>();
-    if !relative_unmatched_paths.is_empty() {
-        return Ok(serde_json::json!({
-            "ok": false,
-            "approved": false,
-            "blockedReason": "relative_path_outside_workspace",
-            "message": "相对路径不能脱离当前工作目录，请改用当前目录内相对路径或显式绝对路径。",
-            "sessionId": normalized_session,
-            "rootPath": session_root_text,
-            "workspacePath": workspace_path_text,
-            "allowedProjectRoots": allowed_project_roots,
-            "cwd": terminal_path_for_user(&cwd),
-            "command": cmd,
-            "ungrantedPaths": relative_unmatched_paths,
-        }));
+    let write_risk = command_analysis.write_risk.clone();
+    let is_write_command = !matches!(write_risk, TerminalWriteRisk::None);
+    if !is_read_whitelist {
+        let relative_unmatched_paths = unmatched_paths
+            .iter()
+            .filter(|item| !item.is_absolute)
+            .map(|item| terminal_path_for_user(&item.path))
+            .collect::<Vec<_>>();
+        if !relative_unmatched_paths.is_empty() {
+            return Ok(serde_json::json!({
+                "ok": false,
+                "approved": false,
+                "blockedReason": "relative_path_outside_workspace",
+                "message": "相对路径不能脱离当前工作目录，请改用当前目录内相对路径或显式绝对路径。",
+                "sessionId": normalized_session,
+                "rootPath": session_root_text,
+                "workspacePath": workspace_path_text,
+                "allowedProjectRoots": allowed_project_roots,
+                "cwd": terminal_path_for_user(&cwd),
+                "command": cmd,
+                "ungrantedPaths": relative_unmatched_paths,
+            }));
+        }
+
+        let absolute_unmatched_paths = unmatched_paths
+            .iter()
+            .filter(|item| item.is_absolute)
+            .map(|item| terminal_path_for_user(&item.path))
+            .collect::<Vec<_>>();
+        if !absolute_unmatched_paths.is_empty() {
+            return Ok(serde_json::json!({
+                "ok": false,
+                "approved": false,
+                "blockedReason": "absolute_path_not_granted",
+                "message": "非读取类命令不能访问未纳管的绝对路径，请改用已授权工作目录内路径。",
+                "sessionId": normalized_session,
+                "rootPath": session_root_text,
+                "workspacePath": workspace_path_text,
+                "allowedProjectRoots": allowed_project_roots,
+                "cwd": terminal_path_for_user(&cwd),
+                "command": cmd,
+                "ungrantedPaths": absolute_unmatched_paths,
+            }));
+        }
     }
 
-    let write_risk = classify_terminal_write_risk(&cwd, cmd);
-    let is_write_command = !matches!(write_risk, TerminalWriteRisk::None);
-    if terminal_is_python_like_command(cmd) {
+    if !is_read_whitelist && terminal_is_python_like_command(cmd) {
         if effective_access != SHELL_WORKSPACE_ACCESS_FULL_ACCESS {
             return Ok(serde_json::json!({
                 "ok": false,
@@ -544,6 +622,19 @@ async fn builtin_shell_exec(
                 "command": cmd,
             }));
         }
+    } else if !is_read_whitelist && effective_access == SHELL_WORKSPACE_ACCESS_READ_ONLY {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "approved": false,
+            "blockedReason": "read_only_workspace",
+            "message": "当前目录权限为只读，仅允许读取类白名单命令。",
+            "sessionId": normalized_session,
+            "rootPath": session_root_text,
+            "workspacePath": workspace_path_text,
+            "allowedProjectRoots": allowed_project_roots,
+            "cwd": terminal_path_for_user(&cwd),
+            "command": cmd,
+        }));
     } else if is_write_command {
         let unmatched_write_paths = if matches!(write_risk, TerminalWriteRisk::Unknown)
             && unmatched_write_targets.is_empty()
@@ -593,7 +684,14 @@ async fn builtin_shell_exec(
     let mut smart_review_unavailable_notice = None::<String>;
     let mut smart_review_handled = false;
     let mut smart_review_history = None::<Value>;
-    let smart_review = if terminal_command_is_clearly_safe(cmd, &write_risk) {
+    let effective_review_access = if is_write_command {
+        effective_write_access.as_str()
+    } else {
+        effective_access.as_str()
+    };
+    let skip_smart_review =
+        is_read_whitelist || effective_review_access == SHELL_WORKSPACE_ACCESS_FULL_ACCESS;
+    let smart_review = if skip_smart_review {
         None
     } else {
         let review_api_config_id = current_tool_review_api_config_id(state)?;
@@ -603,11 +701,7 @@ async fn builtin_shell_exec(
                 &review_api_config_id,
                 &cwd,
                 cmd,
-                if is_write_command {
-                    effective_write_access.as_str()
-                } else {
-                    effective_access.as_str()
-                },
+                effective_review_access,
                 &write_risk,
                 &write_target_paths,
                 match &write_risk {
@@ -995,6 +1089,7 @@ mod terminal_exec_tests {
             provider_system_message_user_fallback_keys: Arc::new(Mutex::new(HashSet::new())),
             hidden_skill_snapshot_cache: Arc::new(Mutex::new(String::new())),
             preferred_release_source: Arc::new(Mutex::new("github".to_string())),
+            migration_preview_dirs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1141,6 +1236,74 @@ mod terminal_exec_tests {
         Ok(())
     }
 
+    async fn verify_dev_null_read_command_for_shell(kind: &str) -> Result<(), String> {
+        let Some(shell) = shell_candidate_by_kind(kind) else {
+            eprintln!("[TEST] skip shell kind={kind}: not available on this machine");
+            return Ok(());
+        };
+
+        let root =
+            std::env::temp_dir().join(format!("eca-terminal-devnull-{}-{}", kind, Uuid::new_v4()));
+        fs::create_dir_all(&root).map_err(|err| format!("create temp root failed: {err}"))?;
+        let archive_dir = root.join("archive");
+        fs::create_dir_all(&archive_dir)
+            .map_err(|err| format!("create archive dir failed: {err}"))?;
+
+        let state = build_test_state(shell, root.clone());
+        let (_system_root, main_root, secondary_root) =
+            configure_test_workspaces(&state, "full_access", "read_only")?;
+        let session_id = configure_test_conversation_workspaces(
+            &state,
+            "dev-null-read-conversation",
+            DEFAULT_AGENT_ID,
+            Some(main_root.as_path()),
+            &main_root,
+            SHELL_WORKSPACE_ACCESS_FULL_ACCESS,
+            &secondary_root,
+            SHELL_WORKSPACE_ACCESS_READ_ONLY,
+        )?;
+        let command = if kind.starts_with("powershell") {
+            "Get-ChildItem .\\archive 2>nul"
+        } else {
+            "ls -la ./archive 2>/dev/null || true"
+        };
+
+        let result = timeout(
+            Duration::from_secs(15),
+            builtin_shell_exec(&state, &session_id, "run", command, Some(8_000)),
+        )
+        .await
+        .map_err(|_| "builtin_shell_exec timed out".to_string())??;
+
+        let ok = result.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        let blocked_reason = result.get("blockedReason").and_then(Value::as_str);
+        if !ok || blocked_reason.is_some() {
+            return Err(format!("dev-null read command unexpectedly blocked: {}", result));
+        }
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn git_bash_dev_null_read_command_should_not_require_write_access() {
+        verify_dev_null_read_command_for_shell("git-bash")
+            .await
+            .expect("git-bash dev null regression should pass");
+    }
+
+    #[tokio::test]
+    async fn powershell_dev_null_read_command_should_not_require_write_access() {
+        let kind = if shell_candidate_by_kind("powershell7").is_some() {
+            "powershell7"
+        } else {
+            "powershell5"
+        };
+        verify_dev_null_read_command_for_shell(kind)
+            .await
+            .expect("powershell dev null regression should pass");
+    }
+
     #[tokio::test]
     async fn default_workspace_skip_approval_for_powershell() {
         let powershell_kind = if shell_candidate_by_kind("powershell7").is_some() {
@@ -1228,7 +1391,7 @@ mod terminal_exec_tests {
 
         assert_eq!(
             result.get("blockedReason").and_then(Value::as_str),
-            Some("write_path_not_granted")
+            Some("absolute_path_not_granted")
         );
         assert!(!outside_path.exists());
         let _ = fs::remove_dir_all(&root);
@@ -1250,7 +1413,7 @@ mod terminal_exec_tests {
         let state = build_test_state(shell, root.clone());
         let (_, main_root, secondary_root) = configure_test_workspaces(
             &state,
-            SHELL_WORKSPACE_ACCESS_APPROVAL,
+            SHELL_WORKSPACE_ACCESS_READ_ONLY,
             SHELL_WORKSPACE_ACCESS_READ_ONLY,
         )
         .expect("configure workspaces");
@@ -1307,9 +1470,9 @@ mod terminal_exec_tests {
             &state,
             "conv-read-only",
             "agent-read-only",
-            Some(&secondary_root),
+            Some(&main_root),
             &main_root,
-            SHELL_WORKSPACE_ACCESS_APPROVAL,
+            SHELL_WORKSPACE_ACCESS_READ_ONLY,
             &secondary_root,
             SHELL_WORKSPACE_ACCESS_READ_ONLY,
         )
@@ -1335,7 +1498,7 @@ mod terminal_exec_tests {
 
     #[cfg(target_os = "windows")]
     #[tokio::test]
-    async fn unmatched_absolute_read_should_not_block_granted_write_target() {
+    async fn unmatched_absolute_read_should_block_non_whitelist_command() {
         let powershell_kind = if shell_candidate_by_kind("powershell7").is_some() {
             "powershell7"
         } else {
@@ -1375,9 +1538,11 @@ mod terminal_exec_tests {
         .await
         .expect("run mixed read/write command");
 
-        assert_eq!(result.get("blockedReason").and_then(Value::as_str), None);
-        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
-        assert!(main_root.join("note.txt").exists(), "expected note.txt to be created");
+        assert_eq!(
+            result.get("blockedReason").and_then(Value::as_str),
+            Some("absolute_path_not_granted")
+        );
+        assert!(!main_root.join("note.txt").exists(), "note.txt should not be created");
         let _ = fs::remove_dir_all(&root);
     }
 }
