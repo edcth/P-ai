@@ -1,5 +1,9 @@
 # 变更日志
 
+## 发布：v0.9.11
+
+- 发布（release-0.9.11）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.11`，用于触发本轮版本更新构建
+
 ## 发布：v0.9.10
 
 - 功能（config-migration-package）：新增数据迁移页与加密迁移包导入导出链路，支持同版本迁移包预检、供应商与记忆增量导入、配置备份后导入与自动重启，并收口迁移页交互与本地元数据/授权文件迁移边界
