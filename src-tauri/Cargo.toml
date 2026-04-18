@@ -26,11 +26,11 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 time = { version = "=0.3.36", features = ["local-offset"] }
 rmcp = { version = "0.16.0", features = ["client", "macros", "transport-child-process", "transport-io", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "sync"] }
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1.52.1", features = ["rt-multi-thread", "sync"] }
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
 dingtalk-stream = "0.1.5"
 reqwest = { version = "0.11.27", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
-async-openai = { version = "0.33.0", default-features = false, features = ["rustls", "chat-completion", "byot"] }
+async-openai = { version = "0.34.0", default-features = false, features = ["rustls", "chat-completion", "byot"] }
 genai = { git = "https://github.com/jeremychone/rust-genai", rev = "d40abb2583f2aacdda0a51b79b164965ebda03a9" }
 base64 = "0.22"
 aes = "0.8"
@@ -44,7 +44,7 @@ webbrowser = "1.0"
 futures-util = "0.3"
 sse-stream = "0.2"
 sha2 = "0.10"
-pdf_oxide = { version = "0.3.17", default-features = false }
+pdf_oxide = { version = "0.3.33", default-features = false }
 hayro = "0.5.0"
 aho-corasick = "1.1"
 enigo = "0.6"
@@ -53,7 +53,7 @@ webp = "0.3"
 rayon = "1.10"
 tiktoken-rs = "0.7"
 captis = "0.6"
-xcap = "0.8"
+xcap = "0.9.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tantivy = "0.22"
 font-kit = "0.14"
@@ -78,7 +78,7 @@ debug = false
 httpmock = "0.7"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Globalization",
   "Win32_Security",

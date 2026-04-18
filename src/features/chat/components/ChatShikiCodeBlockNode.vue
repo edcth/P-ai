@@ -23,15 +23,18 @@ const resolvedNode = computed(() => {
   };
 });
 
-const resolvedProps = computed(() => ({
-  ...props,
-  node: resolvedNode.value,
-  darkTheme: "github-dark",
-  lightTheme: "github-dark",
-  isDark: true,
-  stream: false,
-  loading: false,
-}));
+const resolvedProps = computed(() => {
+  const { themes: _themes, ...rest } = props as CodeBlockNodeProps & { themes?: unknown };
+  return {
+    ...rest,
+    node: resolvedNode.value,
+    darkTheme: "github-dark",
+    lightTheme: "github-dark",
+    isDark: true,
+    stream: false,
+    loading: false,
+  };
+});
 </script>
 
 <style scoped>
