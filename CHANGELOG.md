@@ -2,6 +2,7 @@
 
 ## 发布：v0.9.12
 
+- 修复（chat-local-link-percent-decode）：聊天消息里的本地文件链接在浏览器自动编码中文文件名或 `file:` URL 后，现在会先做安全解码再交给本地打开链路；修正 `%E8%8E%89...` 这类 UTF-8 百分号编码路径无法被 Windows 资源管理器识别的问题，并兼容盘符路径、`file://` 形式与 UNC 路径
 - 功能（chat-selection-derive-and-deliver）：聊天窗口新增消息多选模式；可从单条消息操作区进入多选，整行勾选消息，并在输入区切换为 `派生 / 复制 / 分享 / 投送 / 取消` 操作条；其中 `复制` 已支持按 `[角色名]: 内容` 格式汇总已选消息，`分享` 当前保留为暂不支持提示，`投送` 会把已选原消息连同工具调用与元数据一起插入目标会话末尾，`派生` 会继承当前会话部门/人格/计划模式/工作区等设置，并以“最新压缩消息 + 已选原消息”生成新会话；同时新增“继承当前会话”创建入口、派生/投送忙态遮罩，以及目标会话忙碌时的拒绝保护
 - 功能（archive-report-and-fork-scope）：会话分叉与归档语义继续收口；前台会话关系以父会话与分叉点为主，归档统一生成结论汇报，并在存在有效 `fork_message_cursor` 时仅总结分叉点之后的讨论；处理当前会话弹窗收口为“压缩 / 丢弃 / 归档”，不再在当前前台主流程暴露归档投放目标
 - 修复（prompt-adjacent-assistant-normalization）：最终请求体构建新增连续 assistant 归一化，`build_prompt`、工具回放追加、最终 JSON 序列化与 provider request 构建前都会消除相邻 assistant 消息，并合并 `text / reasoning_content / tool_calls`；同时修复非 self persona 历史消息与最新用户消息的说话人/时间元数据落位，避免 prompt 中 speaker block 丢失

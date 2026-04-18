@@ -1,8 +1,30 @@
+function safeDecodeUriComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function normalizeLocalLinkHref(href: string): string {
   const trimmed = String(href || "").trim();
   if (!trimmed) return "";
 
-  const decoded = trimmed.replace(/%5C/gi, "\\");
+  if (/^file:/i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      const decodedPath = safeDecodeUriComponent(url.pathname || "");
+      if (url.host && url.host !== "localhost") {
+        return `\\\\${url.host}${decodedPath.replace(/\//g, "\\")}`;
+      }
+      const windowsPath = decodedPath.replace(/^\/([A-Za-z]:)/, "$1");
+      return windowsPath.replace(/\\/g, "/");
+    } catch {
+      return safeDecodeUriComponent(trimmed);
+    }
+  }
+
+  const decoded = safeDecodeUriComponent(trimmed).replace(/%5C/gi, "\\");
   if (/^[A-Za-z]:[\\/]/.test(decoded)) {
     return `${decoded.slice(0, 2)}${decoded.slice(2).replace(/\\/g, "/")}`;
   }
