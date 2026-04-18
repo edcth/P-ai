@@ -80,6 +80,13 @@ struct StopChatRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RemoteImReplyTarget {
+    channel_id: String,
+    contact_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SendChatResult {
     conversation_id: String,
     latest_user_text: String,
@@ -103,6 +110,10 @@ struct SendChatResult {
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     context_usage_percent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_im_reply_decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_im_reply_target: Option<RemoteImReplyTarget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

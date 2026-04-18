@@ -19,6 +19,20 @@ fn remote_im_extract_action_from_tool_arguments(raw: &Value) -> Option<String> {
     }
 }
 
+fn remote_im_parse_tool_arguments(raw: &Value) -> Option<Value> {
+    match raw {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<Value>(trimmed).ok()
+        }
+        Value::Object(_) => Some(raw.clone()),
+        _ => None,
+    }
+}
+
 fn remote_im_is_reply_decision_action(action: &str) -> bool {
     matches!(
         action.trim().to_ascii_lowercase().as_str(),
@@ -26,8 +40,16 @@ fn remote_im_is_reply_decision_action(action: &str) -> bool {
     )
 }
 
-fn remote_im_extract_reply_decision_from_tool_history(events: &[Value]) -> Option<String> {
-    let mut latest_action: Option<String> = None;
+#[derive(Debug, Clone)]
+struct RemoteImReplyDecisionSummary {
+    action: String,
+    target: Option<RemoteImReplyTarget>,
+}
+
+fn remote_im_extract_reply_decision_from_tool_history(
+    events: &[Value],
+) -> Option<RemoteImReplyDecisionSummary> {
+    let mut latest: Option<RemoteImReplyDecisionSummary> = None;
     for event in events {
         let Some(tool_calls) = event.get("tool_calls").and_then(Value::as_array) else {
             continue;
@@ -49,11 +71,33 @@ fn remote_im_extract_reply_decision_from_tool_history(events: &[Value]) -> Optio
                 continue;
             };
             if remote_im_is_reply_decision_action(&action) {
-                latest_action = Some(action);
+                let target = function
+                    .get("arguments")
+                    .and_then(remote_im_parse_tool_arguments)
+                    .and_then(|value| {
+                        let object = value.as_object()?;
+                        let channel_id = object
+                            .get("channel_id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())?
+                            .to_string();
+                        let contact_id = object
+                            .get("contact_id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())?
+                            .to_string();
+                        Some(RemoteImReplyTarget {
+                            channel_id,
+                            contact_id,
+                        })
+                    });
+                latest = Some(RemoteImReplyDecisionSummary { action, target });
             }
         }
     }
-    latest_action
+    latest
 }
 
 fn remote_im_message_has_reply_decision(message: &ChatMessage) -> bool {
@@ -72,6 +116,7 @@ fn remote_im_message_has_reply_decision(message: &ChatMessage) -> bool {
         .tool_call
         .as_ref()
         .and_then(|events| remote_im_extract_reply_decision_from_tool_history(events))
+        .map(|summary| summary.action)
         .is_some()
 }
 
@@ -557,6 +602,13 @@ fn spawn_remote_im_auto_send_contact_assistant_reply(
         .await
         {
             Ok(RemoteImAutoSendExecutionOutcome::Sent { action }) => {
+                let _ = remote_im_finalize_async_send_result(
+                    &state,
+                    &activation_source,
+                    true,
+                    &now_iso(),
+                    None,
+                );
                 eprintln!(
                     "[远程IM][自动发送] 完成: conversation_id={}, channel_id={}, contact_id={}, action={}, elapsed_ms={}",
                     conversation_id,
@@ -576,6 +628,13 @@ fn spawn_remote_im_auto_send_contact_assistant_reply(
                 );
             }
             Err(err) => {
+                let _ = remote_im_finalize_async_send_result(
+                    &state,
+                    &activation_source,
+                    false,
+                    &now_iso(),
+                    Some(&err),
+                );
                 eprintln!(
                     "[远程IM][自动发送] 失败: conversation_id={}, channel_id={}, contact_id={}, error={}, elapsed_ms={}",
                     conversation_id,
@@ -2378,8 +2437,16 @@ async fn send_chat_message_inner(
         &remote_im_activation_sources,
         remote_im_reply_decision.is_some(),
     )?;
-    if pending_remote_im_auto_send_target.is_some() && remote_im_reply_decision.is_none() {
-        remote_im_reply_decision = Some("send_async".to_string());
+    if let Some(target) = pending_remote_im_auto_send_target.as_ref() {
+        if remote_im_reply_decision.is_none() {
+            remote_im_reply_decision = Some(RemoteImReplyDecisionSummary {
+                action: "send_async".to_string(),
+                target: Some(RemoteImReplyTarget {
+                    channel_id: target.channel_id.clone(),
+                    contact_id: target.remote_contact_id.clone(),
+                }),
+            });
+        }
     }
     let trusted_input_tokens = model_reply.trusted_input_tokens;
     let estimated_prompt_tokens = estimated_prompt_tokens.unwrap_or_else(|| {
@@ -2423,15 +2490,16 @@ async fn send_chat_message_inner(
                 "contextUsagePercent": context_usage_percent,
                 "contextUsageRatio": context_usage_ratio
             });
-            if let Some(action) = remote_im_reply_decision.as_deref() {
+            if let Some(decision) = remote_im_reply_decision.as_ref() {
                 if let Some(obj) = meta.as_object_mut() {
                     obj.insert(
                         "remoteImDecision".to_string(),
                         serde_json::json!({
-                            "action": action,
+                            "action": decision.action,
                             "processingMode": remote_im_contact_processing_mode,
                             "conversationKind": remote_im_conversation_kind,
-                            "activationSourceCount": remote_im_activation_sources.len()
+                            "activationSourceCount": remote_im_activation_sources.len(),
+                            "target": decision.target,
                         }),
                     );
                 }
@@ -2562,6 +2630,8 @@ async fn send_chat_message_inner(
         context_window_tokens: Some(active_selected_api.context_window_tokens),
         max_output_tokens: active_resolved_api.max_output_tokens,
         context_usage_percent: Some(context_usage_percent),
+        remote_im_reply_decision: remote_im_reply_decision.as_ref().map(|item| item.action.clone()),
+        remote_im_reply_target: remote_im_reply_decision.and_then(|item| item.target),
     })
     };
 

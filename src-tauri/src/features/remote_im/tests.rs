@@ -41,6 +41,7 @@
                 attachments: None,
                 model: None,
                 extra_text_blocks: None,
+                mentions: None,
                 provider_meta: None,
             },
         };
@@ -170,6 +171,7 @@
                 attachments: None,
                 model: None,
                 extra_text_blocks: None,
+                mentions: None,
                 provider_meta: None,
             },
         };
@@ -187,6 +189,7 @@
             allow_receive: true,
             activation_mode: "never".to_string(),
             activation_keywords: Vec::new(),
+            patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
             route_mode: "main_session".to_string(),
             bound_department_id: None,
@@ -290,6 +293,7 @@
                 attachments: None,
                 model: None,
                 extra_text_blocks: None,
+                mentions: None,
                 provider_meta: None,
             },
         };
@@ -307,6 +311,7 @@
             allow_receive: true,
             activation_mode: "never".to_string(),
             activation_keywords: Vec::new(),
+            patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
             route_mode: "main_session".to_string(),
             bound_department_id: None,
@@ -485,6 +490,7 @@
                 attachments: None,
                 model: None,
                 extra_text_blocks: None,
+                mentions: None,
                 provider_meta: None,
             },
         };
@@ -633,5 +639,289 @@
 
         assert!(media_refs.is_empty());
         assert_eq!(text, "节点名称：转发内容");
+    }
+
+    fn remote_im_test_state() -> AppState {
+        let root = std::env::temp_dir().join(format!("eca-remote-im-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp test root");
+        std::fs::create_dir_all(root.join("llm-workspace")).expect("create temp llm workspace");
+        AppState {
+            app_handle: Arc::new(Mutex::new(None)),
+            config_path: root.join("app_config.toml"),
+            data_path: root.join("app_data.json"),
+            llm_workspace_path: root.join("llm-workspace"),
+            shared_http_client: reqwest::Client::new(),
+            terminal_shell: detect_default_terminal_shell(),
+            terminal_shell_candidates: detect_terminal_shell_candidates(),
+            conversation_lock: Arc::new(ConversationDomainLock::new()),
+            memory_lock: Arc::new(Mutex::new(())),
+            cached_config: Arc::new(Mutex::new(None)),
+            cached_config_mtime: Arc::new(Mutex::new(None)),
+            cached_agents: Arc::new(Mutex::new(None)),
+            cached_agents_mtime: Arc::new(Mutex::new(None)),
+            cached_runtime_state: Arc::new(Mutex::new(None)),
+            cached_runtime_state_mtime: Arc::new(Mutex::new(None)),
+            cached_chat_index: Arc::new(Mutex::new(None)),
+            cached_chat_index_mtime: Arc::new(Mutex::new(None)),
+            cached_conversations: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            cached_conversation_mtimes: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            cached_app_data: Arc::new(Mutex::new(None)),
+            cached_app_data_signature: Arc::new(Mutex::new(None)),
+            cached_app_data_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            app_data_persist_pending: Arc::new(Mutex::new(None)),
+            app_data_persist_notify: Arc::new(tokio::sync::Notify::new()),
+            app_data_persist_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            app_data_persist_latest_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            app_data_persist_write_lock: Arc::new(Mutex::new(())),
+            last_panic_snapshot: Arc::new(Mutex::new(None)),
+            inflight_chat_abort_handles: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            inflight_tool_abort_handles: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            inflight_completed_tool_history: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            terminal_session_roots: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            terminal_live_sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            terminal_pending_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            llm_round_logs: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            conversation_runtime_slots: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            conversation_processing_claims: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            pending_chat_result_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pending_chat_delta_channels: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            active_chat_view_bindings: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            dequeue_lock: Arc::new(Mutex::new(())),
+            delegate_runtime_threads: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            delegate_recent_threads: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            provider_streaming_disabled_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            provider_system_message_user_fallback_keys: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            remote_im_contact_runtime_states: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            hidden_skill_snapshot_cache: Arc::new(Mutex::new(String::new())),
+            preferred_release_source: Arc::new(Mutex::new("github".to_string())),
+            migration_preview_dirs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    fn remote_im_test_contact(contact_id: &str, conversation_id: &str) -> RemoteImContact {
+        RemoteImContact {
+            id: contact_id.to_string(),
+            channel_id: "channel-a".to_string(),
+            platform: RemoteImPlatform::OnebotV11,
+            remote_contact_type: "private".to_string(),
+            remote_contact_id: "remote-a".to_string(),
+            remote_contact_name: "张三".to_string(),
+            remark_name: String::new(),
+            allow_send: true,
+            allow_send_files: false,
+            allow_receive: true,
+            activation_mode: "keyword".to_string(),
+            activation_keywords: vec!["派".to_string()],
+            patience_seconds: default_remote_im_contact_patience_seconds(),
+            activation_cooldown_seconds: 0,
+            route_mode: "dedicated_contact_conversation".to_string(),
+            bound_department_id: Some(FRONT_DESK_DEPARTMENT_ID.to_string()),
+            bound_conversation_id: Some(conversation_id.to_string()),
+            processing_mode: "continuous".to_string(),
+            last_activated_at: None,
+            last_message_at: None,
+            dingtalk_session_webhook: None,
+            dingtalk_session_webhook_expired_time: None,
+        }
+    }
+
+    fn remote_im_test_conversation(conversation_id: &str) -> Conversation {
+        Conversation {
+            id: conversation_id.to_string(),
+            title: "联系人".to_string(),
+            agent_id: DEFAULT_AGENT_ID.to_string(),
+            department_id: FRONT_DESK_DEPARTMENT_ID.to_string(),
+            last_read_message_id: String::new(),
+            conversation_kind: CONVERSATION_KIND_REMOTE_IM_CONTACT.to_string(),
+            root_conversation_id: None,
+            delegate_id: None,
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            last_user_at: None,
+            last_assistant_at: None,
+            last_context_usage_ratio: 0.0,
+            last_effective_prompt_tokens: 0,
+            status: "inactive".to_string(),
+            summary: String::new(),
+            user_profile_snapshot: String::new(),
+            shell_workspace_path: None,
+            shell_workspaces: Vec::new(),
+            archived_at: None,
+            messages: Vec::new(),
+            current_todos: Vec::new(),
+            memory_recall_table: Vec::new(),
+            plan_mode_enabled: false,
+        }
+    }
+
+    #[test]
+    fn remote_im_prepare_enqueue_runtime_state_should_activate_away_keyword_contact() {
+        let state = remote_im_test_state();
+        let contact = remote_im_test_contact("contact-a", "conversation-a");
+
+        let (activate_assistant, reason) =
+            remote_im_prepare_enqueue_runtime_state(&state, &contact, "派师傅帮我看看")
+                .expect("prepare runtime state");
+
+        assert!(activate_assistant);
+        assert!(reason.contains("keyword"));
+        let runtime_states = lock_remote_im_contact_runtime_states(&state).expect("lock runtime states");
+        let runtime = runtime_states.get("contact-a").expect("runtime exists");
+        assert_eq!(runtime.presence_state, RemoteImPresenceState::Present);
+        assert_eq!(runtime.work_state, RemoteImWorkState::Idle);
+        assert!(runtime.needs_boundary);
+    }
+
+    #[test]
+    fn remote_im_finalize_round_completion_should_leave_after_patience_exhausted() {
+        let state = remote_im_test_state();
+        let contact = remote_im_test_contact("contact-a", "conversation-a");
+        let mut data = AppData::default();
+        data.remote_im_contacts.push(contact);
+        state_write_app_data_cached(&state, &data).expect("write app data");
+
+        {
+            let mut runtime_states =
+                lock_remote_im_contact_runtime_states(&state).expect("lock runtime states");
+            runtime_states.insert(
+                "contact-a".to_string(),
+                RemoteImContactRuntimeState {
+                    presence_state: RemoteImPresenceState::Present,
+                    work_state: RemoteImWorkState::Busy,
+                    has_pending: false,
+                    last_success_reply_at: Some(
+                        (time::OffsetDateTime::now_utc() - time::Duration::seconds(600))
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .expect("format old time"),
+                    ),
+                    needs_boundary: false,
+                },
+            );
+        }
+
+        remote_im_finalize_round_completion(
+            &state,
+            &[RemoteImActivationSource {
+                channel_id: "channel-a".to_string(),
+                platform: RemoteImPlatform::OnebotV11,
+                remote_contact_type: "private".to_string(),
+                remote_contact_id: "remote-a".to_string(),
+                remote_contact_name: "张三".to_string(),
+            }],
+            Some("no_reply"),
+            None,
+            None,
+            &now_iso(),
+        )
+        .expect("finalize round");
+
+        let runtime_states = lock_remote_im_contact_runtime_states(&state).expect("lock runtime states");
+        let runtime = runtime_states.get("contact-a").expect("runtime exists");
+        assert_eq!(runtime.work_state, RemoteImWorkState::Idle);
+        assert_eq!(runtime.presence_state, RemoteImPresenceState::Away);
+    }
+
+    #[test]
+    fn remote_im_handle_persisted_event_after_history_flush_should_insert_presence_boundary() {
+        let state = remote_im_test_state();
+        let mut data = AppData::default();
+        data.remote_im_contacts
+            .push(remote_im_test_contact("contact-a", "conversation-a"));
+        let mut conversation = remote_im_test_conversation("conversation-a");
+        conversation.messages.push(ChatMessage {
+            id: "old-user".to_string(),
+            role: "user".to_string(),
+            created_at: now_iso(),
+            speaker_agent_id: None,
+            parts: vec![MessagePart::Text {
+                text: "之前的上下文".to_string(),
+            }],
+            extra_text_blocks: Vec::new(),
+            provider_meta: None,
+            tool_call: None,
+            mcp_call: None,
+        });
+        data.conversations.push(conversation);
+        {
+            let mut runtime_states =
+                lock_remote_im_contact_runtime_states(&state).expect("lock runtime states");
+            runtime_states.insert(
+                "contact-a".to_string(),
+                RemoteImContactRuntimeState {
+                    presence_state: RemoteImPresenceState::Present,
+                    work_state: RemoteImWorkState::Idle,
+                    has_pending: false,
+                    last_success_reply_at: None,
+                    needs_boundary: true,
+                },
+            );
+        }
+
+        let event_message = ChatMessage {
+            id: "incoming-1".to_string(),
+            role: "user".to_string(),
+            created_at: now_iso(),
+            speaker_agent_id: None,
+            parts: vec![MessagePart::Text {
+                text: "新的联系人消息".to_string(),
+            }],
+            extra_text_blocks: Vec::new(),
+            provider_meta: None,
+            tool_call: None,
+            mcp_call: None,
+        };
+        let event = ChatPendingEvent {
+            id: "event-1".to_string(),
+            conversation_id: "conversation-a".to_string(),
+            created_at: now_iso(),
+            source: ChatEventSource::RemoteIm,
+            messages: vec![event_message.clone()],
+            activate_assistant: true,
+            session_info: ChatSessionInfo {
+                department_id: FRONT_DESK_DEPARTMENT_ID.to_string(),
+                agent_id: DEFAULT_AGENT_ID.to_string(),
+            },
+            runtime_context: None,
+            sender_info: Some(RemoteImMessageSource {
+                channel_id: "channel-a".to_string(),
+                platform: RemoteImPlatform::OnebotV11,
+                im_name: "qq".to_string(),
+                remote_contact_type: "private".to_string(),
+                remote_contact_id: "remote-a".to_string(),
+                remote_contact_name: "张三".to_string(),
+                sender_id: "remote-a".to_string(),
+                sender_name: "张三".to_string(),
+                sender_avatar_url: None,
+                platform_message_id: Some("msg-1".to_string()),
+            }),
+        };
+        data.conversations[0].messages.push(event_message);
+
+        let mut activated_contacts = std::collections::HashSet::new();
+        let should_activate = remote_im_handle_persisted_event_after_history_flush(
+            &state,
+            &mut data,
+            "conversation-a",
+            &event,
+            &now_iso(),
+            &mut activated_contacts,
+        )
+        .expect("handle persisted event");
+
+        assert!(should_activate);
+        assert_eq!(
+            provider_meta_message_kind(&data.conversations[0].messages[0]).as_deref(),
+            Some("context_compaction")
+        );
+        assert_eq!(
+            data.remote_im_contact_checkpoints[0]
+                .latest_seen_message_id
+                .as_deref(),
+            Some("incoming-1")
+        );
+        let runtime_states = lock_remote_im_contact_runtime_states(&state).expect("lock runtime states");
+        let runtime = runtime_states.get("contact-a").expect("runtime exists");
+        assert_eq!(runtime.work_state, RemoteImWorkState::Busy);
+        assert!(!runtime.needs_boundary);
     }
 

@@ -108,6 +108,8 @@ struct RemoteImContactActivationUpdateInput {
     activation_mode: String,
     #[serde(default)]
     activation_keywords: Vec<String>,
+    #[serde(default = "default_remote_im_contact_patience_seconds")]
+    patience_seconds: u64,
     #[serde(default)]
     activation_cooldown_seconds: u64,
 }
@@ -233,6 +235,7 @@ fn remote_im_upsert_contact_for_inbound(
         allow_receive: default_allow_receive,
         activation_mode: "never".to_string(),
         activation_keywords: Vec::new(),
+        patience_seconds: default_remote_im_contact_patience_seconds(),
         activation_cooldown_seconds: 0,
         route_mode: "main_session".to_string(),
         bound_department_id: Some(FRONT_DESK_DEPARTMENT_ID.to_string()),
@@ -290,6 +293,480 @@ fn normalize_contact_processing_mode(value: &str) -> String {
         "qa" => "qa".to_string(),
         _ => "continuous".to_string(),
     }
+}
+
+fn lock_remote_im_contact_runtime_states(
+    state: &AppState,
+) -> Result<std::sync::MutexGuard<'_, std::collections::HashMap<String, RemoteImContactRuntimeState>>, String>
+{
+    state
+        .remote_im_contact_runtime_states
+        .lock()
+        .map_err(|_| "无法获取远程 IM 联系人运行时状态的锁".to_string())
+}
+
+fn remote_im_contact_runtime_state_mut<'a>(
+    states: &'a mut std::collections::HashMap<String, RemoteImContactRuntimeState>,
+    contact_id: &str,
+) -> &'a mut RemoteImContactRuntimeState {
+    states
+        .entry(contact_id.to_string())
+        .or_insert_with(RemoteImContactRuntimeState::default)
+}
+
+fn remote_im_contact_checkpoint_mut<'a>(
+    data: &'a mut AppData,
+    contact_id: &str,
+) -> &'a mut RemoteImContactCheckpoint {
+    if let Some(index) = data
+        .remote_im_contact_checkpoints
+        .iter()
+        .position(|item| item.contact_id == contact_id)
+    {
+        return &mut data.remote_im_contact_checkpoints[index];
+    }
+    data.remote_im_contact_checkpoints.push(RemoteImContactCheckpoint {
+        contact_id: contact_id.to_string(),
+        ..RemoteImContactCheckpoint::default()
+    });
+    let last_index = data.remote_im_contact_checkpoints.len().saturating_sub(1);
+    &mut data.remote_im_contact_checkpoints[last_index]
+}
+
+fn remote_im_contact_by_source<'a>(
+    data: &'a AppData,
+    source: &RemoteImMessageSource,
+) -> Option<&'a RemoteImContact> {
+    data.remote_im_contacts.iter().find(|item| {
+        item.channel_id == source.channel_id
+            && item.remote_contact_type == source.remote_contact_type
+            && item.remote_contact_id == source.remote_contact_id
+    })
+}
+
+fn remote_im_contact_by_activation_source<'a>(
+    data: &'a AppData,
+    source: &RemoteImActivationSource,
+) -> Option<&'a RemoteImContact> {
+    data.remote_im_contacts.iter().find(|item| {
+        item.channel_id == source.channel_id
+            && item.remote_contact_type == source.remote_contact_type
+            && item.remote_contact_id == source.remote_contact_id
+    })
+}
+
+fn remote_im_contact_matches_reply_target(
+    source: &RemoteImActivationSource,
+    target: &RemoteImReplyTarget,
+) -> bool {
+    source.channel_id.trim() == target.channel_id.trim()
+        && source.remote_contact_id.trim() == target.contact_id.trim()
+}
+
+fn remote_im_text_contains_keyword(text: &str, keyword: &str) -> bool {
+    text.to_ascii_lowercase()
+        .contains(&keyword.to_ascii_lowercase())
+}
+
+fn remote_im_should_activate_while_away(
+    contact: &RemoteImContact,
+    message_text: &str,
+) -> (bool, String) {
+    match contact.activation_mode.trim().to_ascii_lowercase().as_str() {
+        "always" => (true, "away 命中 always，切换为在场".to_string()),
+        "keyword" => {
+            let matched = contact
+                .activation_keywords
+                .iter()
+                .map(|item| item.trim())
+                .filter(|item| !item.is_empty())
+                .any(|keyword| remote_im_text_contains_keyword(message_text, keyword));
+            if matched {
+                (true, "away 命中 keyword，切换为在场".to_string())
+            } else {
+                (false, "away 未命中 keyword，仅记录消息".to_string())
+            }
+        }
+        _ => (false, "away 命中 never，仅记录消息".to_string()),
+    }
+}
+
+fn remote_im_prepare_enqueue_runtime_state(
+    state: &AppState,
+    contact: &RemoteImContact,
+    message_text: &str,
+) -> Result<(bool, String), String> {
+    let mut runtime_states = lock_remote_im_contact_runtime_states(state)?;
+    let runtime = remote_im_contact_runtime_state_mut(&mut runtime_states, &contact.id);
+    let (activate_assistant, reason) = match runtime.presence_state {
+        RemoteImPresenceState::Away => {
+            let (activate, reason) = remote_im_should_activate_while_away(contact, message_text);
+            if activate {
+                runtime.presence_state = RemoteImPresenceState::Present;
+                runtime.needs_boundary = true;
+            }
+            (activate, reason)
+        }
+        RemoteImPresenceState::Present => {
+            if runtime.work_state == RemoteImWorkState::Busy {
+                runtime.has_pending = true;
+                (true, "present + busy，新消息标记待办".to_string())
+            } else {
+                (true, "present + idle，等待本轮调度".to_string())
+            }
+        }
+    };
+    eprintln!(
+        "[远程联系人状态机] 入站判定 完成: contact_id={}, presence={:?}, work={:?}, pending={}, activate_assistant={}, reason={}",
+        contact.id,
+        runtime.presence_state,
+        runtime.work_state,
+        runtime.has_pending,
+        activate_assistant,
+        reason
+    );
+    Ok((activate_assistant, reason))
+}
+
+fn remote_im_message_text_len(message: &ChatMessage) -> usize {
+    let body_len = message
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            MessagePart::Text { text } => Some(text.chars().count()),
+            _ => None,
+        })
+        .sum::<usize>();
+    let extra_len = message
+        .extra_text_blocks
+        .iter()
+        .map(|item| item.chars().count())
+        .sum::<usize>();
+    body_len + extra_len
+}
+
+fn remote_im_message_is_readable(message: &ChatMessage) -> bool {
+    if matches!(
+        message.role.trim(),
+        "assistant" | "user"
+    ) && !is_context_compaction_message(message, message.role.trim())
+    {
+        return remote_im_message_text_len(message) > 0;
+    }
+    false
+}
+
+fn remote_im_collect_recent_readable_messages(
+    messages: &[ChatMessage],
+    budget_chars: usize,
+) -> Vec<ChatMessage> {
+    let mut selected = Vec::<ChatMessage>::new();
+    let mut used_chars = 0usize;
+    for message in messages.iter().rev() {
+        if is_context_compaction_message(message, message.role.trim()) {
+            break;
+        }
+        if !remote_im_message_is_readable(message) {
+            continue;
+        }
+        let message_chars = remote_im_message_text_len(message);
+        if !selected.is_empty() && used_chars + message_chars > budget_chars {
+            break;
+        }
+        used_chars += message_chars;
+        selected.push(message.clone());
+    }
+    selected.reverse();
+    selected
+}
+
+fn remote_im_build_presence_boundary_message(
+    contact: &RemoteImContact,
+    now: &str,
+) -> ChatMessage {
+    let text = if normalize_contact_processing_mode(&contact.processing_mode) == "qa" {
+        "当前是问答模式，尽可能快地回答问题".to_string()
+    } else {
+        "上下文窗口已经滑动".to_string()
+    };
+    ChatMessage {
+        id: Uuid::new_v4().to_string(),
+        role: "user".to_string(),
+        created_at: now.to_string(),
+        speaker_agent_id: Some(SYSTEM_PERSONA_ID.to_string()),
+        parts: vec![MessagePart::Text { text }],
+        extra_text_blocks: Vec::new(),
+        provider_meta: Some(serde_json::json!({
+            "message_meta": {
+                "kind": "context_compaction",
+                "scene": "remote_im_presence_boundary",
+                "contactId": contact.id,
+                "processingMode": normalize_contact_processing_mode(&contact.processing_mode),
+            }
+        })),
+        tool_call: None,
+        mcp_call: None,
+    }
+}
+
+fn remote_im_refresh_conversation_activity(conversation: &mut Conversation) {
+    conversation.last_user_at = conversation
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role.trim() == "user")
+        .map(|message| message.created_at.clone());
+    conversation.last_assistant_at = conversation
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role.trim() == "assistant")
+        .map(|message| message.created_at.clone());
+}
+
+fn remote_im_apply_presence_boundary_if_needed(
+    data: &mut AppData,
+    conversation_id: &str,
+    contact: &RemoteImContact,
+    now: &str,
+) -> Result<(), String> {
+    let (retained_count, boundary_id) = {
+        let Some(conversation) = data
+            .conversations
+            .iter_mut()
+            .find(|item| item.id == conversation_id)
+        else {
+            return Err(format!("目标会话不存在，conversation_id={conversation_id}"));
+        };
+        if !conversation_is_remote_im_contact(conversation) {
+            eprintln!(
+                "[远程联系人状态机] 压缩边界 跳过: contact_id={}, conversation_id={}, reason=not_dedicated_contact_conversation",
+                contact.id, conversation_id
+            );
+            return Ok(());
+        }
+
+        let retained = remote_im_collect_recent_readable_messages(&conversation.messages, 20_000);
+        let boundary = remote_im_build_presence_boundary_message(contact, now);
+        let boundary_id = boundary.id.clone();
+        let mut next_messages = Vec::<ChatMessage>::with_capacity(retained.len() + 1);
+        next_messages.push(boundary);
+        next_messages.extend(retained);
+        conversation.messages = next_messages;
+        conversation.updated_at = now.to_string();
+        remote_im_refresh_conversation_activity(conversation);
+        (conversation.messages.len().saturating_sub(1), boundary_id)
+    };
+
+    let checkpoint = remote_im_contact_checkpoint_mut(data, &contact.id);
+    let previous_cursor = checkpoint
+        .latest_seen_message_id
+        .clone()
+        .unwrap_or_default();
+    checkpoint.last_boundary_message_id = Some(boundary_id.clone());
+    checkpoint.last_boundary_covers_message_id = checkpoint
+        .latest_seen_message_id
+        .clone()
+        .or(checkpoint.last_boundary_covers_message_id.clone())
+        .or(checkpoint.last_boundary_message_id.clone())
+        .or(checkpoint.updated_at.clone());
+    checkpoint.updated_at = Some(now.to_string());
+
+    eprintln!(
+        "[远程联系人状态机] 压缩边界 完成: contact_id={}, conversation_id={}, retained_messages={}, boundary_message_id={}, previous_cursor={}",
+        contact.id,
+        conversation_id,
+        retained_count,
+        boundary_id,
+        previous_cursor
+    );
+    Ok(())
+}
+
+fn remote_im_event_latest_message_id(event: &ChatPendingEvent) -> Option<String> {
+    event.messages.last().map(|message| message.id.clone())
+}
+
+fn remote_im_update_checkpoint_latest_seen(
+    data: &mut AppData,
+    contact_id: &str,
+    message_id: Option<&str>,
+    now: &str,
+) {
+    let checkpoint = remote_im_contact_checkpoint_mut(data, contact_id);
+    checkpoint.latest_seen_message_id = message_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or(checkpoint.latest_seen_message_id.clone());
+    checkpoint.updated_at = Some(now.to_string());
+}
+
+fn remote_im_handle_persisted_event_after_history_flush(
+    state: &AppState,
+    data: &mut AppData,
+    conversation_id: &str,
+    event: &ChatPendingEvent,
+    now: &str,
+    activated_contacts_in_batch: &mut std::collections::HashSet<String>,
+) -> Result<bool, String> {
+    let Some(sender) = event.sender_info.as_ref() else {
+        return Ok(false);
+    };
+    let Some(contact) = remote_im_contact_by_source(data, sender).cloned() else {
+        return Ok(false);
+    };
+    let latest_message_id = remote_im_event_latest_message_id(event);
+    remote_im_update_checkpoint_latest_seen(data, &contact.id, latest_message_id.as_deref(), now);
+    if activated_contacts_in_batch.contains(&contact.id) {
+        return Ok(false);
+    }
+
+    let mut should_activate = false;
+    let mut should_apply_boundary = false;
+    {
+        let mut runtime_states = lock_remote_im_contact_runtime_states(state)?;
+        let runtime = remote_im_contact_runtime_state_mut(&mut runtime_states, &contact.id);
+        match runtime.presence_state {
+            RemoteImPresenceState::Away => {
+                eprintln!(
+                    "[远程联系人状态机] 历史落地后跳过: contact_id={}, reason=still_away",
+                    contact.id
+                );
+            }
+            RemoteImPresenceState::Present => {
+                if runtime.work_state == RemoteImWorkState::Busy {
+                    runtime.has_pending = true;
+                    eprintln!(
+                        "[远程联系人状态机] 历史落地后待办: contact_id={}, reason=busy_mark_pending",
+                        contact.id
+                    );
+                } else {
+                    should_apply_boundary = runtime.needs_boundary;
+                    runtime.needs_boundary = false;
+                    runtime.work_state = RemoteImWorkState::Busy;
+                    runtime.has_pending = false;
+                    should_activate = true;
+                }
+            }
+        }
+    }
+
+    if should_apply_boundary {
+        remote_im_apply_presence_boundary_if_needed(data, conversation_id, &contact, now)?;
+    }
+    if should_activate {
+        activated_contacts_in_batch.insert(contact.id.clone());
+        eprintln!(
+            "[远程联系人状态机] 激活调度 开始: contact_id={}, conversation_id={}, boundary_applied={}",
+            contact.id, conversation_id, should_apply_boundary
+        );
+    }
+    Ok(should_activate)
+}
+
+fn remote_im_finalize_round_completion(
+    state: &AppState,
+    activated_sources: &[RemoteImActivationSource],
+    reply_decision: Option<&str>,
+    reply_target: Option<&RemoteImReplyTarget>,
+    failed_error: Option<&str>,
+    finished_at: &str,
+) -> Result<(), String> {
+    if activated_sources.is_empty() {
+        return Ok(());
+    }
+    let data = state_read_app_data_cached(state)?;
+    let mut runtime_states = lock_remote_im_contact_runtime_states(state)?;
+    for source in activated_sources {
+        let Some(contact) = remote_im_contact_by_activation_source(&data, source) else {
+            continue;
+        };
+        let runtime = remote_im_contact_runtime_state_mut(&mut runtime_states, &contact.id);
+        runtime.work_state = RemoteImWorkState::Idle;
+        let previous_presence = runtime.presence_state;
+        let previous_pending = runtime.has_pending;
+        if let Some(error) = failed_error {
+            eprintln!(
+                "[远程联系人状态机] 轮次结束 失败: contact_id={}, presence={:?}->{:?}, pending={}, error={}",
+                contact.id,
+                previous_presence,
+                runtime.presence_state,
+                previous_pending,
+                error
+            );
+            continue;
+        }
+        match reply_decision.unwrap_or("") {
+            "send" => {
+                let target_matched = reply_target
+                    .map(|target| remote_im_contact_matches_reply_target(source, target))
+                    .unwrap_or(activated_sources.len() == 1);
+                runtime.presence_state = RemoteImPresenceState::Present;
+                if target_matched {
+                    runtime.last_success_reply_at = Some(finished_at.to_string());
+                }
+            }
+            "no_reply" => {
+                if runtime.has_pending {
+                    runtime.presence_state = RemoteImPresenceState::Present;
+                } else if let Some(last_success_at) = runtime.last_success_reply_at.as_deref() {
+                    let elapsed_seconds = parse_iso(last_success_at)
+                        .map(|last| (now_utc() - last).whole_seconds().max(0) as u64)
+                        .unwrap_or_default();
+                    if elapsed_seconds > contact.patience_seconds {
+                        runtime.presence_state = RemoteImPresenceState::Away;
+                    } else {
+                        runtime.presence_state = RemoteImPresenceState::Present;
+                    }
+                } else {
+                    runtime.presence_state = RemoteImPresenceState::Present;
+                }
+            }
+            "send_async" | "" => {
+                runtime.presence_state = RemoteImPresenceState::Present;
+            }
+            _ => {}
+        }
+        eprintln!(
+            "[远程联系人状态机] 轮次结束 完成: contact_id={}, decision={}, presence={:?}->{:?}, pending={}->{}, last_success_reply_at={}",
+            contact.id,
+            reply_decision.unwrap_or(""),
+            previous_presence,
+            runtime.presence_state,
+            previous_pending,
+            runtime.has_pending,
+            runtime.last_success_reply_at.as_deref().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+fn remote_im_finalize_async_send_result(
+    state: &AppState,
+    source: &RemoteImActivationSource,
+    send_ok: bool,
+    now: &str,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let data = state_read_app_data_cached(state)?;
+    let Some(contact) = remote_im_contact_by_activation_source(&data, source) else {
+        return Ok(());
+    };
+    let mut runtime_states = lock_remote_im_contact_runtime_states(state)?;
+    let runtime = remote_im_contact_runtime_state_mut(&mut runtime_states, &contact.id);
+    runtime.presence_state = RemoteImPresenceState::Present;
+    if send_ok {
+        runtime.last_success_reply_at = Some(now.to_string());
+    }
+    eprintln!(
+        "[远程联系人状态机] 异步发送{}: contact_id={}, last_success_reply_at={}, error={}",
+        if send_ok { "完成" } else { "失败" },
+        contact.id,
+        runtime.last_success_reply_at.as_deref().unwrap_or(""),
+        error.unwrap_or("")
+    );
+    Ok(())
 }
 
 fn remote_im_contact_display_name(contact: &RemoteImContact) -> String {
@@ -859,6 +1336,7 @@ fn remote_im_update_contact_activation(
         .ok_or_else(|| format!("未找到远程联系人：{}", input.contact_id))?;
     contact.activation_mode = normalize_contact_activation_mode(&input.activation_mode);
     contact.activation_keywords = normalize_contact_activation_keywords(&input.activation_keywords);
+    contact.patience_seconds = input.patience_seconds;
     contact.activation_cooldown_seconds = input.activation_cooldown_seconds;
     let output = contact.clone();
     persist_app_data_conversation_runtime_delta(&state, &data_before, &data)?;
@@ -1324,8 +1802,17 @@ pub(crate) fn remote_im_enqueue_message_internal(
         &attachments,
     );
 
+    let (activate_assistant, state_reason) = remote_im_prepare_enqueue_runtime_state(
+        state,
+        &data.remote_im_contacts[contact_idx],
+        &text,
+    )?;
+    eprintln!(
+        "[远程联系人状态机] 入站消息 接入: contact_id={}, conversation_id={}, activate_assistant={}, reason={}",
+        contact_id, conversation_id, activate_assistant, state_reason
+    );
+
     let event_id = Uuid::new_v4().to_string();
-    let activate_assistant = remote_im_resolve_inbound_activate(&channel, input.activate_assistant);
     let event = create_pending_event(
         event_id.clone(),
         conversation_id.clone(),

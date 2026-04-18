@@ -191,6 +191,7 @@ export type RemoteImContact = {
   allowReceive: boolean;
   activationMode: "always" | "never" | "keyword";
   activationKeywords: string[];
+  patienceSeconds: number;
   activationCooldownSeconds: number;
   routeMode?: "main_session" | "dedicated_contact_conversation";
   boundDepartmentId?: string;

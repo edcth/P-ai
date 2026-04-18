@@ -1318,6 +1318,7 @@ mod remote_im_adapter_tests {
             allow_receive: false,
             activation_mode: "never".to_string(),
             activation_keywords: Vec::new(),
+            patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
             route_mode: "main_session".to_string(),
             bound_department_id: None,
@@ -1355,4 +1356,3 @@ mod remote_im_adapter_tests {
         ));
     }
 }
-

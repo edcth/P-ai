@@ -421,12 +421,12 @@
               </li>
 
               <li class="list-row flex items-center justify-between gap-3">
-                <div class="font-medium">处理间隔</div>
+                <div class="font-medium">耐心离场</div>
                 <div class="flex w-64 items-center gap-2">
                   <input
                     type="number"
                     class="input input-bordered input-sm w-20"
-                    v-model.number="contactDraft.activationCooldownSeconds"
+                    v-model.number="contactDraft.patienceSeconds"
                     min="0"
                   />
                   <span class="opacity-60">{{ t("config.remoteIm.seconds") }}</span>
@@ -670,7 +670,7 @@ type ContactEditDraft = {
   processingMode: "qa" | "continuous";
   activationMode: RemoteImContact["activationMode"];
   activationKeywordsText: string;
-  activationCooldownSeconds: number;
+  patienceSeconds: number;
   allowReceive: boolean;
   allowSend: boolean;
   allowSendFiles: boolean;
@@ -716,7 +716,7 @@ function buildContactDraftFromContact(item: RemoteImContact): ContactEditDraft {
     processingMode: normalizeProcessingMode(item.processingMode),
     activationMode: normalizeActivationMode(item.activationMode || "never"),
     activationKeywordsText: item.activationKeywords.join(", "),
-    activationCooldownSeconds: Math.max(0, Number(item.activationCooldownSeconds || 0)),
+    patienceSeconds: Math.max(0, Number(item.patienceSeconds || 420)),
     allowReceive: !!item.allowReceive,
     allowSend: !!item.allowSend,
     allowSendFiles: !!item.allowSendFiles,
@@ -1025,13 +1025,17 @@ async function toggleContactAllowSendFiles(item: RemoteImContact, enabled: boole
 
 async function saveContactActivation(
   item: RemoteImContact,
-  patch?: Partial<Pick<RemoteImContact, "activationMode" | "activationKeywords" | "activationCooldownSeconds">>,
+  patch?: Partial<Pick<RemoteImContact, "activationMode" | "activationKeywords" | "patienceSeconds" | "activationCooldownSeconds">>,
 ) {
   const oldMode = item.activationMode;
   const oldKeywords = [...item.activationKeywords];
+  const oldPatience = item.patienceSeconds;
   const oldCooldown = item.activationCooldownSeconds;
   if (patch?.activationMode) item.activationMode = patch.activationMode;
   if (patch?.activationKeywords) item.activationKeywords = [...patch.activationKeywords];
+  if (typeof patch?.patienceSeconds === "number") {
+    item.patienceSeconds = Math.max(0, Math.floor(patch.patienceSeconds));
+  }
   if (typeof patch?.activationCooldownSeconds === "number") {
     item.activationCooldownSeconds = Math.max(0, Math.floor(patch.activationCooldownSeconds));
   }
@@ -1041,6 +1045,7 @@ async function saveContactActivation(
         contactId: item.id,
         activationMode: item.activationMode,
         activationKeywords: item.activationKeywords,
+        patienceSeconds: item.patienceSeconds,
         activationCooldownSeconds: item.activationCooldownSeconds,
       },
     });
@@ -1048,6 +1053,7 @@ async function saveContactActivation(
   } catch (error) {
     item.activationMode = oldMode;
     item.activationKeywords = oldKeywords;
+    item.patienceSeconds = oldPatience;
     item.activationCooldownSeconds = oldCooldown;
     props.setStatusAction(t("status.saveConfigFailed", { err: String(error) }));
   }
@@ -1102,12 +1108,6 @@ async function onContactProcessingModeChange(
   }
 }
 
-function onContactActivationCooldownChange(item: RemoteImContact, cooldownSeconds: number) {
-  void saveContactActivation(item, {
-    activationCooldownSeconds: Math.max(0, Math.floor(Number(cooldownSeconds) || 0)),
-  });
-}
-
 function onContactActivationKeywordsBlur(item: RemoteImContact) {
   const raw = contactKeywordDrafts.value[item.id] ?? item.activationKeywords.join(", ");
   const keywords = parseActivationKeywords(raw);
@@ -1141,13 +1141,13 @@ async function saveContactDraft() {
     const keywordsChanged = JSON.stringify(nextKeywords) !== JSON.stringify(currentKeywords);
     const nextActivationMode = normalizeActivationMode(draft.activationMode);
     const modeChanged = nextActivationMode !== normalizeActivationMode(item.activationMode || "never");
-    const nextCooldown = Math.max(0, Math.floor(Number(draft.activationCooldownSeconds) || 0));
-    const cooldownChanged = nextCooldown !== Math.max(0, Math.floor(Number(item.activationCooldownSeconds || 0)));
-    if (modeChanged || keywordsChanged || cooldownChanged) {
+    const nextPatience = Math.max(0, Math.floor(Number(draft.patienceSeconds) || 0));
+    const patienceChanged = nextPatience !== Math.max(0, Math.floor(Number(item.patienceSeconds || 420)));
+    if (modeChanged || keywordsChanged || patienceChanged) {
       await saveContactActivation(item, {
         activationMode: nextActivationMode,
         activationKeywords: nextKeywords,
-        activationCooldownSeconds: nextCooldown,
+        patienceSeconds: nextPatience,
       });
     }
 

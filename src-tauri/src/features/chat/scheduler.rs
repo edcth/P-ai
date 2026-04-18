@@ -896,7 +896,11 @@ async fn process_conversation_batch(
         let _guard = lock_conversation_with_metrics(state, "scheduler_commit")?;
 
         let mut data = state_read_app_data_cached(state)?;
-        let remote_im_contacts_before = serde_json::to_vec(&data.remote_im_contacts).ok();
+        let remote_im_runtime_before = serde_json::to_vec(&(
+            data.remote_im_contacts.clone(),
+            data.remote_im_contact_checkpoints.clone(),
+        ))
+        .ok();
         if let Some(conversation_idx) = data
             .conversations
             .iter()
@@ -933,12 +937,6 @@ async fn process_conversation_batch(
                 }
             }
             for (event, prepared_messages) in events.iter().zip(prepared_batches.iter()) {
-                let event_should_activate = if matches!(event.source, ChatEventSource::RemoteIm) {
-                    should_activate_remote_im_event(event, &mut data, &history_flush_time)
-                } else {
-                    event.activate_assistant
-                };
-                event_activate_flags.push(event_should_activate);
                 let conversation = &mut data.conversations[conversation_idx];
                 for (persisted, recall_ids) in prepared_messages {
                     if persisted.role.trim() == "user" && !recall_ids.is_empty() {
@@ -975,10 +973,30 @@ async fn process_conversation_batch(
                     }
                 }
             }
+            let mut activated_contacts_in_batch = std::collections::HashSet::<String>::new();
+            for event in &events {
+                let event_should_activate = if matches!(event.source, ChatEventSource::RemoteIm) {
+                    remote_im_handle_persisted_event_after_history_flush(
+                        state,
+                        &mut data,
+                        conversation_id,
+                        event,
+                        &history_flush_time,
+                        &mut activated_contacts_in_batch,
+                    )?
+                } else {
+                    event.activate_assistant
+                };
+                event_activate_flags.push(event_should_activate);
+            }
             data.conversations[conversation_idx].updated_at = history_flush_time.clone();
             let persisted_conversation = data.conversations[conversation_idx].clone();
-            let remote_im_runtime_changed =
-                remote_im_contacts_before != serde_json::to_vec(&data.remote_im_contacts).ok();
+            let remote_im_runtime_changed = remote_im_runtime_before
+                != serde_json::to_vec(&(
+                    data.remote_im_contacts.clone(),
+                    data.remote_im_contact_checkpoints.clone(),
+                ))
+                .ok();
             state_write_conversation_with_chat_index_cached(state, &persisted_conversation)?;
             if remote_im_runtime_changed {
                 state_write_runtime_state_cached(state, &build_runtime_state_file(&data))?;
@@ -1047,12 +1065,38 @@ async fn process_conversation_batch(
                 oldest_queue_created_at,
             ).await {
                 Ok(result) => {
+                    if let Err(finalize_err) = remote_im_finalize_round_completion(
+                        state,
+                        &activated_remote_im_sources,
+                        result.remote_im_reply_decision.as_deref(),
+                        result.remote_im_reply_target.as_ref(),
+                        None,
+                        &history_flush_time,
+                    ) {
+                        runtime_log_warn(format!(
+                            "[聊天调度] 远程联系人轮次收尾失败（完成分支），conversation_id={}，error={}",
+                            conversation_id, finalize_err
+                        ));
+                    }
                     emit_round_completed_event(state, conversation_id, &result);
                     complete_pending_chat_events_with_result(state, &event_ids, result)?;
                 }
                 Err(err) => {
                     emit_round_failed_event(state, conversation_id, &err);
                     complete_pending_chat_events_with_error(state, &event_ids, &err)?;
+                    if let Err(finalize_err) = remote_im_finalize_round_completion(
+                        state,
+                        &activated_remote_im_sources,
+                        None,
+                        None,
+                        Some(&err),
+                        &history_flush_time,
+                    ) {
+                        runtime_log_warn(format!(
+                            "[聊天调度] 远程联系人轮次收尾失败（失败分支），conversation_id={}，original_error={}，finalize_error={}",
+                            conversation_id, err, finalize_err
+                        ));
+                    }
                     return Err(err);
                 }
             }
@@ -1080,6 +1124,8 @@ async fn process_conversation_batch(
                 context_window_tokens: None,
                 max_output_tokens: None,
                 context_usage_percent: None,
+                remote_im_reply_decision: None,
+                remote_im_reply_target: None,
             },
         )?;
     }
@@ -1248,172 +1294,6 @@ async fn activate_main_assistant(
     // 改为在外部调用
 
     result
-}
-
-fn remote_im_event_message_text(event: &ChatPendingEvent) -> String {
-    event
-        .messages
-        .iter()
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part {
-            MessagePart::Text { text } => Some(text.trim()),
-            _ => None,
-        })
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn text_contains_keyword(text: &str, keyword: &str) -> bool {
-    text.to_ascii_lowercase()
-        .contains(&keyword.to_ascii_lowercase())
-}
-
-struct RemoteImActivationContext<'a> {
-    message_text: &'a str,
-    now_ts: i64,
-}
-
-struct RemoteImActivationDecision {
-    activate: bool,
-    reason: String,
-}
-
-trait RemoteImActivationStrategy {
-    fn decide(
-        &self,
-        contact: &RemoteImContact,
-        ctx: &RemoteImActivationContext<'_>,
-    ) -> RemoteImActivationDecision;
-}
-
-struct DefaultRemoteImActivationStrategy;
-
-impl RemoteImActivationStrategy for DefaultRemoteImActivationStrategy {
-    fn decide(
-        &self,
-        contact: &RemoteImContact,
-        ctx: &RemoteImActivationContext<'_>,
-    ) -> RemoteImActivationDecision {
-        let mode = contact.activation_mode.trim().to_ascii_lowercase();
-        if mode != "always" && mode != "keyword" {
-            return RemoteImActivationDecision {
-                activate: false,
-                reason: format!("activationMode={}（不激活）", mode),
-            };
-        }
-
-        if mode == "keyword" {
-            let matched = contact
-                .activation_keywords
-                .iter()
-                .map(|item| item.trim())
-                .filter(|item| !item.is_empty())
-                .any(|keyword| text_contains_keyword(ctx.message_text, keyword));
-            if !matched {
-                return RemoteImActivationDecision {
-                    activate: false,
-                    reason: "keyword 未命中，跳过激活".to_string(),
-                };
-            }
-        }
-
-        if contact.activation_cooldown_seconds > 0 {
-            if let Some(last) = contact
-                .last_activated_at
-                .as_deref()
-                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            {
-                let elapsed = ctx.now_ts.saturating_sub(last.timestamp()) as u64;
-                if elapsed < contact.activation_cooldown_seconds {
-                    let remaining = contact.activation_cooldown_seconds.saturating_sub(elapsed);
-                    return RemoteImActivationDecision {
-                        activate: false,
-                        reason: format!("冷却中，remaining={}s", remaining),
-                    };
-                }
-            }
-        }
-
-        RemoteImActivationDecision {
-            activate: true,
-            reason: "满足激活条件，触发主助理".to_string(),
-        }
-    }
-}
-
-fn should_activate_remote_im_event(
-    event: &ChatPendingEvent,
-    data: &mut AppData,
-    now: &str,
-) -> bool {
-    let Some(sender) = event.sender_info.as_ref() else {
-        return false;
-    };
-    let Some(contact) = data
-        .remote_im_contacts
-        .iter_mut()
-        .find(|item| {
-            item.channel_id == sender.channel_id
-                && item.remote_contact_type == sender.remote_contact_type
-                && item.remote_contact_id == sender.remote_contact_id
-        })
-    else {
-        return false;
-    };
-
-    let now_ts = match chrono::DateTime::parse_from_rfc3339(now) {
-        Ok(dt) => dt.timestamp(),
-        Err(err) => {
-            eprintln!(
-                "[远程IM][激活判定] 解析当前时间失败，使用系统当前时间兜底: now={}, error={}",
-                now, err
-            );
-            chrono::Utc::now().timestamp()
-        }
-    };
-    let message_text = remote_im_event_message_text(event);
-    let strategy = DefaultRemoteImActivationStrategy;
-    let decision = strategy.decide(
-        contact,
-        &RemoteImActivationContext {
-            message_text: &message_text,
-            now_ts,
-        },
-    );
-    if decision.activate {
-        contact.last_activated_at = Some(now.to_string());
-    }
-    log_remote_im_activation_decision(
-        &sender.channel_id,
-        &contact.remote_contact_id,
-        if decision.activate { "activate" } else { "skip" },
-        &decision.reason,
-    );
-    decision.activate
-}
-
-fn log_remote_im_activation_decision(
-    channel_id: &str,
-    remote_contact_id: &str,
-    action: &str,
-    reason: &str,
-) {
-    eprintln!(
-        "[远程IM][激活判定] channel_id={}, contact_id={}, action={}, reason={}",
-        channel_id, remote_contact_id, action, reason
-    );
-    let channel_id_owned = channel_id.to_string();
-    let message = format!(
-        "[激活判定] contact_id={}, action={}, reason={}",
-        remote_contact_id, action, reason
-    );
-    let manager = onebot_v11_ws_manager();
-    tauri::async_runtime::spawn(async move {
-        manager
-            .add_log(&channel_id_owned, "info", &message)
-            .await;
-    });
 }
 
 fn latest_user_text_from_events(events: &[ChatPendingEvent]) -> String {

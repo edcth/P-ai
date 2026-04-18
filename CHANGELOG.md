@@ -2,6 +2,8 @@
 
 ## 发布：v0.9.12
 
+- 功能（remote-im-proactive-state-machine）：远程联系人新增 `away/present + idle/busy` 主动应答状态机；入站消息先做联系人在场判定，支持忙时挂单次待办、`away -> present` 时插入轻量上下文边界、联系人消息游标与压缩边界持久化，以及基于 `patienceSeconds` 的耐心离场策略；同时补齐自动发送成功回写、关键后端测试与联系人配置页新字段
+- 修复（remote-im-round-finalize-fallback）：聊天调度在远程联系人轮次收尾失败时不再短路前端完成/失败通知；现在会优先完成 `emit_round_completed_event` / `emit_round_failed_event` 与 pending 事件收尾，再把状态机收尾异常记为警告日志，并统一修正远程 IM 运行时锁错误文案为中文
 - 发布（release-0.9.12）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.12`，用于触发本轮版本更新构建
 
 ## 发布：v0.9.11

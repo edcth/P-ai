@@ -169,6 +169,8 @@ struct RuntimeStateFile {
     pdf_image_cache: Vec<PdfImageCacheEntry>,
     #[serde(default)]
     remote_im_contacts: Vec<RemoteImContact>,
+    #[serde(default)]
+    remote_im_contact_checkpoints: Vec<RemoteImContactCheckpoint>,
 }
 
 impl Default for RuntimeStateFile {
@@ -187,6 +189,7 @@ impl Default for RuntimeStateFile {
             pdf_text_cache: Vec::new(),
             pdf_image_cache: Vec::new(),
             remote_im_contacts: Vec::new(),
+            remote_im_contact_checkpoints: Vec::new(),
         }
     }
 }
@@ -276,6 +279,7 @@ fn build_runtime_state_file(data: &AppData) -> RuntimeStateFile {
         pdf_text_cache: data.pdf_text_cache.clone(),
         pdf_image_cache: data.pdf_image_cache.clone(),
         remote_im_contacts: data.remote_im_contacts.clone(),
+        remote_im_contact_checkpoints: data.remote_im_contact_checkpoints.clone(),
     }
 }
 
@@ -326,6 +330,7 @@ fn apply_runtime_state_to_app_data(data: &mut AppData, runtime: &RuntimeStateFil
     data.pdf_text_cache = runtime.pdf_text_cache.clone();
     data.pdf_image_cache = runtime.pdf_image_cache.clone();
     data.remote_im_contacts = runtime.remote_im_contacts.clone();
+    data.remote_im_contact_checkpoints = runtime.remote_im_contact_checkpoints.clone();
 }
 
 fn read_agents_shard(path: &PathBuf) -> Result<Vec<AgentProfile>, String> {
@@ -681,6 +686,7 @@ fn read_legacy_split_app_data(path: &PathBuf) -> Result<AppData, String> {
         archived_conversations: Vec::new(),
         image_text_cache: image_cache.image_text_cache,
         remote_im_contacts: Vec::new(),
+        remote_im_contact_checkpoints: Vec::new(),
         pdf_text_cache: Vec::new(),
         pdf_image_cache: Vec::new(),
     })
@@ -746,6 +752,7 @@ fn read_layout_app_data(path: &PathBuf) -> Result<AppData, String> {
         archived_conversations: Vec::new(),
         image_text_cache: runtime.image_text_cache,
         remote_im_contacts: runtime.remote_im_contacts,
+        remote_im_contact_checkpoints: runtime.remote_im_contact_checkpoints,
         pdf_text_cache: runtime.pdf_text_cache,
         pdf_image_cache: runtime.pdf_image_cache,
     })

@@ -119,6 +119,8 @@ struct AppData {
     pdf_image_cache: Vec<PdfImageCacheEntry>,
     #[serde(default)]
     remote_im_contacts: Vec<RemoteImContact>,
+    #[serde(default)]
+    remote_im_contact_checkpoints: Vec<RemoteImContactCheckpoint>,
 }
 
 impl Default for AppData {
@@ -144,6 +146,7 @@ impl Default for AppData {
             pdf_text_cache: Vec::new(),
             pdf_image_cache: Vec::new(),
             remote_im_contacts: Vec::new(),
+            remote_im_contact_checkpoints: Vec::new(),
         }
     }
 }
@@ -170,6 +173,8 @@ struct RemoteImContact {
     activation_mode: String,
     #[serde(default)]
     activation_keywords: Vec<String>,
+    #[serde(default = "default_remote_im_contact_patience_seconds")]
+    patience_seconds: u64,
     #[serde(default)]
     activation_cooldown_seconds: u64,
     #[serde(default = "default_remote_im_contact_route_mode")]
@@ -190,12 +195,30 @@ struct RemoteImContact {
     dingtalk_session_webhook_expired_time: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RemoteImContactCheckpoint {
+    contact_id: String,
+    #[serde(default)]
+    latest_seen_message_id: Option<String>,
+    #[serde(default)]
+    last_boundary_message_id: Option<String>,
+    #[serde(default)]
+    last_boundary_covers_message_id: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
 fn default_assistant_department_agent_id() -> String {
     DEFAULT_AGENT_ID.to_string()
 }
 
 fn default_remote_im_contact_activation_mode() -> String {
     "never".to_string()
+}
+
+fn default_remote_im_contact_patience_seconds() -> u64 {
+    420
 }
 
 fn default_remote_im_contact_route_mode() -> String {

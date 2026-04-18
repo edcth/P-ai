@@ -98,6 +98,39 @@ struct AppDataCacheSignature {
     conversations: ConversationDirCacheSignature,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteImPresenceState {
+    Away,
+    Present,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteImWorkState {
+    Idle,
+    Busy,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteImContactRuntimeState {
+    presence_state: RemoteImPresenceState,
+    work_state: RemoteImWorkState,
+    has_pending: bool,
+    last_success_reply_at: Option<String>,
+    needs_boundary: bool,
+}
+
+impl Default for RemoteImContactRuntimeState {
+    fn default() -> Self {
+        Self {
+            presence_state: RemoteImPresenceState::Away,
+            work_state: RemoteImWorkState::Idle,
+            has_pending: false,
+            last_success_reply_at: None,
+            needs_boundary: false,
+        }
+    }
+}
+
 fn normalize_prepared_prompt_extra_blocks(blocks: &[String]) -> Vec<String> {
     blocks
         .iter()

@@ -1103,6 +1103,7 @@
             allow_receive: true,
             activation_mode: "always".to_string(),
             activation_keywords: Vec::new(),
+            patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
             route_mode: "main_session".to_string(),
             bound_department_id: None,
@@ -1372,6 +1373,9 @@
             )),
             provider_system_message_user_fallback_keys: Arc::new(Mutex::new(
                 std::collections::HashSet::new(),
+            )),
+            remote_im_contact_runtime_states: Arc::new(Mutex::new(
+                std::collections::HashMap::new(),
             )),
             hidden_skill_snapshot_cache: Arc::new(Mutex::new(String::new())),
             preferred_release_source: Arc::new(Mutex::new("github".to_string())),
@@ -1754,6 +1758,7 @@
             allow_receive: true,
             activation_mode: "never".to_string(),
             activation_keywords: Vec::new(),
+            patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
             route_mode: "dedicated_contact_conversation".to_string(),
             bound_department_id: Some(FRONT_DESK_DEPARTMENT_ID.to_string()),

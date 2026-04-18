@@ -120,6 +120,7 @@
             allow_receive: true,
             activation_mode: "never".to_string(),
             activation_keywords: Vec::new(),
+            patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
             route_mode: "dedicated_contact_conversation".to_string(),
             bound_department_id: Some(FRONT_DESK_DEPARTMENT_ID.to_string()),

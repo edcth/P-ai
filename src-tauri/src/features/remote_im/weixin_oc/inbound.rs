@@ -258,6 +258,7 @@ fn upsert_weixin_oc_contact(
         allow_receive: channel.activate_assistant,
         activation_mode: "never".to_string(),
         activation_keywords: Vec::new(),
+        patience_seconds: default_remote_im_contact_patience_seconds(),
         activation_cooldown_seconds: 0,
         route_mode: "main_session".to_string(),
         bound_department_id: None,
