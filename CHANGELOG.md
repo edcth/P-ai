@@ -1,5 +1,9 @@
 # 变更日志
 
+## 发布：v0.9.12
+
+- 发布（release-0.9.12）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.12`，用于触发本轮版本更新构建
+
 ## 发布：v0.9.11
 
 - 功能（user-mention-async-delegate）：聊天输入区新增结构化 `@人格` 异步委托链路；候选按人格去重，只允许选择存在部门归属的人格，点击工具栏头像或输入裸 `@` 均可 toggle mention；带 mention 的消息会走独立 `send_user_mention_message` 路径，不再触发当前会话负责部门主回答，而是按人格映射首部门并发派发用户级异步委托；mentions 会写入消息元数据、随撤回/重生恢复，并在用户气泡与发给模型的正文前缀中统一显示为 `@A,@B`
