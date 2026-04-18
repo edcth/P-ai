@@ -751,6 +751,7 @@ async fn mcp_list_server_tools_runtime(server: &McpServerConfig) -> Result<Vec<M
             enabled: mcp_policy_enabled_for_tool(server, &name) && mcp_tool_allowed_by_definition(server, &name),
             tool_name: name,
             description,
+            parameters: serde_json::Value::Object(def.input_schema.as_ref().clone()),
         });
     }
     Ok(out)

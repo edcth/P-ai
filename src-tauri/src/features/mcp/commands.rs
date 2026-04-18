@@ -74,6 +74,7 @@ fn list_tools_from_runtime_or_policy(server: &McpServerConfig) -> Vec<McpToolDes
             tool_name: policy.tool_name.clone(),
             description: String::new(),
             enabled: mcp_tool_allowed_by_definition(server, &policy.tool_name) && policy.enabled,
+            parameters: serde_json::Value::Object(serde_json::Map::new()),
         })
         .collect()
 }

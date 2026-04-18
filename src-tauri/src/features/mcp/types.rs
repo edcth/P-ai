@@ -81,6 +81,8 @@ struct McpToolDescriptor {
     tool_name: String,
     description: String,
     enabled: bool,
+    #[serde(default)]
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

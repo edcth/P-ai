@@ -232,6 +232,7 @@ export type McpToolDescriptor = {
   toolName: string;
   description: string;
   enabled: boolean;
+  parameters: Record<string, unknown>;
 };
 
 export type McpListServerToolsResult = {

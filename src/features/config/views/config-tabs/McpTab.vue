@@ -210,7 +210,12 @@ async function toggleDeploy(server: McpServerView) {
       const updated = await invokeTauri<McpServerConfig>("mcp_undeploy_server", {
         input: { serverId: server.id },
       });
-      upsertServer({ ...server, ...updated });
+      upsertServer({
+        ...server,
+        ...updated,
+        toolItems: [],
+        lastElapsedMs: 0,
+      });
       setStatus(`${t('config.mcp.stopped')}: ${server.name}`);
       return;
     }
