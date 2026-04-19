@@ -424,12 +424,85 @@ fn shell_workspaces_log_summary(entries: &[ShellWorkspaceConfig]) -> String {
         .join(", ")
 }
 
+#[derive(Debug, Clone)]
+struct TerminalConfigAllowedWorkspacesCacheEntry {
+    signature: String,
+    workspaces: Vec<TerminalWorkspaceResolved>,
+}
+
+fn terminal_config_allowed_workspaces_cache(
+) -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, TerminalConfigAllowedWorkspacesCacheEntry>,
+> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<String, TerminalConfigAllowedWorkspacesCacheEntry>,
+        >,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn terminal_config_allowed_workspaces_cache_scope_key(state: &AppState) -> String {
+    normalize_terminal_path_for_compare(&state.config_path)
+}
+
+fn terminal_shell_workspaces_cache_signature(
+    state: &AppState,
+    shell_workspaces: &[ShellWorkspaceConfig],
+) -> String {
+    let mut parts = vec![format!(
+        "llm_workspace={}",
+        normalize_terminal_path_for_compare(&state.llm_workspace_path)
+    )];
+    for workspace in shell_workspaces {
+        parts.push(format!(
+            "id={}|name={}|level={}|access={}|path={}|built_in={}",
+            workspace.id.trim(),
+            workspace.name.trim(),
+            workspace.level.trim(),
+            workspace.access.trim(),
+            workspace.path.trim(),
+            workspace.built_in
+        ));
+    }
+    parts.join("||")
+}
+
+fn terminal_workspace_cache_lock_recover<'a, T>(
+    label: &str,
+    mutex: &'a std::sync::Mutex<T>,
+) -> std::sync::MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(err) => {
+            runtime_log_info(format!(
+                "[终端工作区] 警告: {} 锁已 poison，继续恢复使用 error={:?}",
+                label, err
+            ));
+            err.into_inner()
+        }
+    }
+}
+
 fn terminal_config_allowed_workspaces_canonical(
     state: &AppState,
 ) -> Result<Vec<TerminalWorkspaceResolved>, String> {
-    let mut config = read_config(&state.config_path)?;
+    let mut config = state_read_config_cached(state)?;
     normalize_app_config(&mut config);
     let _ = ensure_default_shell_workspace_in_config(&mut config, state);
+    let cache_scope_key = terminal_config_allowed_workspaces_cache_scope_key(state);
+    let cache_signature = terminal_shell_workspaces_cache_signature(state, &config.shell_workspaces);
+    {
+        let cache = terminal_workspace_cache_lock_recover(
+            "terminal_config_allowed_workspaces",
+            terminal_config_allowed_workspaces_cache(),
+        );
+        if let Some(entry) = cache.get(&cache_scope_key) {
+            if entry.signature == cache_signature {
+                return Ok(entry.workspaces.clone());
+            }
+        }
+    }
     let mut out = Vec::<TerminalWorkspaceResolved>::new();
     let mut seen_paths = std::collections::HashSet::<String>::new();
     for raw in &config.shell_workspaces {
@@ -478,6 +551,19 @@ fn terminal_config_allowed_workspaces_canonical(
             .cmp(&shell_workspace_level_rank(&right.level))
             .then_with(|| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()))
     });
+    {
+        let mut cache = terminal_workspace_cache_lock_recover(
+            "terminal_config_allowed_workspaces",
+            terminal_config_allowed_workspaces_cache(),
+        );
+        cache.insert(
+            cache_scope_key,
+            TerminalConfigAllowedWorkspacesCacheEntry {
+                signature: cache_signature,
+                workspaces: out.clone(),
+            },
+        );
+    }
     Ok(out)
 }
 
@@ -663,8 +749,11 @@ fn terminal_prompt_trusted_roots_block(state: &AppState, selected_api: &ApiConfi
     }
 
     let system_workspace = terminal_system_workspace_resolved(state).ok();
+    let runtime_shell = terminal_shell_for_state(state);
 
     let mut lines = Vec::<String>::new();
+    lines.push(format!("当前操作系统: {}", std::env::consts::OS));
+    lines.push(format!("当前 shell: {}", terminal_shell_runtime_label(&runtime_shell)));
     if let Some(system) = &system_workspace {
         lines.push(format!(
             "系统工作目录: {} [{} / {}] {}",
@@ -1140,6 +1229,57 @@ mod terminal_workspace_tests {
             normalize_terminal_path_for_compare(&resolved),
             normalize_terminal_path_for_compare(&main_workspace_path)
         );
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn terminal_prompt_trusted_roots_block_should_use_configured_runtime_shell() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "easy-call-ai-terminal-workspace-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let llm_workspace_path = temp_root.join("p-ai").join("llm-workspace");
+        std::fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let mut state = build_test_state(llm_workspace_path.clone());
+        state.terminal_shell_candidates = vec![
+            TerminalShellProfile {
+                kind: "git-bash".to_string(),
+                path: r"C:\Program Files\Git\bin\bash.exe".to_string(),
+                args_prefix: vec!["-lc".to_string()],
+            },
+            TerminalShellProfile {
+                kind: "powershell7".to_string(),
+                path: r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(),
+                args_prefix: vec!["-NoProfile".to_string(), "-Command".to_string()],
+            },
+        ];
+        state.terminal_shell = state.terminal_shell_candidates[0].clone();
+        let mut config = AppConfig::default();
+        config.terminal_shell_kind = "powershell7".to_string();
+        config.shell_workspaces = vec![ShellWorkspaceConfig {
+            id: "system-workspace".to_string(),
+            name: "系统工作目录".to_string(),
+            path: terminal_path_for_user(&llm_workspace_path),
+            level: SHELL_WORKSPACE_LEVEL_SYSTEM.to_string(),
+            access: SHELL_WORKSPACE_ACCESS_FULL_ACCESS.to_string(),
+            built_in: true,
+        }];
+        state_write_config_cached(&state, &config).expect("write config");
+        let mut api = ApiConfig::default();
+        api.enable_tools = true;
+        api.tools = vec![ApiToolConfig {
+            id: "exec".to_string(),
+            command: String::new(),
+            args: Vec::new(),
+            enabled: true,
+            values: Value::Null,
+        }];
+
+        let block = terminal_prompt_trusted_roots_block(&state, &api, None).expect("terminal block");
+
+        assert!(block.contains("PowerShell 7"));
+        assert!(!block.contains("Git Bash"));
 
         let _ = std::fs::remove_dir_all(temp_root);
     }

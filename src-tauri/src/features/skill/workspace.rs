@@ -1,5 +1,17 @@
 use super::*;
 
+fn hidden_skill_summaries_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, Vec<SkillSummaryItem>>> {
+    static CACHE: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Vec<SkillSummaryItem>>>,
+    > = OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn hidden_skill_cache_scope_key(state: &AppState) -> String {
+    state.data_path.display().to_string()
+}
+
 fn llm_workspace_skills_root_at(workspace_root: &Path) -> PathBuf {
     workspace_root.join("skills")
 }
@@ -271,6 +283,12 @@ pub(crate) fn update_hidden_skill_snapshot_cache(
         .lock()
         .map_err(|_| "Failed to lock hidden skill snapshot cache".to_string())?;
     *guard = snapshot.clone();
+    drop(guard);
+
+    let mut summaries_guard = hidden_skill_summaries_cache()
+        .lock()
+        .map_err(|_| "Failed to lock hidden skill summaries cache".to_string())?;
+    summaries_guard.insert(hidden_skill_cache_scope_key(state), skills.to_vec());
     Ok(snapshot)
 }
 
@@ -298,12 +316,23 @@ pub(crate) fn build_hidden_skill_snapshot_block_for_department(
     {
         return build_hidden_skill_snapshot_block(state);
     }
-    match load_workspace_skill_summaries_with_errors(state) {
-        Ok((skills, _errors)) => {
+    let cache_key = hidden_skill_cache_scope_key(state);
+    let cached_skills = hidden_skill_summaries_cache()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(&cache_key).cloned());
+    match cached_skills {
+        Some(skills) => {
             let filtered = filter_skills_for_department(department, &skills);
             render_hidden_skill_snapshot_block(state, &filtered, None)
         }
-        Err(err) => render_hidden_skill_snapshot_block(state, &[], Some(err.as_str())),
+        None => {
+            runtime_log_warn(
+                "[技能工作区] 隐藏技能快照未命中结构化缓存，返回现有快照文本；如需更新请显式刷新技能工作区。"
+                    .to_string(),
+            );
+            build_hidden_skill_snapshot_block(state)
+        }
     }
 }
 

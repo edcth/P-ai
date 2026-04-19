@@ -80,15 +80,7 @@ fn list_tools_from_runtime_or_policy(server: &McpServerConfig) -> Vec<McpToolDes
 }
 
 async fn mcp_redeploy_all_from_policy(state: &AppState) -> Result<Vec<WorkspaceLoadError>, String> {
-    let servers = {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err))?;
-        let servers = load_workspace_mcp_servers(state)?;
-        drop(guard);
-        servers
-    };
+    let servers = load_workspace_mcp_servers(state)?;
 
     for server in &servers {
         mcp_disconnect_cached_client(&server.id).await;
@@ -114,15 +106,8 @@ async fn mcp_redeploy_all_from_policy(state: &AppState) -> Result<Vec<WorkspaceL
             .iter()
             .map(|t| t.tool_name.clone())
             .collect::<Vec<_>>();
-        let merged_policies = {
-            let guard = state
-                .conversation_lock
-                .lock()
-                .map_err(|err| named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err))?;
-            let policies = merge_workspace_mcp_tool_policies_with_new_tools(state, &server.id, &discovered_names)?;
-            drop(guard);
-            policies
-        };
+        let merged_policies =
+            merge_workspace_mcp_tool_policies_with_new_tools(state, &server.id, &discovered_names)?;
 
         let mut server_with_policies = server.clone();
         server_with_policies.tool_policies = merged_policies;

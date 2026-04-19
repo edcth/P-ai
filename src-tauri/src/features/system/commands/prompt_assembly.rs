@@ -35,10 +35,11 @@ fn build_prepared_prompt_for_mode(
     response_style_id: &str,
     ui_language: &str,
     data_path: Option<&PathBuf>,
-    last_archive_summary: Option<&str>,
+    _last_archive_summary: Option<&str>,
     terminal_block: Option<String>,
     chat_overrides: Option<ChatPromptOverrides>,
     state: Option<&AppState>,
+    selected_api: Option<&ApiConfig>,
     resolved_api: Option<&ResolvedApiConfig>,
     enable_pdf_images: Option<bool>,
 ) -> PreparedPrompt {
@@ -58,24 +59,36 @@ fn build_prepared_prompt_for_mode(
                 resolved_api,
                 enable_pdf_images.unwrap_or(false),
             );
-            prepared = enrich_prepared_prompt_with_common_preamble(prepared, last_archive_summary, None, terminal_block);
-            if let Some(overrides) = chat_overrides {
-                append_preamble_blocks(&mut prepared.preamble, &overrides.system_preamble_blocks);
-                let latest_user_text = overrides
-                    .latest_user_text
-                    .unwrap_or_else(|| prepared.latest_user_text.clone());
-                let latest_user_meta_text = overrides
-                    .latest_user_meta_text
-                    .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
-                apply_chat_latest_user_payload(
-                    &mut prepared,
-                    latest_user_text,
-                    latest_user_meta_text,
-                    &overrides.latest_user_extra_blocks,
-                    overrides.latest_images,
-                    overrides.latest_audios,
-                );
-            }
+            let overrides = chat_overrides.unwrap_or_default();
+            prepared.preamble = finalize_system_prompt_with_manager(
+                state,
+                "chat",
+                conversation,
+                agent,
+                departments,
+                selected_api,
+                Some((user_name, user_intro)),
+                response_style_id,
+                ui_language,
+                &prepared.preamble,
+                None,
+                terminal_block.as_deref(),
+                &overrides.system_preamble_blocks,
+            );
+            let latest_user_text = overrides
+                .latest_user_text
+                .unwrap_or_else(|| prepared.latest_user_text.clone());
+            let latest_user_meta_text = overrides
+                .latest_user_meta_text
+                .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
+            apply_chat_latest_user_payload(
+                &mut prepared,
+                latest_user_text,
+                latest_user_meta_text,
+                &overrides.latest_user_extra_blocks,
+                overrides.latest_images,
+                overrides.latest_audios,
+            );
             prepared
         }
         PromptBuildMode::Delegate => {
@@ -91,24 +104,36 @@ fn build_prepared_prompt_for_mode(
                 resolved_api,
                 enable_pdf_images.unwrap_or(false),
             );
-            prepared = enrich_prepared_prompt_with_common_preamble(prepared, None, None, terminal_block);
-            if let Some(overrides) = chat_overrides {
-                append_preamble_blocks(&mut prepared.preamble, &overrides.system_preamble_blocks);
-                let latest_user_text = overrides
-                    .latest_user_text
-                    .unwrap_or_else(|| prepared.latest_user_text.clone());
-                let latest_user_meta_text = overrides
-                    .latest_user_meta_text
-                    .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
-                apply_chat_latest_user_payload(
-                    &mut prepared,
-                    latest_user_text,
-                    latest_user_meta_text,
-                    &overrides.latest_user_extra_blocks,
-                    overrides.latest_images,
-                    overrides.latest_audios,
-                );
-            }
+            let overrides = chat_overrides.unwrap_or_default();
+            prepared.preamble = finalize_system_prompt_with_manager(
+                state,
+                "delegate",
+                conversation,
+                agent,
+                departments,
+                selected_api,
+                None,
+                response_style_id,
+                ui_language,
+                &prepared.preamble,
+                None,
+                terminal_block.as_deref(),
+                &overrides.system_preamble_blocks,
+            );
+            let latest_user_text = overrides
+                .latest_user_text
+                .unwrap_or_else(|| prepared.latest_user_text.clone());
+            let latest_user_meta_text = overrides
+                .latest_user_meta_text
+                .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
+            apply_chat_latest_user_payload(
+                &mut prepared,
+                latest_user_text,
+                latest_user_meta_text,
+                &overrides.latest_user_extra_blocks,
+                overrides.latest_images,
+                overrides.latest_audios,
+            );
             prepared
         }
         PromptBuildMode::SummaryContext => {
@@ -126,31 +151,43 @@ fn build_prepared_prompt_for_mode(
                 resolved_api,
                 enable_pdf_images.unwrap_or(false),
             );
-            let mut prepared =
-                enrich_prepared_prompt_with_common_preamble(prepared, last_archive_summary, None, terminal_block);
+            let mut prepared = prepared;
             for message in &mut prepared.history_messages {
                 message.images.clear();
                 message.audios.clear();
             }
             prepared.latest_images.clear();
             prepared.latest_audios.clear();
-            if let Some(overrides) = chat_overrides {
-                append_preamble_blocks(&mut prepared.preamble, &overrides.system_preamble_blocks);
-                let latest_user_text = overrides
-                    .latest_user_text
-                    .unwrap_or_else(|| prepared.latest_user_text.clone());
-                let latest_user_meta_text = overrides
-                    .latest_user_meta_text
-                    .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
-                apply_chat_latest_user_payload(
-                    &mut prepared,
-                    latest_user_text,
-                    latest_user_meta_text,
-                    &overrides.latest_user_extra_blocks,
-                    overrides.latest_images,
-                    overrides.latest_audios,
-                );
-            }
+            let overrides = chat_overrides.unwrap_or_default();
+            prepared.preamble = finalize_system_prompt_with_manager(
+                state,
+                "summary_context",
+                conversation,
+                agent,
+                departments,
+                selected_api,
+                Some((user_name, user_intro)),
+                response_style_id,
+                ui_language,
+                &prepared.preamble,
+                None,
+                terminal_block.as_deref(),
+                &overrides.system_preamble_blocks,
+            );
+            let latest_user_text = overrides
+                .latest_user_text
+                .unwrap_or_else(|| prepared.latest_user_text.clone());
+            let latest_user_meta_text = overrides
+                .latest_user_meta_text
+                .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
+            apply_chat_latest_user_payload(
+                &mut prepared,
+                latest_user_text,
+                latest_user_meta_text,
+                &overrides.latest_user_extra_blocks,
+                overrides.latest_images,
+                overrides.latest_audios,
+            );
             prepared
         }
     }
@@ -279,6 +316,7 @@ fn build_workspace_agents_md_block(conversation: &Conversation, state: &AppState
     }
 }
 
+#[allow(dead_code)]
 fn enrich_prepared_prompt_with_common_preamble(
     mut prepared: PreparedPrompt,
     _last_archive_summary: Option<&str>,
@@ -301,21 +339,6 @@ fn enrich_prepared_prompt_with_common_preamble(
         }
     }
     prepared
-}
-
-fn append_preamble_blocks(preamble: &mut String, blocks: &[String]) {
-    for block in blocks {
-        let trimmed = block.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !preamble.ends_with('\n') {
-            preamble.push('\n');
-        }
-        preamble.push('\n');
-        preamble.push_str(trimmed);
-        preamble.push('\n');
-    }
 }
 
 fn apply_chat_latest_user_payload(
@@ -483,6 +506,22 @@ mod prompt_assembly_tests {
         }
     }
 
+    fn build_test_message(role: &str, text: &str) -> ChatMessage {
+        ChatMessage {
+            id: Uuid::new_v4().to_string(),
+            role: role.to_string(),
+            created_at: now_iso(),
+            speaker_agent_id: None,
+            parts: vec![MessagePart::Text {
+                text: text.to_string(),
+            }],
+            extra_text_blocks: Vec::new(),
+            provider_meta: None,
+            tool_call: None,
+            mcp_call: None,
+        }
+    }
+
     #[test]
     fn build_workspace_agents_md_block_should_inject_user_main_workspace_agents() {
         let temp_root = std::env::temp_dir().join(format!(
@@ -561,5 +600,429 @@ mod prompt_assembly_tests {
         }]);
 
         assert!(build_workspace_agents_md_block(&conversation, &state).is_none());
+    }
+
+    #[test]
+    fn build_prepared_prompt_for_mode_should_keep_system_and_conversation_sides_separated() {
+        let agent = default_agent();
+        let agents = vec![agent.clone()];
+        let departments = default_departments("api-1");
+        let mut conversation = build_test_conversation(Vec::new());
+        conversation.messages.push(build_test_message("user", "这一句只属于用户消息"));
+
+        let prepared = build_prepared_prompt_for_mode(
+            PromptBuildMode::Chat,
+            &conversation,
+            &agent,
+            &agents,
+            &departments,
+            "测试用户",
+            "",
+            "default",
+            "zh-CN",
+            None,
+            None,
+            Some("<terminal env>\n当前 shell: PowerShell\n</terminal env>".to_string()),
+            None,
+            None,
+            Some(&ApiConfig::default()),
+            None,
+            Some(false),
+        );
+
+        assert!(prepared.preamble.contains("当前 shell: PowerShell"));
+        assert!(!prepared.preamble.contains("这一句只属于用户消息"));
+        assert_eq!(prepared.latest_user_text, "这一句只属于用户消息");
+    }
+
+    #[test]
+    fn finalize_system_prompt_with_manager_should_hit_cache_for_same_signature() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-prompt-manager-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let agent = default_agent();
+        let departments = default_departments("api-1");
+        let conversation = build_test_conversation(Vec::new());
+        let system_blocks = vec!["<runtime block>\n测试块\n</runtime block>".to_string()];
+        let ordered_blocks = build_system_prompt_ordered_blocks(
+            Some(&state),
+            &conversation,
+            &agent,
+            &departments,
+            "zh-CN",
+            Some(&ApiConfig::default()),
+            "核心 system prompt",
+            None,
+            Some("<terminal env>\n当前 shell: PowerShell\n</terminal env>"),
+            &system_blocks,
+        );
+
+        let cache_key = build_system_prompt_cache_key(Some(&state), "chat", &agent, &ordered_blocks);
+        {
+            let mut cache = cache_lock_recover("system_prompt_cache", system_prompt_cache());
+            cache.remove(&cache_key);
+        }
+
+        let first = finalize_system_prompt_with_manager(
+            Some(&state),
+            "chat",
+            &conversation,
+            &agent,
+            &departments,
+            Some(&ApiConfig::default()),
+            Some(("测试用户", "")),
+            "default",
+            "zh-CN",
+            "核心 system prompt",
+            None,
+            Some("<terminal env>\n当前 shell: PowerShell\n</terminal env>"),
+            &system_blocks,
+        );
+        let second = finalize_system_prompt_with_manager(
+            Some(&state),
+            "chat",
+            &conversation,
+            &agent,
+            &departments,
+            Some(&ApiConfig::default()),
+            Some(("测试用户", "")),
+            "default",
+            "zh-CN",
+            "核心 system prompt",
+            None,
+            Some("<terminal env>\n当前 shell: PowerShell\n</terminal env>"),
+            &system_blocks,
+        );
+
+        assert_eq!(first, second);
+        assert!(first.contains("核心 system prompt"));
+        assert!(first.contains("当前 shell: PowerShell"));
+        let cache = cache_lock_recover("system_prompt_cache", system_prompt_cache());
+        assert!(cache.contains_key(&cache_key));
+    }
+
+    #[test]
+    fn conversation_environment_prompt_snapshot_should_hit_cache_for_same_signature() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-environment-cache-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let conversation = build_test_conversation(Vec::new());
+        let terminal_block = "<shell workspace>\n运行环境块\n</shell workspace>";
+        let runtime_blocks = vec!["<workspace agents>\n项目约束块\n</workspace agents>".to_string()];
+        let im_blocks = vec!["<remote im runtime activation>\nIM 激活块\n</remote im runtime activation>".to_string()];
+
+        let cache_key = build_conversation_environment_prompt_cache_key(
+            Some(&state),
+            &conversation,
+            "zh-CN",
+            Some(terminal_block),
+            &runtime_blocks,
+            &im_blocks,
+        );
+        {
+            let mut cache = cache_lock_recover(
+                "conversation_environment_prompt_cache",
+                conversation_environment_prompt_cache(),
+            );
+            cache.remove(&cache_key);
+        }
+
+        let first = get_or_build_conversation_environment_prompt_snapshot(
+            Some(&state),
+            &conversation,
+            "zh-CN",
+            Some(terminal_block),
+            &runtime_blocks,
+            &im_blocks,
+        );
+        let second = get_or_build_conversation_environment_prompt_snapshot(
+            Some(&state),
+            &conversation,
+            "zh-CN",
+            Some(terminal_block),
+            &runtime_blocks,
+            &im_blocks,
+        );
+
+        assert_eq!(first.system_prompt_text, second.system_prompt_text);
+        let cache = cache_lock_recover(
+            "conversation_environment_prompt_cache",
+            conversation_environment_prompt_cache(),
+        );
+        assert!(cache.contains_key(&cache_key));
+    }
+
+    #[test]
+    fn conversation_environment_prompt_snapshot_should_rebuild_when_environment_changes() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-environment-rebuild-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let conversation = build_test_conversation(Vec::new());
+        let mut remote_im_conversation = conversation.clone();
+        remote_im_conversation.conversation_kind = CONVERSATION_KIND_REMOTE_IM_CONTACT.to_string();
+        let terminal_block = "<shell workspace>\n运行环境块\n</shell workspace>";
+
+        let normal = get_or_build_conversation_environment_prompt_snapshot(
+            Some(&state),
+            &conversation,
+            "zh-CN",
+            Some(terminal_block),
+            &[],
+            &[],
+        );
+        let remote = get_or_build_conversation_environment_prompt_snapshot(
+            Some(&state),
+            &remote_im_conversation,
+            "zh-CN",
+            Some(terminal_block),
+            &[],
+            &[],
+        );
+
+        assert_ne!(normal.system_prompt_text, remote.system_prompt_text);
+        assert!(!normal.system_prompt_text.contains("联系人是特殊用户"));
+        assert!(remote.system_prompt_text.contains("联系人是特殊用户"));
+    }
+
+    #[test]
+    fn finalize_system_prompt_with_manager_should_keep_tool_runtime_and_im_order() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-prompt-order-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let agent = default_agent();
+        let departments = default_departments("api-1");
+        let mut conversation = build_test_conversation(Vec::new());
+        conversation.conversation_kind = CONVERSATION_KIND_REMOTE_IM_CONTACT.to_string();
+        let system_blocks = vec![
+            "<skill usage>\n技能索引块\n</skill usage>".to_string(),
+            "<workspace agents>\n项目约束块\n</workspace agents>".to_string(),
+            "<todo guide>\nTodo 说明块\n</todo guide>".to_string(),
+            "<remote im runtime activation>\nIM 激活块\n</remote im runtime activation>".to_string(),
+        ];
+
+        let prompt = finalize_system_prompt_with_manager(
+            Some(&state),
+            "chat",
+            &conversation,
+            &agent,
+            &departments,
+            Some(&ApiConfig::default()),
+            Some(("测试用户", "")),
+            "default",
+            "zh-CN",
+            "固定系统块",
+            None,
+            Some("<shell workspace>\n运行环境块\n</shell workspace>"),
+            &system_blocks,
+        );
+
+        let fixed_index = prompt.find("固定系统块").expect("fixed block");
+        let plan_index = prompt.find("提问之法").expect("plan tool rule");
+        let skill_index = prompt.find("技能索引块").expect("skill usage block");
+        let todo_index = prompt.find("Todo 说明块").expect("todo block");
+        let runtime_index = prompt.find("运行环境块").expect("runtime block");
+        let workspace_agents_index = prompt.find("项目约束块").expect("workspace agents block");
+        let remote_contact_index = prompt
+            .find("联系人是特殊用户")
+            .expect("remote im contact rules");
+        let remote_activation_index = prompt.find("IM 激活块").expect("remote im activation");
+
+        assert!(fixed_index < plan_index);
+        assert!(plan_index < skill_index);
+        assert!(skill_index < todo_index);
+        assert!(todo_index < runtime_index);
+        assert!(runtime_index < workspace_agents_index);
+        assert!(workspace_agents_index < remote_contact_index);
+        assert!(remote_contact_index < remote_activation_index);
+    }
+
+    #[test]
+    fn finalize_system_prompt_with_manager_should_skip_remote_contact_rules_for_normal_chat() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-prompt-im-skip-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let agent = default_agent();
+        let departments = default_departments("api-1");
+        let conversation = build_test_conversation(Vec::new());
+        let system_blocks = vec![
+            "<remote im runtime activation>\nIM 激活块\n</remote im runtime activation>".to_string(),
+        ];
+
+        let prompt = finalize_system_prompt_with_manager(
+            Some(&state),
+            "chat",
+            &conversation,
+            &agent,
+            &departments,
+            Some(&ApiConfig::default()),
+            Some(("测试用户", "")),
+            "default",
+            "zh-CN",
+            "固定系统块",
+            None,
+            Some("<shell workspace>\n运行环境块\n</shell workspace>"),
+            &system_blocks,
+        );
+
+        assert!(!prompt.contains("联系人是特殊用户"));
+        assert!(prompt.contains("IM 激活块"));
+    }
+
+    #[test]
+    fn finalize_system_prompt_with_manager_should_not_insert_blank_lines_between_blocks() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-prompt-spacing-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let agent = default_agent();
+        let agents = vec![agent.clone()];
+        let departments = default_departments("api-1");
+        let mut conversation = build_test_conversation(Vec::new());
+        conversation
+            .messages
+            .push(build_test_message("user", "测试一下 system prompt 间距"));
+
+        let prepared = build_prepared_prompt_for_mode(
+            PromptBuildMode::Chat,
+            &conversation,
+            &agent,
+            &agents,
+            &departments,
+            "测试用户",
+            "",
+            "default",
+            "zh-CN",
+            None,
+            None,
+            Some("<shell workspace>\n运行环境块\n</shell workspace>".to_string()),
+            None,
+            Some(&state),
+            Some(&ApiConfig::default()),
+            None,
+            Some(false),
+        );
+
+        assert!(prepared.preamble.contains("</system rules>\n<persona settings>"));
+        assert!(prepared.preamble.contains("</department context>\n<memory rag rule>"));
+        assert!(!prepared
+            .preamble
+            .contains("</system rules>\n\n<persona settings>"));
+        assert!(!prepared
+            .preamble
+            .contains("</department context>\n\n<memory rag rule>"));
+    }
+
+    #[test]
+    fn finalize_system_prompt_with_manager_should_skip_disabled_builtin_tool_rules() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-prompt-tool-filter-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let agent = default_agent();
+        let mut departments = default_departments("api-1");
+        let assistant_department = departments
+            .iter_mut()
+            .find(|item| item.id == ASSISTANT_DEPARTMENT_ID)
+            .expect("assistant department");
+        assistant_department.permission_control = DepartmentPermissionControl {
+            enabled: true,
+            mode: "blacklist".to_string(),
+            builtin_tool_names: vec!["apply_patch".to_string()],
+            skill_names: Vec::new(),
+            mcp_tool_names: Vec::new(),
+        };
+        let conversation = build_test_conversation(Vec::new());
+        let api = ApiConfig::default();
+
+        let prompt = finalize_system_prompt_with_manager(
+            Some(&state),
+            "chat",
+            &conversation,
+            &agent,
+            &departments,
+            Some(&api),
+            Some(("测试用户", "")),
+            "default",
+            "zh-CN",
+            "固定系统块",
+            None,
+            None,
+            &[],
+        );
+
+        assert!(prompt.contains("<todo tool rule>"));
+        assert!(!prompt.contains("<apply_patch tool rule>"));
+    }
+
+    #[test]
+    fn finalize_system_prompt_with_manager_should_ignore_api_tool_switches() {
+        let llm_workspace_path = std::env::temp_dir().join(format!(
+            "easy-call-ai-prompt-api-independent-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        let state = build_test_state(llm_workspace_path);
+        let agent = default_agent();
+        let departments = default_departments("api-1");
+        let conversation = build_test_conversation(Vec::new());
+
+        let mut api_enabled = ApiConfig::default();
+        api_enabled.enable_tools = true;
+        let mut api_disabled = api_enabled.clone();
+        api_disabled.id = "api-2".to_string();
+        api_disabled.enable_tools = false;
+        api_disabled.tools.clear();
+
+        let prompt_enabled = finalize_system_prompt_with_manager(
+            Some(&state),
+            "chat",
+            &conversation,
+            &agent,
+            &departments,
+            Some(&api_enabled),
+            Some(("测试用户", "")),
+            "default",
+            "zh-CN",
+            "固定系统块",
+            None,
+            None,
+            &[],
+        );
+        let prompt_disabled = finalize_system_prompt_with_manager(
+            Some(&state),
+            "chat",
+            &conversation,
+            &agent,
+            &departments,
+            Some(&api_disabled),
+            Some(("测试用户", "")),
+            "default",
+            "zh-CN",
+            "固定系统块",
+            None,
+            None,
+            &[],
+        );
+
+        assert_eq!(prompt_enabled, prompt_disabled);
     }
 }

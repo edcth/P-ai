@@ -1622,100 +1622,147 @@ fn build_memory_rag_rule_block() -> String {
     )
 }
 
-fn build_system_tools_rule_block(
-    _conversation: &Conversation,
-    _agent: &AgentProfile,
-    _departments: &[DepartmentConfig],
-    _ui_language: &str,
-) -> Option<String> {
-    let mut sections = vec![
-        "仅在系统工具能真正帮助完成用户任务时才使用，不要为了显得主动而滥用工具。"
-            .to_string(),
-    ];
+fn build_builtin_tool_general_rule_block() -> String {
+    prompt_xml_block(
+        "builtin tool general rule",
+        "仅在系统工具能真正帮助完成用户任务时才使用，不要为了显得主动而滥用工具。",
+    )
+}
 
-    sections.push(
-        "1. todo\n\
-         何时必须用：当任务预计需要多个阶段、存在依赖关系、需要跨文件修改、需要验证，或可能持续超过一次工具调用时，必须使用 todo。\n\
-         何时不要用：单步即可完成的简单问题、纯解释性回答、无需实际操作的闲聊，不要使用 todo。\n\
-         如何使用：todo 必须拆成 3~7 步；每一步都必须是可验证、可完成的结果；开始执行后要及时更新状态；任一时刻只允许一个 in_progress；计划变化时同步修正。\n\
-         为什么：todo 是当前会话内的执行步骤板，不是长期任务系统。"
-            .to_string(),
-    );
-    sections.push(
-        "2. delegate\n\
-         何时必须用：当子任务过于模糊，需要先探索再收敛结论时，可以使用 delegate。模糊探索既可以是本地探索，也可以是网络探索。\n\
-         何时不要用：如果主线程立刻需要这个结果来继续下一步，通常不要委托；边界明确、可直接动手的任务，也不要滥用 delegate。\n\
-         如何使用：先快速扫描少量关键文件或关键信息形成初步理解；先写骨架计划并尽早和用户完成第一轮对齐；不要在和用户建立共识前做穷尽式探索。质量优先于数量，最多只允许有限数量的 explore 代理，一般应尽量少，通常一个就够。\n\
-         为什么：delegate 负责高不确定性的探索任务，不是把核心决策责任直接甩出去。"
-            .to_string(),
-    );
-    sections.push(
-        "3. task\n\
-         何时必须用：task 只用于非即时、长期、跨会话追踪的任务。到点后系统会自动提示你要执行某个任务，并在任务追踪中持续提供执行该任务所需的上下文。\n\
-         何时不要用：如果事情只在当前会话内推进和完成，不要使用 task，而应使用 todo。\n\
-         如何使用：只有在确实需要未来触发、长期提醒、跨会话延续时才创建或更新 task，并明确 goal、how、why 以及触发条件。\n\
-         为什么：task 是长期任务机制，不是当前会话的临时步骤板。"
-            .to_string(),
-    );
-    sections.push(
-        "4. exec\n\
-         何时必须用：当必须通过命令、程序或脚本来搜索文件、读取信息、检查环境、运行验证或执行脚本时，使用 exec。很多 skill 会要求执行脚本。\n\
-         何时不要用：一般情况下禁止使用 exec 创建、覆盖或改写文件；文件创建与修改应优先使用正常编辑能力，而不是把 exec 当成文件编辑器。\n\
-         如何使用：优先把 exec 用于搜索、读取、检查、运行和验证；执行前先判断是否存在更低风险替代，并尽量缩小命令影响范围。若任务是新增或修改文件，应先使用 apply_patch；若 apply_patch 失败，应先修正补丁格式或路径问题重试，而不是改用 exec 通过 cat、echo、重定向、heredoc 等方式写文件。若 exec 报告工作区、路径授权或 shell_switch_workspace 相关错误，应先解决工作区与授权前提，再继续当前工具链，不要在 exec 与 apply_patch 之间来回试错。\n\
-         为什么：exec 负责命令执行与脚本运行，但副作用风险更高，因此默认不承担常规文件编辑职责。"
-            .to_string(),
-    );
-    sections.push(
-        "5. apply_patch\n\
-         何时必须用：当需要新增文件、删除文件、修改文件或重命名文件时，默认使用 apply_patch。\n\
-         核心规则：apply_patch 只接受严格补丁语法；新增文件时每一行正文都必须以前缀 `+` 开头；修改文件时只能在 `*** Update File:` 下写带 `+`、`-`、空格前缀的变更行；不要把普通正文直接塞进补丁。\n\
-         路径规则：相对路径会按当前工作目录解析，显式绝对路径会按目标工作目录权限判断；若工具报路径或工作区错误，先修正路径与工作区，再继续用 apply_patch，不要改用 exec 写文件。\n\
-         正确示例一：新增代码文件\n\
-         ```\n\
-         *** Begin Patch\n\
-         *** Add File: E:\\project\\src\\utils\\math.ts\n\
-         +export function add(a: number, b: number): number {\n\
-         +  return a + b;\n\
-         +}\n\
-         *** End Patch\n\
-         ```\n\
-         正确示例二：修改代码文件\n\
-         ```\n\
-         *** Begin Patch\n\
-         *** Update File: E:\\project\\src\\utils\\math.ts\n\
-         @@\n\
-         -export function add(a: number, b: number): number {\n\
-         -  return a + b;\n\
-         -}\n\
-         +export function add(a: number, b: number): number {\n\
-         +  const left = Number(a);\n\
-         +  const right = Number(b);\n\
-         +  return left + right;\n\
-         +}\n\
-         *** End Patch\n\
-         ```\n\
-         错误示例：新增文件时直接写正文，未给每一行加 `+`；或 apply_patch 失败后改用 exec 执行 `cat > file <<EOF`、`echo text > file` 之类命令写文件。\n\
-         失败后的正确处理：若报 `Add File 仅允许 + 行`，说明新增文件补丁格式错误，应修正补丁后重试；若报路径、工作区或授权错误，应先修正这些前提，再继续 apply_patch。"
-            .to_string(),
-    );
-    sections.push(
-        "6. 文件引用\n\
-         何时必须用：当回复里需要让用户点击打开本地文件、定位代码文件或引用现有文件路径时，使用文件引用。\n\
-         唯一正确格式：Markdown 链接目标直接写本地绝对路径，不要加 `file:///`。Windows 下优先使用正斜杠，正确示例是 `[math.ts](E:/github/project/src/utils/math.ts)`。\n\
-         网络链接示例：当需要引用网页、文档或 API 页面时，使用标准 Markdown 网络链接，例如 `[OpenAI API 文档](https://platform.openai.com/docs/overview)`、`[GitHub Release](https://github.com/example/repo/releases)`。\n\
-         为什么：当前前端只把“盘符开头的绝对本地路径”识别为本地文件链接；`file:///E:/...` 这类 RFC 形式在当前渲染链路里容易被当成普通网页链接或被错误解析。\n\
-         错误示例：`[文件](file:///E:/github/project/file.ts)`、`[文件](file://E:/github/project/file.ts)`、只输出裸路径不加链接、把文件名误写成 URL 主机名、把 `https://...` 网络链接写成磁盘路径格式。\n\
-         与 apply_patch 的区别：apply_patch 是编辑文件时给工具看的路径；文件引用是回复用户时给界面点击打开的路径。两者都优先使用绝对路径，但文件引用必须放在 Markdown 链接里，且不要加 `file:///` 前缀。\n\
-         远程联系人例外：如果当前对象是远程联系人，不要把本地文件路径当成消息正文发出去；需要发送文件时，必须使用 `remote_im_send` 的文件发送能力，由工具实际上传或投递文件，而不是仅在文本里粘贴本地路径。"
-            .to_string(),
-    );
+fn build_builtin_tool_rule_block(tool_id: &str) -> Option<String> {
+    let (block_name, body) = match tool_id.trim() {
+        "todo" => (
+            "todo tool rule",
+            "何时必须用：当任务预计需要多个阶段、存在依赖关系、需要跨文件修改、需要验证，或可能持续超过一次工具调用时，必须使用 todo。\n\
+             何时不要用：单步即可完成的简单问题、纯解释性回答、无需实际操作的闲聊，不要使用 todo。\n\
+             如何使用：todo 必须拆成 3~7 步；每一步都必须是可验证、可完成的结果；开始执行后要及时更新状态；任一时刻只允许一个 in_progress；计划变化时同步修正。\n\
+             为什么：todo 是当前会话内的执行步骤板，不是长期任务系统。",
+        ),
+        "delegate" => (
+            "delegate tool rule",
+            "何时必须用：当子任务过于模糊，需要先探索再收敛结论时，可以使用 delegate。模糊探索既可以是本地探索，也可以是网络探索。\n\
+             何时不要用：如果主线程立刻需要这个结果来继续下一步，通常不要委托；边界明确、可直接动手的任务，也不要滥用 delegate。\n\
+             如何使用：先快速扫描少量关键文件或关键信息形成初步理解；先写骨架计划并尽早和用户完成第一轮对齐；不要在和用户建立共识前做穷尽式探索。质量优先于数量，最多只允许有限数量的 explore 代理，一般应尽量少，通常一个就够。\n\
+             为什么：delegate 负责高不确定性的探索任务，不是把核心决策责任直接甩出去。",
+        ),
+        "task" => (
+            "task tool rule",
+            "何时必须用：task 只用于非即时、长期、跨会话追踪的任务。到点后系统会自动提示你要执行某个任务，并在任务追踪中持续提供执行该任务所需的上下文。\n\
+             何时不要用：如果事情只在当前会话内推进和完成，不要使用 task，而应使用 todo。\n\
+             如何使用：只有在确实需要未来触发、长期提醒、跨会话延续时才创建或更新 task，并明确 goal、how、why 以及触发条件。\n\
+             为什么：task 是长期任务机制，不是当前会话的临时步骤板。",
+        ),
+        "exec" => (
+            "exec tool rule",
+            "何时必须用：当必须通过命令、程序或脚本来搜索文件、读取信息、检查环境、运行验证或执行脚本时，使用 exec。很多 skill 会要求执行脚本。\n\
+             何时不要用：一般情况下禁止使用 exec 创建、覆盖或改写文件；文件创建与修改应优先使用正常编辑能力，而不是把 exec 当成文件编辑器。\n\
+             如何使用：优先把 exec 用于搜索、读取、检查、运行和验证；执行前先判断是否存在更低风险替代，并尽量缩小命令影响范围。若任务是新增或修改文件，应先使用 apply_patch；若 apply_patch 失败，应先修正补丁格式或路径问题重试，而不是改用 exec 通过 cat、echo、重定向、heredoc 等方式写文件。若 exec 报告工作区、路径授权或 shell_switch_workspace 相关错误，应先解决工作区与授权前提，再继续当前工具链，不要在 exec 与 apply_patch 之间来回试错。\n\
+             为什么：exec 负责命令执行与脚本运行，但副作用风险更高，因此默认不承担常规文件编辑职责。",
+        ),
+        "apply_patch" => (
+            "apply_patch tool rule",
+            "何时必须用：当需要新增文件、删除文件、修改文件或重命名文件时，默认使用 apply_patch。\n\
+             核心规则：apply_patch 只接受严格补丁语法；新增文件时每一行正文都必须以前缀 `+` 开头；修改文件时只能在 `*** Update File:` 下写带 `+`、`-`、空格前缀的变更行；不要把普通正文直接塞进补丁。\n\
+             路径规则：相对路径会按当前工作目录解析，显式绝对路径会按目标工作目录权限判断；若工具报路径或工作区错误，先修正路径与工作区，再继续用 apply_patch，不要改用 exec 写文件。\n\
+             正确示例一：新增代码文件\n\
+             ```\n\
+             *** Begin Patch\n\
+             *** Add File: E:\\project\\src\\utils\\math.ts\n\
+             +export function add(a: number, b: number): number {\n\
+             +  return a + b;\n\
+             +}\n\
+             *** End Patch\n\
+             ```\n\
+             正确示例二：修改代码文件\n\
+             ```\n\
+             *** Begin Patch\n\
+             *** Update File: E:\\project\\src\\utils\\math.ts\n\
+             @@\n\
+             -export function add(a: number, b: number): number {\n\
+             -  return a + b;\n\
+             -}\n\
+             +export function add(a: number, b: number): number {\n\
+             +  const left = Number(a);\n\
+             +  const right = Number(b);\n\
+             +  return left + right;\n\
+             +}\n\
+             *** End Patch\n\
+             ```\n\
+             错误示例：新增文件时直接写正文，未给每一行加 `+`；或 apply_patch 失败后改用 exec 执行 `cat > file <<EOF`、`echo text > file` 之类命令写文件。\n\
+             失败后的正确处理：若报 `Add File 仅允许 + 行`，说明新增文件补丁格式错误，应修正补丁后重试；若报路径、工作区或授权错误，应先修正这些前提，再继续 apply_patch。",
+        ),
+        "file_reference" => (
+            "file reference rule",
+            "何时必须用：当回复里需要让用户点击打开本地文件、定位代码文件或引用现有文件路径时，使用文件引用。\n\
+             唯一正确格式：Markdown 链接目标直接写本地绝对路径，不要加 `file:///`。Windows 下优先使用正斜杠，正确示例是 `[math.ts](E:/github/project/src/utils/math.ts)`。\n\
+             网络链接示例：当需要引用网页、文档或 API 页面时，使用标准 Markdown 网络链接，例如 `[OpenAI API 文档](https://platform.openai.com/docs/overview)`、`[GitHub Release](https://github.com/example/repo/releases)`。\n\
+             为什么：当前前端只把“盘符开头的绝对本地路径”识别为本地文件链接；`file:///E:/...` 这类 RFC 形式在当前渲染链路里容易被当成普通网页链接或被错误解析。\n\
+             错误示例：`[文件](file:///E:/github/project/file.ts)`、`[文件](file://E:/github/project/file.ts)`、只输出裸路径不加链接、把文件名误写成 URL 主机名、把 `https://...` 网络链接写成磁盘路径格式。\n\
+             与 apply_patch 的区别：apply_patch 是编辑文件时给工具看的路径；文件引用是回复用户时给界面点击打开的路径。两者都优先使用绝对路径，但文件引用必须放在 Markdown 链接里，且不要加 `file:///` 前缀。\n\
+             远程联系人例外：如果当前对象是远程联系人，不要把本地文件路径当成消息正文发出去；需要发送文件时，必须使用 `remote_im_send` 的文件发送能力，由工具实际上传或投递文件，而不是仅在文本里粘贴本地路径。",
+        ),
+        _ => return None,
+    };
+    Some(prompt_xml_block(block_name, body))
+}
 
-    Some(prompt_xml_block("system tools rule", sections.join("\n\n")))
+fn department_builtin_tool_enabled(
+    current_department: Option<&DepartmentConfig>,
+    id: &str,
+) -> bool {
+    if tool_restricted_by_department(current_department, id).is_some() {
+        return false;
+    }
+    if tool_forced_by_department(current_department, id) {
+        return true;
+    }
+    if !department_permission_allows_any_name(
+        current_department,
+        DepartmentPermissionCategory::BuiltinTool,
+        &[id],
+    ) {
+        return false;
+    }
+    if let Some(tool) = default_agent_tools().iter().find(|tool| tool.id == id) {
+        return tool.enabled;
+    }
+    true
+}
+
+fn build_system_tools_rule_blocks(
+    agent: &AgentProfile,
+    departments: &[DepartmentConfig],
+) -> Vec<String> {
+    let department_config = departments_only_config(departments);
+    let current_department = department_for_agent_id(&department_config, &agent.id);
+    let mut blocks = Vec::<String>::new();
+    let mut any_builtin_enabled = false;
+    for tool_id in ["todo", "delegate", "task", "exec", "apply_patch"] {
+        if department_builtin_tool_enabled(current_department, tool_id) {
+            any_builtin_enabled = true;
+            if let Some(block) = build_builtin_tool_rule_block(tool_id) {
+                blocks.push(block);
+            }
+        }
+    }
+    if ["exec", "read_file", "apply_patch", "command"]
+        .into_iter()
+        .any(|tool_id| department_builtin_tool_enabled(current_department, tool_id))
+    {
+        any_builtin_enabled = true;
+        if let Some(block) = build_builtin_tool_rule_block("file_reference") {
+            blocks.push(block);
+        }
+    }
+    if any_builtin_enabled {
+        blocks.insert(0, build_builtin_tool_general_rule_block());
+    }
+    blocks
 }
 
 fn build_question_and_planning_rule_block() -> String {
     prompt_xml_block(
-        "question and planning rule",
+        "plan tool rule",
         "提问之法\n\
          价值锚定：唯当缺失信息重创方向、风险、成本或产出时，方可求询。\n\
          前置分析：提问前必先检索上下文，形成初步逻辑模型。\n\
@@ -1881,6 +1928,176 @@ fn normalize_prepared_history_messages_in_place(prepared: &mut PreparedPrompt) {
         merge_adjacent_assistant_history_messages(std::mem::take(&mut prepared.history_messages));
 }
 
+fn build_conversation_prompt_payload(
+    enriched_conversation: &Conversation,
+    source_conversation: &Conversation,
+    agent: &AgentProfile,
+    agents: &[AgentProfile],
+    state: Option<&AppState>,
+    data_path: Option<&PathBuf>,
+    recall_memories: Option<&[MemoryEntry]>,
+    prompt_user_name: &str,
+    ui_language: &str,
+    latest_user_index: Option<usize>,
+) -> PreparedConversationPromptPayload {
+    let mut seen_remote_contacts = std::collections::HashSet::<String>::new();
+    let mut seen_prompt_memory_ids = HashSet::<String>::new();
+    let mut history_messages = Vec::<PreparedHistoryMessage>::new();
+    for (idx, message) in enriched_conversation.messages.iter().enumerate() {
+        if is_tool_review_report_message(message) {
+            continue;
+        }
+        let Some(role) = prompt_role_for_message(message, &agent.id) else {
+            continue;
+        };
+        if Some(idx) == latest_user_index {
+            continue;
+        }
+        let is_self_message = role == "assistant";
+        if is_self_message {
+            history_messages.extend(build_prepared_history_messages_from_tool_history(
+                message,
+                MessageToolHistoryView::PromptReplay,
+            ));
+        }
+        let is_user = role == "user";
+        let (history_user_meta_text, history_extra_blocks) = if is_user {
+            let include_remote_identity = remote_im_contact_key_from_message(message)
+                .map(|key| seen_remote_contacts.insert(key))
+                .unwrap_or(false);
+            (
+                build_prompt_user_meta_text(
+                    message,
+                    agents,
+                    prompt_user_name,
+                    ui_language,
+                    include_remote_identity,
+                ),
+                prompt_user_extra_blocks_for_message(
+                    state,
+                    Some(source_conversation),
+                    message,
+                    agents,
+                    prompt_user_name,
+                    ui_language,
+                    include_remote_identity,
+                    recall_memories,
+                    &mut seen_prompt_memory_ids,
+                    false,
+                ),
+            )
+        } else {
+            (None, Vec::new())
+        };
+        let mut text = if is_user {
+            let rendered = render_prompt_user_text_only(message);
+            let mention_prefix = render_prompt_user_mention_prefix(message);
+            if mention_prefix.is_empty() {
+                rendered
+            } else if rendered.trim().is_empty() {
+                mention_prefix
+            } else {
+                format!("{mention_prefix}\n{rendered}")
+            }
+        } else {
+            render_prompt_message_text(message)
+        };
+        let (images, audios) = if is_user {
+            collect_prompt_media_parts(message, data_path)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        if text.trim().is_empty() && images.is_empty() && audios.is_empty() {
+            text = " ".to_string();
+        }
+        history_messages.push(PreparedHistoryMessage {
+            role: role.clone(),
+            text,
+            extra_text_blocks: history_extra_blocks,
+            user_time_text: history_user_meta_text,
+            images,
+            audios,
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+        });
+    }
+
+    let latest_user = latest_user_index
+        .and_then(|idx| enriched_conversation.messages.get(idx).cloned());
+    let mut latest_user_text = String::new();
+    let mut latest_user_meta_text = String::new();
+    let mut latest_user_extra_blocks = Vec::<String>::new();
+    let mut latest_images = Vec::<PreparedBinaryPayload>::new();
+    let mut latest_audios = Vec::<PreparedBinaryPayload>::new();
+
+    if let Some(msg) = latest_user {
+        let latest_user_text_rendered = {
+            let rendered = render_prompt_user_text_only(&msg);
+            let mention_prefix = render_prompt_user_mention_prefix(&msg);
+            if mention_prefix.is_empty() {
+                rendered
+            } else if rendered.trim().is_empty() {
+                mention_prefix
+            } else {
+                format!("{mention_prefix}\n{rendered}")
+            }
+        };
+        let (resolved_images, resolved_audios) =
+            resolve_media_from_message(&msg, data_path, "[提示词] 最新消息");
+        let include_remote_identity = remote_im_contact_key_from_message(&msg)
+            .map(|key| seen_remote_contacts.insert(key))
+            .unwrap_or(false);
+        latest_user_meta_text = build_prompt_user_meta_text(
+            &msg,
+            agents,
+            prompt_user_name,
+            ui_language,
+            include_remote_identity,
+        )
+        .unwrap_or_default();
+        let latest_extra_blocks = prompt_user_extra_blocks_for_message(
+            state,
+            Some(source_conversation),
+            &msg,
+            agents,
+            prompt_user_name,
+            ui_language,
+            include_remote_identity,
+            recall_memories,
+            &mut seen_prompt_memory_ids,
+            true,
+        );
+        latest_user_text = latest_user_text_rendered;
+        latest_images = resolved_images;
+        latest_audios = resolved_audios;
+        for extra in latest_extra_blocks {
+            let trimmed = extra.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            latest_user_extra_blocks.push(trimmed.to_string());
+        }
+        if latest_user_text.trim().is_empty()
+            && latest_user_meta_text.trim().is_empty()
+            && latest_user_extra_blocks.is_empty()
+            && latest_images.is_empty()
+            && latest_audios.is_empty()
+        {
+            latest_user_text = " ".to_string();
+        }
+    }
+
+    PreparedConversationPromptPayload {
+        history_messages: merge_adjacent_assistant_history_messages(history_messages),
+        latest_user_text,
+        latest_user_meta_text,
+        latest_user_extra_blocks,
+        latest_images,
+        latest_audios,
+    }
+}
+
 fn build_prompt_with_mode(
     conversation: &Conversation,
     agent: &AgentProfile,
@@ -1900,7 +2117,6 @@ fn build_prompt_with_mode(
         None => conversation.messages.as_slice(),
     };
 
-    // 仅对压缩边界后的有效消息做附件 enrich，避免旧历史重复处理。
     let mut enriched_messages = source_messages.to_vec();
 
     if let Some(state) = state {
@@ -1912,7 +2128,8 @@ fn build_prompt_with_mode(
                         if mime != "application/pdf" {
                             continue;
                         }
-                        let relative_path = item.get("relativePath").and_then(Value::as_str).unwrap_or("");
+                        let relative_path =
+                            item.get("relativePath").and_then(Value::as_str).unwrap_or("");
                         if relative_path.is_empty() {
                             continue;
                         }
@@ -1993,7 +2210,6 @@ fn build_prompt_with_mode(
         }
     }
 
-    // 使用enriched_messages替代conversation.messages
     let enriched_conversation = Conversation {
         id: conversation.id.clone(),
         title: conversation.title.clone(),
@@ -2046,8 +2262,6 @@ fn build_prompt_with_mode(
     };
 
     let prompt_user_name = user_profile.map(|(user_name, _)| user_name).unwrap_or("");
-    let mut seen_remote_contacts = std::collections::HashSet::<String>::new();
-    let mut seen_prompt_memory_ids = HashSet::<String>::new();
     let last_compaction_index =
         find_last_context_compaction_index(&enriched_conversation.messages, &agent.id);
     let mut latest_user_index = None;
@@ -2071,317 +2285,37 @@ fn build_prompt_with_mode(
         }
         break;
     }
-    let mut history_messages = Vec::<PreparedHistoryMessage>::new();
-    for (idx, message) in enriched_conversation.messages.iter().enumerate() {
-        if is_tool_review_report_message(message) {
-            continue;
-        }
-        let Some(role) = prompt_role_for_message(message, &agent.id) else {
-            continue;
-        };
-        if let Some(boundary) = last_compaction_index {
-            if idx < boundary {
-                continue;
-            }
-        }
-        let is_self_message = role == "assistant";
-        if Some(idx) == latest_user_index {
-            continue;
-        }
-        if is_self_message {
-            history_messages.extend(build_prepared_history_messages_from_tool_history(
-                message,
-                MessageToolHistoryView::PromptReplay,
-            ));
-        }
-        let is_user = role == "user";
-        let (history_user_meta_text, history_extra_blocks) = if is_user {
-            let include_remote_identity = remote_im_contact_key_from_message(message)
-                .map(|key| seen_remote_contacts.insert(key))
-                .unwrap_or(false);
-            (
-                build_prompt_user_meta_text(
-                    message,
-                    agents,
-                    prompt_user_name,
-                    ui_language,
-                    include_remote_identity,
-                ),
-                prompt_user_extra_blocks_for_message(
-                    state,
-                    Some(conversation),
-                    message,
-                    agents,
-                    prompt_user_name,
-                    ui_language,
-                    include_remote_identity,
-                    recall_memories.as_deref(),
-                    &mut seen_prompt_memory_ids,
-                    false,
-                ),
-            )
-        } else {
-            (None, Vec::new())
-        };
-        let mut text = if is_user {
-            let rendered = render_prompt_user_text_only(message);
-            let mention_prefix = render_prompt_user_mention_prefix(message);
-            if mention_prefix.is_empty() {
-                rendered
-            } else if rendered.trim().is_empty() {
-                mention_prefix
-            } else {
-                format!("{mention_prefix}\n{rendered}")
-            }
-        } else {
-            render_prompt_message_text(message)
-        };
-        let (images, audios) = if is_user {
-            collect_prompt_media_parts(message, data_path)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        if text.trim().is_empty() && images.is_empty() && audios.is_empty() {
-            // Keep message shape stable for providers that reject empty messages.
-            text = " ".to_string();
-        }
-        history_messages.push(PreparedHistoryMessage {
-            role: role.clone(),
-            text,
-            extra_text_blocks: history_extra_blocks,
-            user_time_text: history_user_meta_text,
-            images,
-            audios,
-            tool_calls: None,
-            tool_call_id: None,
-            reasoning_content: None,
-        });
-    }
-    let response_style = response_style_preset(response_style_id);
-    let date_timezone_line = prompt_current_date_timezone_line(ui_language);
-    let highest_instruction_md = highest_instruction_markdown();
-    let (
-        not_provided_label,
-        assistant_settings_label,
-        user_settings_label,
-        role_constraints_label,
-        conversation_style_label,
-        language_settings_label,
-        user_nickname_label,
-        user_intro_label,
-        role_identity_line,
-        role_confusion_line,
-        language_follow_user_line,
-        language_instruction,
-    ) = (
-        "未提供",
-        "助理设定",
-        "用户设定",
-        "角色约束",
-        "对话风格",
-        "语言设定",
-        "用户昵称",
-        "用户自我介绍",
-        "- 你是“{}”，用户是“{}”。",
-        "- 不要把自己当作用户，不要混淆双方身份。",
-        "- 若用户明确指定回答语言，以用户指定为准。",
-        "默认使用中文回答。",
-    );
-    let remote_im_rules_block = prompt_xml_block(
-        "remote im contact rules",
-        "联系人是特殊用户，不是当前聊天窗口中的直接用户。\n他们的消息来自远程接口接入，应视为独立的外部用户。\n不要把联系人和当前用户混为一谈，也不要混淆回复目标。\n如果需要回复远程联系人，必须调用 `remote_im_send`。",
-    );
-    let meme_sticker_rule_block = meme_prompt_rule_block(state);
-    let departments_block = build_departments_prompt_block(conversation, agent, departments, ui_language);
-    let memory_rag_rule_block = build_memory_rag_rule_block();
-    let system_tools_rule_block = build_system_tools_rule_block(
-        conversation,
+
+    let preamble = build_core_system_prompt_text(
+        &enriched_conversation,
         agent,
         departments,
+        user_profile,
+        response_style_id,
         ui_language,
+        state,
     );
-    let question_and_planning_rule_block = build_question_and_planning_rule_block();
-    let mut preamble = if let Some((user_name, user_intro)) = user_profile {
-        let user_intro_display = if user_intro.trim().is_empty() {
-            not_provided_label.to_string()
-        } else {
-            user_intro.trim().to_string()
-        };
-        let role_identity_text = role_identity_line
-            .replacen("{}", &xml_escape_prompt(&agent.name), 1)
-            .replacen("{}", &xml_escape_prompt(user_name), 1);
-        format!(
-            "{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n",
-            highest_instruction_md,
-            memory_rag_rule_block,
-            system_tools_rule_block.as_deref().unwrap_or(""),
-            question_and_planning_rule_block,
-            departments_block,
-            prompt_xml_block(assistant_settings_label, agent.system_prompt.trim()),
-            prompt_xml_block(
-                user_settings_label,
-                format!(
-                    "{}：{}\n{}：{}",
-                    user_nickname_label,
-                    xml_escape_prompt(user_name),
-                    user_intro_label,
-                    xml_escape_prompt(&user_intro_display)
-                )
-            ),
-            prompt_xml_block(
-                role_constraints_label,
-                format!("{}\n{}", role_identity_text, role_confusion_line)
-            ),
-            prompt_xml_block(
-                conversation_style_label,
-                format!("当前风格：{}\n{}", response_style.name, response_style.prompt)
-            ),
-            prompt_xml_block(
-                language_settings_label,
-                format!(
-                    "{}\n{}\n{}",
-                    language_instruction, language_follow_user_line, date_timezone_line
-                )
-            )
-        )
-    } else {
-        let delegate_role_line = "- 这是一条委托线程。此线程不存在默认用户人格。";
-        let delegate_scope_line =
-            "- 只依据本轮委托任务块与本线程历史处理工作，不要自行补充用户设定、昵称或主会话背景。";
-        format!(
-            "{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n\
-{}\n",
-            highest_instruction_md,
-            memory_rag_rule_block,
-            system_tools_rule_block.as_deref().unwrap_or(""),
-            question_and_planning_rule_block,
-            departments_block,
-            prompt_xml_block(assistant_settings_label, agent.system_prompt.trim()),
-            prompt_xml_block(
-                role_constraints_label,
-                format!("{}\n{}", delegate_role_line, delegate_scope_line)
-            ),
-            prompt_xml_block(
-                conversation_style_label,
-                format!("当前风格：{}\n{}", response_style.name, response_style.prompt)
-            ),
-            prompt_xml_block(
-                language_settings_label,
-                format!("{}\n{}", language_instruction, date_timezone_line)
-            ),
-        )
-    };
-    if !remote_im_rules_block.trim().is_empty() {
-        if !preamble.ends_with('\n') {
-            preamble.push('\n');
-        }
-        preamble.push('\n');
-        preamble.push_str(&remote_im_rules_block);
-        preamble.push('\n');
-    }
-    if let Some(meme_block) = meme_sticker_rule_block.as_deref() {
-        if !meme_block.trim().is_empty() {
-            if !preamble.ends_with('\n') {
-                preamble.push('\n');
-            }
-            preamble.push('\n');
-            preamble.push_str(meme_block);
-            preamble.push('\n');
-        }
-    }
-
-    let latest_user = latest_user_index
-        .and_then(|idx| enriched_conversation.messages.get(idx).cloned());
-
-    let mut latest_user_text = String::new();
-    let mut latest_user_meta_text = String::new();
-    let mut latest_user_extra_blocks = Vec::<String>::new();
-    let mut latest_images = Vec::<PreparedBinaryPayload>::new();
-    let mut latest_audios = Vec::<PreparedBinaryPayload>::new();
-
-    if let Some(msg) = latest_user {
-        let latest_user_text_rendered = {
-            let rendered = render_prompt_user_text_only(&msg);
-            let mention_prefix = render_prompt_user_mention_prefix(&msg);
-            if mention_prefix.is_empty() {
-                rendered
-            } else if rendered.trim().is_empty() {
-                mention_prefix
-            } else {
-                format!("{mention_prefix}\n{rendered}")
-            }
-        };
-        let (resolved_images, resolved_audios) =
-            resolve_media_from_message(&msg, data_path, "[提示词] 最新消息");
-        let include_remote_identity = remote_im_contact_key_from_message(&msg)
-            .map(|key| seen_remote_contacts.insert(key))
-            .unwrap_or(false);
-        latest_user_meta_text = build_prompt_user_meta_text(
-            &msg,
-            agents,
-            prompt_user_name,
-            ui_language,
-            include_remote_identity,
-        )
-        .unwrap_or_default();
-        let latest_extra_blocks = prompt_user_extra_blocks_for_message(
-            state,
-            Some(conversation),
-            &msg,
-            agents,
-            prompt_user_name,
-            ui_language,
-            include_remote_identity,
-            recall_memories.as_deref(),
-            &mut seen_prompt_memory_ids,
-            true,
-        );
-        latest_user_text = latest_user_text_rendered;
-        latest_images = resolved_images;
-        latest_audios = resolved_audios;
-        for extra in latest_extra_blocks {
-            let trimmed = extra.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            latest_user_extra_blocks.push(trimmed.to_string());
-        }
-        if latest_user_text.trim().is_empty()
-            && latest_user_meta_text.trim().is_empty()
-            && latest_user_extra_blocks.is_empty()
-            && latest_images.is_empty()
-            && latest_audios.is_empty()
-        {
-            latest_user_text = " ".to_string();
-        }
-    }
-
-    let history_messages = merge_adjacent_assistant_history_messages(history_messages);
+    let conversation_payload = build_conversation_prompt_payload(
+        &enriched_conversation,
+        conversation,
+        agent,
+        agents,
+        state,
+        data_path,
+        recall_memories.as_deref(),
+        prompt_user_name,
+        ui_language,
+        latest_user_index,
+    );
 
     PreparedPrompt {
         preamble,
-        history_messages,
-        latest_user_text,
-        latest_user_meta_text,
-        latest_user_extra_text: latest_user_extra_blocks.join("\n\n"),
-        latest_user_extra_blocks,
-        latest_images,
-        latest_audios,
+        history_messages: conversation_payload.history_messages,
+        latest_user_text: conversation_payload.latest_user_text,
+        latest_user_meta_text: conversation_payload.latest_user_meta_text,
+        latest_user_extra_text: conversation_payload.latest_user_extra_blocks.join("\n\n"),
+        latest_user_extra_blocks: conversation_payload.latest_user_extra_blocks,
+        latest_images: conversation_payload.latest_images,
+        latest_audios: conversation_payload.latest_audios,
     }
 }

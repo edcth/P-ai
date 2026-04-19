@@ -180,6 +180,7 @@ async fn get_prompt_preview(
                     ..Default::default()
                 }),
                 Some(&*state),
+                Some(&api_config),
                 Some(&resolved_api),
                 Some(data.pdf_read_mode == "image" && api_config.enable_image),
             )
@@ -237,6 +238,7 @@ async fn get_prompt_preview(
                     ..Default::default()
                 }),
                 Some(&*state),
+                Some(&api_config),
                 Some(&resolved_api),
                 Some(data.pdf_read_mode == "image" && api_config.enable_image),
             )

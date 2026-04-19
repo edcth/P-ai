@@ -151,6 +151,7 @@ fn tool_loop_active_conversation_snapshot(
 fn build_tool_loop_prepared_for_continuation(
     state: &AppState,
     context: &ToolLoopAutoCompactionContext,
+    selected_api: &ApiConfig,
     resolved_api: &ResolvedApiConfig,
     transient_tool_history: &[Value],
 ) -> Result<Option<(Conversation, PreparedPrompt)>, String> {
@@ -174,6 +175,7 @@ fn build_tool_loop_prepared_for_continuation(
         context.terminal_block.clone(),
         context.chat_overrides.clone(),
         Some(state),
+        Some(selected_api),
         Some(resolved_api),
         Some(context.enable_pdf_images),
     );
@@ -572,6 +574,7 @@ async fn maybe_apply_auto_compaction_before_tool_continue_genai(
     let Some((source, prepared_before)) = build_tool_loop_prepared_for_continuation(
         state,
         context,
+        selected_api,
         resolved_api,
         transient_tool_history,
     )?
@@ -656,6 +659,7 @@ async fn maybe_apply_auto_compaction_before_tool_continue_genai(
     let Some((_compacted_source, prepared_after)) = build_tool_loop_prepared_for_continuation(
         state,
         context,
+        selected_api,
         resolved_api,
         transient_tool_history,
     )?

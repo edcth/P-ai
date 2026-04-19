@@ -43,6 +43,7 @@ include!("features/config/app_data_layout.rs");
 // ==================== 对话核心 ====================
 include!("features/chat/message_semantics.rs");
 include!("features/chat/conversation.rs");
+include!("features/chat/prompt_manager.rs");
 include!("features/chat/model_runtime.rs");
 include!("features/chat/scheduler.rs");
 include!("features/remote_im/onebot_v11_ws.rs");

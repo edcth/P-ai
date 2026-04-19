@@ -941,6 +941,16 @@ async fn send_chat_message_inner(
                 | "attachments_processed"
                 | "prepare_context.begin"
                 | "prepare_context.conversation_lock_wait_done"
+                | "prepare_context.skill_snapshot_ready"
+                | "prepare_context.workspace_agents_ready"
+                | "prepare_context.todo_guide_ready"
+                | "prepare_context.im_runtime_ready"
+                | "prepare_context.task_board_ready"
+                | "prepare_context.todo_board_ready"
+                | "prepare_context.attachment_hints_ready"
+                | "prepare_context.overrides_built"
+                | "prepare_context.terminal_block_ready"
+                | "prepare_context.prompt_build_begin"
                 | "prepare_context.prompt_built"
                 | "prepare_context.prompt_tokens_estimated"
                 | "prepare_context.done"
@@ -965,6 +975,26 @@ async fn send_chat_message_inner(
             "开始准备请求上下文".to_string()
         } else if stage == "prepare_context.conversation_lock_wait_done" {
             "会话锁等待完成".to_string()
+        } else if stage == "prepare_context.skill_snapshot_ready" {
+            "技能快照准备完成".to_string()
+        } else if stage == "prepare_context.workspace_agents_ready" {
+            "AGENTS 注入准备完成".to_string()
+        } else if stage == "prepare_context.todo_guide_ready" {
+            "Todo 指南准备完成".to_string()
+        } else if stage == "prepare_context.im_runtime_ready" {
+            "IM 运行块准备完成".to_string()
+        } else if stage == "prepare_context.task_board_ready" {
+            "任务板准备完成".to_string()
+        } else if stage == "prepare_context.todo_board_ready" {
+            "会话 Todo 板准备完成".to_string()
+        } else if stage == "prepare_context.attachment_hints_ready" {
+            "附件提示块准备完成".to_string()
+        } else if stage == "prepare_context.overrides_built" {
+            "提示词附加块准备完成".to_string()
+        } else if stage == "prepare_context.terminal_block_ready" {
+            "终端环境块准备完成".to_string()
+        } else if stage == "prepare_context.prompt_build_begin" {
+            "开始生成提示词主结构".to_string()
         } else if stage == "prepare_context.prompt_built" {
             "提示词主结构生成完成".to_string()
         } else if stage == "prepare_context.prompt_tokens_estimated" {
@@ -2004,22 +2034,26 @@ async fn send_chat_message_inner(
         chat_overrides
             .system_preamble_blocks
             .push(build_hidden_skill_snapshot_block_for_department(&state, current_department));
+        log_run_stage("prepare_context.skill_snapshot_ready");
         if let Some(workspace_agents_block) = build_workspace_agents_md_block(&conversation, &state) {
             chat_overrides
                 .system_preamble_blocks
                 .push(workspace_agents_block);
         }
+        log_run_stage("prepare_context.workspace_agents_ready");
         if todo_enabled {
             chat_overrides
                 .system_preamble_blocks
                 .push(build_todo_guide_block());
         }
+        log_run_stage("prepare_context.todo_guide_ready");
         if let Some(runtime_block) = build_remote_im_activation_runtime_block(
             &remote_im_activation_sources,
             &app_config.ui_language,
         ) {
             chat_overrides.system_preamble_blocks.push(runtime_block);
         }
+        log_run_stage("prepare_context.im_runtime_ready");
         if !trigger_only {
             chat_overrides.latest_user_text = Some(latest_user_text.clone());
             if !is_delegate_conversation {
@@ -2027,11 +2061,13 @@ async fn send_chat_message_inner(
                     chat_overrides.latest_user_extra_blocks.push(task_board);
                 }
             }
+            log_run_stage("prepare_context.task_board_ready");
             if todo_enabled {
                 if let Some(todo_board) = build_conversation_todo_board_block(&conversation) {
                     chat_overrides.latest_user_extra_blocks.push(todo_board);
                 }
             }
+            log_run_stage("prepare_context.todo_board_ready");
             let attachment_meta = normalize_payload_attachments(input.payload.attachments.as_ref());
             for item in attachment_meta {
                 let relative_path = item
@@ -2047,6 +2083,7 @@ async fn send_chat_message_inner(
                     relative_path
                 ));
             }
+            log_run_stage("prepare_context.attachment_hints_ready");
             chat_overrides.latest_images = Some(effective_images.clone());
             chat_overrides.latest_audios = Some(effective_audios.clone());
         }
@@ -2058,6 +2095,7 @@ async fn send_chat_message_inner(
         };
         let chat_overrides = Some(chat_overrides);
         let terminal_block = terminal_prompt_trusted_roots_block(&state, &selected_api, Some(&conversation));
+        log_run_stage("prepare_context.terminal_block_ready");
         log_run_stage("prepare_context.prompt_build_begin");
         let mut prepared_prompt = build_prepared_prompt_for_mode(
             prompt_mode,
@@ -2074,6 +2112,7 @@ async fn send_chat_message_inner(
             terminal_block.clone(),
             chat_overrides.clone(),
             Some(&state),
+            Some(&selected_api),
             Some(&resolved_api),
             Some(snapshot.enable_pdf_images),
         );

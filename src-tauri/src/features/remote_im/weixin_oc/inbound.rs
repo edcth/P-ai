@@ -136,21 +136,13 @@ async fn run_single_weixin_oc_poll_cycle(
     channel_id: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    let channel = {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-        let config = state_read_config_cached(state)?;
-        let channel = config
-            .remote_im_channels
-            .iter()
-            .find(|item| item.id == channel_id)
-            .cloned()
-            .ok_or_else(|| format!("个人微信渠道不存在: {channel_id}"))?;
-        drop(guard);
-        channel
-    };
+    let config = state_read_config_cached(state)?;
+    let channel = config
+        .remote_im_channels
+        .iter()
+        .find(|item| item.id == channel_id)
+        .cloned()
+        .ok_or_else(|| format!("个人微信渠道不存在: {channel_id}"))?;
     let creds = WeixinOcCredentials::from_value(&channel.credentials);
     let token = creds.token.trim().to_string();
     if token.is_empty() {
@@ -199,10 +191,6 @@ async fn run_single_weixin_oc_poll_cycle(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
         let mut writable = state_read_config_cached(state)?;
         if let Some(writable_channel) = writable
             .remote_im_channels
@@ -217,7 +205,6 @@ async fn run_single_weixin_oc_poll_cycle(
                 state_write_config_cached(state, &writable)?;
             }
         }
-        drop(guard);
     }
     for msg in data.msgs.unwrap_or_default() {
         handle_weixin_oc_inbound_message(&channel, state, msg).await?;

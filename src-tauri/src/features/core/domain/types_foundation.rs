@@ -102,12 +102,6 @@ fn highest_instruction() -> &'static HighestInstruction {
 
 fn highest_instruction_markdown() -> String {
     let source = highest_instruction();
-    let title = source.title.trim();
-    let title = if title.is_empty() {
-        "系统准则"
-    } else {
-        title
-    };
     let mut out = String::new();
     for rule in &source.rules {
         let line = rule.trim();
@@ -116,7 +110,7 @@ fn highest_instruction_markdown() -> String {
             out.push('\n');
         }
     }
-    prompt_xml_block(title, out)
+    prompt_xml_block("system rules", out)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

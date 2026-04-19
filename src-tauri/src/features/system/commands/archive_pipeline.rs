@@ -691,7 +691,8 @@ async fn summarize_archived_conversation_with_model_v2(
             ..ChatPromptOverrides::default()
         }),
         Some(state),
-        None,
+        Some(selected_api),
+        Some(resolved_api),
         None,
     );
     prepared.latest_images.clear();
