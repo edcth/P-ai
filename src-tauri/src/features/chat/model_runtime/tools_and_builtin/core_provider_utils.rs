@@ -110,6 +110,9 @@ fn tool_enabled(
     if !selected_api.enable_tools {
         return false;
     }
+    if tool_forced_by_department(current_department, id) {
+        return true;
+    }
     if let Some(tool) = agent.tools.iter().find(|tool| tool.id == id) {
         return tool.enabled;
     }

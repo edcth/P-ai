@@ -445,6 +445,11 @@ function isToolRunning(id: string): boolean {
   return false;
 }
 
+function toolForcedByDepartment(id: string): boolean {
+  const departmentId = String(currentDepartment.value?.id || "").trim();
+  return departmentId === "remote-customer-service-department" && id === "remote_im_send";
+}
+
 function toolParameterSummary(id: string): string[] {
   const definition = definitionById(id);
   const parameters = definition?.function?.parameters;
@@ -497,13 +502,13 @@ const toolListItems = computed<ToolListItem[]>(() =>
   toolDefinitions.value.map((definition) => {
     const id = String(definition.function?.name || "").trim();
     const matched = normalizeToolBindings(props.selectedPersona?.tools).find((tool) => tool.id === id);
-    const enabled = matched ? !!matched.enabled : true;
+    const enabled = toolForcedByDepartment(id) || (matched ? !!matched.enabled : true);
     return {
       id,
       name: id,
       description: String(definition.function?.description || t("config.tools.descGeneric")),
       enabled,
-      toggleDisabled: toolSwitchDisabled(id),
+      toggleDisabled: toolForcedByDepartment(id) || toolSwitchDisabled(id),
       running: isToolRunning(id),
       statusClass: statusDotClass(id),
       statusTitle: statusText(id),

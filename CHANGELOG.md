@@ -1,5 +1,9 @@
 # 变更日志
 
+## 更新：远程客服部门强制启用回复决策工具
+
+- 修复（remote-customer-service-force-remote-im-send）：远程客服部门下的 `remote_im_send` 不再被误判为“部门不允许”或“当前人格未启用”；现在该工具在远程客服部门中按业务语义强制可用，工具状态页会明确显示“远程客服部门已强制启用远程联系人回复决策工具（支持 list/send/no_reply）”，并在前端禁用对这个开关的误操作切换，避免出现“办事指南要求必须使用，但工具面板显示被禁用”的自相矛盾
+
 ## 更新：远程客服内置部门与默认办事指南
 
 - 修复（remote-customer-service-built-in-defaults）：废除内置“前台”部门，新增内置“远程客服”部门，并将远程联系人默认绑定部门改为 `remote-customer-service-department`；旧配置里已经存在的 `front-desk-department` 不做删除或迁移，仅取消其内置部门身份，避免误动用户历史数据

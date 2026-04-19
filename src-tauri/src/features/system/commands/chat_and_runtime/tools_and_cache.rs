@@ -46,8 +46,11 @@ fn check_tools_status(
             .iter()
             .map(|tool| {
                 let restricted_reason = tool_restricted_by_department(current_department, &tool.id);
+                let forced_by_department = tool_forced_by_department(current_department, &tool.id);
                 let detail = if let Some(reason) = restricted_reason.clone() {
                     reason
+                } else if forced_by_department {
+                    "远程客服部门已强制启用该工具。".to_string()
                 } else if tool.id == "screenshot" {
                     "旧 screenshot 工具已并入 operate，请改用 operate。".to_string()
                 } else if tool.enabled {
@@ -59,6 +62,8 @@ fn check_tools_status(
                     id: tool.id.clone(),
                     status: if restricted_reason.is_some() {
                         "unavailable".to_string()
+                    } else if forced_by_department {
+                        "loaded".to_string()
                     } else if tool.enabled {
                         if tool.id == "screenshot" { "unavailable".to_string() } else { "loaded".to_string() }
                     } else {
@@ -85,6 +90,7 @@ fn check_tools_status(
     let runtime_shell = terminal_shell_for_state(&state);
     let mut statuses = Vec::new();
     for tool in selected_tools {
+        let forced_by_department = tool_forced_by_department(current_department, &tool.id);
         if let Some(reason) = tool_restricted_by_department(current_department, &tool.id) {
             statuses.push(ToolLoadStatus {
                 id: tool.id,
@@ -93,7 +99,7 @@ fn check_tools_status(
             });
             continue;
         }
-        if !tool.enabled {
+        if !tool.enabled && !forced_by_department {
             statuses.push(ToolLoadStatus {
                 id: tool.id,
                 status: "disabled".to_string(),
@@ -122,7 +128,11 @@ fn check_tools_status(
             ),
             "remote_im_send" => (
                 "loaded".to_string(),
-                "远程联系人通讯工具可用（支持 list/send）".to_string(),
+                if forced_by_department {
+                    "远程客服部门已强制启用远程联系人回复决策工具（支持 list/send/no_reply）".to_string()
+                } else {
+                    "远程联系人通讯工具可用（支持 list/send/no_reply）".to_string()
+                },
             ),
             "read_file" => (
                 "loaded".to_string(),

@@ -297,6 +297,9 @@ fn tool_restricted_by_department(
     if is_assistant {
         return None;
     }
+    if department.id == REMOTE_CUSTOMER_SERVICE_DEPARTMENT_ID && tool_id == "remote_im_send" {
+        return None;
+    }
     if !matches!(
         tool_id,
         "command" | "screenshot" | "operate" | "task" | "delegate" | "remote_im_send"
@@ -312,6 +315,16 @@ fn tool_restricted_by_department(
     Some(format!(
         "因为当前人格在 {department_name} 部门，本工具不被允许"
     ))
+}
+
+fn tool_forced_by_department(
+    department: Option<&DepartmentConfig>,
+    tool_id: &str,
+) -> bool {
+    let Some(department) = department else {
+        return false;
+    };
+    department.id == REMOTE_CUSTOMER_SERVICE_DEPARTMENT_ID && tool_id == "remote_im_send"
 }
 
 fn user_persona_name(data: &AppData) -> String {
