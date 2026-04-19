@@ -94,32 +94,27 @@ export function useAppWatchers(options: UseAppWatchersOptions) {
     () => [
       options.configTab.value,
       options.toolApiConfig.value?.id ?? "",
-      options.personaEditorId.value,
+      options.assistantDepartmentAgentId.value,
       options.toolApiConfig.value?.enableTools,
       options.toolApiConfig.value?.enableImage,
-      (options.personas.value.find((item) => item.id === options.personaEditorId.value)?.tools ?? [])
-        .map((tool) => `${tool.id}:${tool.enabled ? 1 : 0}`)
-        .join("|"),
+      String(options.config.terminalShellKind || ""),
+      JSON.stringify(
+        (options.config.departments || []).map((item) => ({
+          id: item.id,
+          apiConfigId: item.apiConfigId,
+          agentIds: [...(item.agentIds || [])],
+          permissionControl: item.permissionControl ?? null,
+        })),
+      ),
     ],
-    async ([tab, id, enabled]) => {
+    async ([tab, id]) => {
       if (tab !== "tools") return;
-      if (id && !enabled) {
-        options.toolStatuses.value = (
-          options.personas.value.find((item) => item.id === options.personaEditorId.value)?.tools ?? []
-        ).map((tool) => ({
-          id: tool.id,
-          status: "disabled",
-          detail: options.t("config.tools.disabledHint"),
-        }));
-        return;
-      }
+      if (!id) return;
       try {
         await options.refreshToolsStatus();
       } catch (error) {
         console.error("[WATCH] refreshToolsStatus failed:", error);
-        options.toolStatuses.value = (
-          options.personas.value.find((item) => item.id === options.personaEditorId.value)?.tools ?? []
-        ).map((tool) => ({
+        options.toolStatuses.value = options.defaultApiTools().map((tool) => ({
           id: tool.id,
           status: "failed",
           detail: String(error),

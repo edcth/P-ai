@@ -221,7 +221,7 @@ async fn assemble_runtime_tools(
         ));
     }
 
-    match attach_enabled_mcp_tools_for_runtime(&mut tools, app_state).await {
+    match attach_enabled_mcp_tools_for_runtime(&mut tools, app_state, current_department).await {
         Ok(outcome) => {
             unavailable_tool_notices.extend(outcome.unavailable_tool_notices);
             if outcome.attached_tool_names.is_empty() {

@@ -1,6 +1,6 @@
 <template>
-  <div class="relative flex h-full min-h-0 flex-col gap-3">
-    <div class="shrink-0 px-4 pt-4">
+  <SettingsStickyLayout>
+    <template #header>
       <div class="flex flex-col gap-3">
         <div class="join w-full">
           <button v-for="tab in capabilityTabs" :key="tab.id" class="btn btn-sm join-item flex-1" type="button"
@@ -37,10 +37,9 @@
           </button>
         </div>
       </div>
-    </div>
+    </template>
 
-    <div class="min-h-0 flex-1 overflow-y-auto pb-24">
-      <div v-if="selectedProvider" class="grid gap-3 pr-1">
+    <div v-if="selectedProvider" class="grid gap-3">
         <div class="card bg-base-100 border border-base-300">
           <div class="card-body gap-3 p-4">
             <div class="flex items-center justify-between gap-2">
@@ -288,8 +287,6 @@
             </div>
           </div>
         </div>
-      </div>
-    </div>
     <dialog class="modal" :class="{ 'modal-open': providerDeleteDialogOpen }">
       <div class="modal-box max-w-sm">
         <h3 class="text-lg font-semibold">{{ t("config.api.deleteProviderTitle") }}</h3>
@@ -307,6 +304,7 @@
         <button type="submit">close</button>
       </form>
     </dialog>
+  </SettingsStickyLayout>
 </template>
 
 <script setup lang="ts">
@@ -314,6 +312,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ChevronDown, ExternalLink, Eye, EyeOff, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
 import type { ApiModelConfigItem, ApiProviderConfigItem, ApiRequestFormat, AppConfig, CodexAuthMode, CodexAuthStatus } from "../../../../types/app";
+import SettingsStickyLayout from "../../components/SettingsStickyLayout.vue";
 import { invokeTauri } from "../../../../services/tauri-api";
 import CodexProviderPanel from "./CodexProviderPanel.vue";
 

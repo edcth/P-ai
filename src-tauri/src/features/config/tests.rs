@@ -281,6 +281,7 @@
                     is_built_in_assistant: true,
                     source: default_main_source(),
                     scope: default_global_scope(),
+                    permission_control: DepartmentPermissionControl::default(),
                 },
                 DepartmentConfig {
                     id: "department-research".to_string(),
@@ -296,6 +297,7 @@
                     is_built_in_assistant: false,
                     source: default_main_source(),
                     scope: default_global_scope(),
+                    permission_control: DepartmentPermissionControl::default(),
                 },
             ],
             api_configs: vec![
@@ -424,6 +426,7 @@
                 is_built_in_assistant: true,
                 source: default_main_source(),
                 scope: default_global_scope(),
+                permission_control: DepartmentPermissionControl::default(),
             }],
             api_configs: vec![ApiConfig {
                 id: "chat-a".to_string(),

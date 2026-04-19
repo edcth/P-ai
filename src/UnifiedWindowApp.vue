@@ -1346,7 +1346,9 @@ const selectedPersonaEditor = computed(
   () => personas.value.find((p) => p.id === personaEditorId.value) ?? null,
 );
 const toolDepartment = computed(() =>
-  config.departments.find((item) => (item.agentIds || []).includes(personaEditorId.value)) ?? null,
+  config.departments.find((item) => item.id === "assistant-department" || item.isBuiltInAssistant)
+  ?? config.departments.find((item) => (item.agentIds || []).includes(assistantDepartmentAgentId.value))
+  ?? null,
 );
 const toolApiConfig = computed(() =>
   config.apiConfigs.find((a) => a.id === (toolDepartment.value?.apiConfigId || "")) ?? null,
@@ -1793,10 +1795,9 @@ const {
   setStatusError,
   personas,
   assistantDepartmentAgentId,
-  personaEditorId,
   avatarSaving,
   avatarError,
-  toolPersona: selectedPersonaEditor,
+  toolAgentId: assistantDepartmentAgentId,
   selectedApiConfig,
   selectedApiProvider,
   refreshingModels,

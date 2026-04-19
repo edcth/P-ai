@@ -201,6 +201,23 @@ pub(crate) fn render_skill_summary(skills: &[SkillSummaryItem]) -> String {
     lines.join("\n")
 }
 
+fn filter_skills_for_department(
+    department: Option<&DepartmentConfig>,
+    skills: &[SkillSummaryItem],
+) -> Vec<SkillSummaryItem> {
+    skills
+        .iter()
+        .filter(|item| {
+            department_permission_allows_any_name(
+                department,
+                DepartmentPermissionCategory::Skill,
+                &[item.name.as_str()],
+            )
+        })
+        .cloned()
+        .collect()
+}
+
 fn render_hidden_skill_snapshot_block(
     state: &AppState,
     skills: &[SkillSummaryItem],
@@ -268,6 +285,25 @@ pub(crate) fn build_hidden_skill_snapshot_block(state: &AppState) -> String {
     match state.hidden_skill_snapshot_cache.lock() {
         Ok(guard) if !guard.trim().is_empty() => guard.clone(),
         _ => String::new(),
+    }
+}
+
+pub(crate) fn build_hidden_skill_snapshot_block_for_department(
+    state: &AppState,
+    department: Option<&DepartmentConfig>,
+) -> String {
+    if department
+        .map(|item| !item.permission_control.enabled)
+        .unwrap_or(true)
+    {
+        return build_hidden_skill_snapshot_block(state);
+    }
+    match load_workspace_skill_summaries_with_errors(state) {
+        Ok((skills, _errors)) => {
+            let filtered = filter_skills_for_department(department, &skills);
+            render_hidden_skill_snapshot_block(state, &filtered, None)
+        }
+        Err(err) => render_hidden_skill_snapshot_block(state, &[], Some(err.as_str())),
     }
 }
 

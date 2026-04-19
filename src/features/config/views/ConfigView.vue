@@ -58,7 +58,7 @@
 
     <div
       class="flex-1 min-w-0"
-      :class="props.configTab === 'api' ? 'flex min-h-0 flex-col overflow-hidden' : 'overflow-y-auto scrollbar-gutter-stable'"
+      :class="props.configTab === 'api' || props.configTab === 'department' ? 'flex min-h-0 flex-col overflow-hidden' : 'overflow-y-auto scrollbar-gutter-stable'"
     >
       <div v-if="props.configTab === 'api'" class="flex-1 min-h-0">
         <ApiTab
@@ -75,6 +75,19 @@
           :normalize-api-bindings-action="normalizeApiBindingsAction"
           :last-saved-config-json="props.lastSavedConfigJson"
           @refresh-models="$emit('refreshModels')"
+        />
+      </div>
+
+      <div v-else-if="props.configTab === 'department'" class="flex-1 min-h-0">
+        <DepartmentTab
+          :config="config"
+          :api-configs="config.apiConfigs"
+          :personas="assistantPersonas"
+          :assistant-department-agent-id="assistantDepartmentAgentId"
+          :saving-config="savingConfig"
+          :save-config-action="saveConfigAction"
+          :set-status-action="setStatusAction"
+          @update:assistant-department-assignee-id="$emit('update:assistantDepartmentAgentId', $event)"
         />
       </div>
 
@@ -107,16 +120,10 @@
           v-else-if="props.configTab === 'tools'"
           :config="config"
           :personas="assistantPersonas"
-          :persona-editor-id="personaEditorId"
-          :selected-persona="toolPersona"
           :tool-api-config="toolApiConfig"
           :tool-statuses="toolStatuses"
           :saving-config="savingConfig"
-          @update:persona-editor-id="$emit('update:personaEditorId', $event)"
-          @tool-switch-changed="$emit('toolSwitchChanged')"
           @save-api-config="onSaveToolsConfig"
-          @save-personas="$emit('savePersonas')"
-          @open-memory-viewer="$emit('update:configTab', 'memory')"
         />
         <McpTab
           v-else-if="props.configTab === 'mcp'"
@@ -176,18 +183,6 @@
           :config="config"
           :save-config-action="saveConfigAction"
           :set-status-action="setStatusAction"
-        />
-
-        <DepartmentTab
-          v-else-if="props.configTab === 'department'"
-          :config="config"
-          :api-configs="config.apiConfigs"
-          :personas="assistantPersonas"
-          :assistant-department-agent-id="assistantDepartmentAgentId"
-          :saving-config="savingConfig"
-          :save-config-action="saveConfigAction"
-          :set-status-action="setStatusAction"
-          @update:assistant-department-assignee-id="$emit('update:assistantDepartmentAgentId', $event)"
         />
 
         <MemoryTab

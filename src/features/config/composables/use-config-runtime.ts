@@ -16,10 +16,9 @@ type UseConfigRuntimeOptions = {
   setStatusError: (key: string, error: unknown) => void;
   personas: Ref<PersonaProfile[]>;
   assistantDepartmentAgentId: Ref<string>;
-  personaEditorId: Ref<string>;
+  toolAgentId: Readonly<Ref<string>>;
   avatarSaving: Ref<boolean>;
   avatarError: Ref<string>;
-  toolPersona: ComputedRef<PersonaProfile | null>;
   selectedApiConfig: ComputedRef<ApiConfigItem | null>;
   selectedApiProvider: ComputedRef<ApiProviderConfigItem | null>;
   refreshingModels: Ref<boolean>;
@@ -192,7 +191,7 @@ export function useConfigRuntime(options: UseConfigRuntimeOptions) {
   }
 
   async function refreshToolsStatus() {
-    const agentId = String(options.toolPersona.value?.id || "").trim();
+    const agentId = String(options.toolAgentId.value || "").trim();
     if (!agentId) return;
     options.checkingToolsStatus.value = true;
     try {

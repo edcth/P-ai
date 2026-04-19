@@ -235,9 +235,80 @@ async fn builtin_tool_definitions_for_frontend(
     out
 }
 
+fn department_permission_catalog_item(name: &str, description: &str) -> Option<DepartmentPermissionCatalogItem> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(DepartmentPermissionCatalogItem {
+        name: name.to_string(),
+        description: description.trim().to_string(),
+    })
+}
+
+fn sorted_unique_catalog_items(
+    values: impl IntoIterator<Item = DepartmentPermissionCatalogItem>,
+) -> Vec<DepartmentPermissionCatalogItem> {
+    let mut out = values.into_iter().collect::<Vec<_>>();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.dedup_by(|a, b| a.name == b.name);
+    out
+}
+
 #[tauri::command]
 async fn list_tool_catalog(state: State<'_, AppState>) -> Result<Vec<FrontendToolDefinition>, String> {
     Ok(builtin_tool_definitions_for_frontend(state.inner()).await)
+}
+
+#[tauri::command]
+async fn list_department_permission_catalog(
+    state: State<'_, AppState>,
+) -> Result<DepartmentPermissionCatalog, String> {
+    let builtin_tools = sorted_unique_catalog_items(
+        builtin_tool_definitions_for_frontend(state.inner())
+            .await
+            .into_iter()
+            .filter_map(|item| {
+                department_permission_catalog_item(
+                    &item.function.name,
+                    &item.function.description,
+                )
+            }),
+    );
+
+    let guard = state
+        .conversation_lock
+        .lock()
+        .map_err(|err| named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err))?;
+    let skills = load_workspace_skill_summaries_with_errors(&state)
+        .map(|(skills, _errors)| {
+            sorted_unique_catalog_items(skills.into_iter().filter_map(|item| {
+                department_permission_catalog_item(&item.name, &item.description)
+            }))
+        })
+        .unwrap_or_default();
+    let mcp_tools = sorted_unique_catalog_items(
+        load_workspace_mcp_servers(&state)?
+            .into_iter()
+            .flat_map(|server| {
+                let server_name = server.name.clone();
+                list_tools_from_runtime_or_policy(&server)
+                    .into_iter()
+                    .filter_map(move |tool| {
+                        department_permission_catalog_item(
+                            &format!("{}::{}", server_name, tool.tool_name),
+                            &tool.description,
+                        )
+                    })
+            }),
+    );
+    drop(guard);
+
+    Ok(DepartmentPermissionCatalog {
+        builtin_tools,
+        skills,
+        mcp_tools,
+    })
 }
 
 #[cfg(test)]

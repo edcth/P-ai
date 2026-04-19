@@ -1,5 +1,12 @@
 # 变更日志
 
+## 更新：部门权限白黑名单与工具页去人格化
+
+- 功能（department-permission-control-and-tools-page-readonly）：部门配置新增 `permissionControl` 草稿字段，支持白名单 / 黑名单两种机制，并分别按名称存储 `builtinToolNames / skillNames / mcpToolNames`；运行时装配阶段会统一按部门权限过滤内置工具、Skill 快照与 MCP 工具，名称即使与当前目录不匹配也允许保留存储，只在“实际可发现项”上做白名单保留或黑名单排除
+- 功能（department-permission-catalog-and-ui）：后端新增部门权限目录查询能力，统一下发内置工具、技能与 MCP 工具的名称与说明；部门页新增权限控制卡，支持草稿编辑、黑白名单切换、模式说明、说明截断、自定义选中态样式，以及“恢复初始化”时同步重置默认权限配置
+- 重构（tools-page-system-catalog-only）：工具页不再按人格切换或绑定工具开关，改为只读的系统工具展示页；工具可用性从“人格 tools 配置”切换为“系统默认工具 + 部门权限”联合决定，前端工具页文案同步收口为“部门权限到部门去修改”
+- 优化（config-sticky-layout-and-department-draft-mode）：抽出 `SettingsStickyLayout` 公共固定头部容器，统一供应商页与部门页的“顶部固定、下方滚动”布局；部门页改为显式保存的草稿模式，字段编辑、模型候选与权限勾选都先落本地草稿，点击保存后才真正写回配置
+
 ## 更新：远程客服部门强制启用回复决策工具
 
 - 修复（remote-customer-service-force-remote-im-send）：远程客服部门下的 `remote_im_send` 不再被误判为“部门不允许”或“当前人格未启用”；现在该工具在远程客服部门中按业务语义强制可用，工具状态页会明确显示“远程客服部门已强制启用远程联系人回复决策工具（支持 list/send/no_reply）”，并在前端禁用对这个开关的误操作切换，避免出现“办事指南要求必须使用，但工具面板显示被禁用”的自相矛盾

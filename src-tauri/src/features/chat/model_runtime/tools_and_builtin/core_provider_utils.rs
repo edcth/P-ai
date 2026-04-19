@@ -97,7 +97,7 @@ fn tool_failure_result_json(tool_name: &str, err_text: &str) -> String {
 
 fn tool_enabled(
     selected_api: &ApiConfig,
-    agent: &AgentProfile,
+    _agent: &AgentProfile,
     current_department: Option<&DepartmentConfig>,
     id: &str,
 ) -> bool {
@@ -113,7 +113,14 @@ fn tool_enabled(
     if tool_forced_by_department(current_department, id) {
         return true;
     }
-    if let Some(tool) = agent.tools.iter().find(|tool| tool.id == id) {
+    if !department_permission_allows_any_name(
+        current_department,
+        DepartmentPermissionCategory::BuiltinTool,
+        &[id],
+    ) {
+        return false;
+    }
+    if let Some(tool) = default_agent_tools().iter().find(|tool| tool.id == id) {
         return tool.enabled;
     }
     true
@@ -190,5 +197,27 @@ mod core_provider_utils_tests {
                 .unwrap_or_default()
                 .contains("工具 `remote_im_send` 调用失败")
         );
+    }
+
+    #[test]
+    fn tool_enabled_should_use_system_defaults_instead_of_agent_specific_tool_flags() {
+        let mut api = AppConfig::default()
+            .api_configs
+            .into_iter()
+            .next()
+            .expect("default api config");
+        api.enable_tools = true;
+        api.enable_image = true;
+
+        let mut agent = default_agent();
+        if let Some(tool) = agent.tools.iter_mut().find(|tool| tool.id == "fetch") {
+            tool.enabled = false;
+        }
+        if let Some(tool) = agent.tools.iter_mut().find(|tool| tool.id == "remote_im_send") {
+            tool.enabled = true;
+        }
+
+        assert!(tool_enabled(&api, &agent, None, "fetch"));
+        assert!(!tool_enabled(&api, &agent, None, "remote_im_send"));
     }
 }

@@ -288,33 +288,145 @@ fn department_for_agent_id<'a>(
         })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DepartmentPermissionCategory {
+    BuiltinTool,
+    Skill,
+    McpTool,
+}
+
+fn normalize_department_permission_mode(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "whitelist" => "whitelist".to_string(),
+        _ => "blacklist".to_string(),
+    }
+}
+
+fn normalize_department_permission_names(values: &[String]) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    let mut seen = std::collections::HashSet::<String>::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
+fn normalize_department_permission_control(
+    raw: &DepartmentPermissionControl,
+) -> DepartmentPermissionControl {
+    DepartmentPermissionControl {
+        enabled: raw.enabled,
+        mode: normalize_department_permission_mode(&raw.mode),
+        builtin_tool_names: normalize_department_permission_names(&raw.builtin_tool_names),
+        skill_names: normalize_department_permission_names(&raw.skill_names),
+        mcp_tool_names: normalize_department_permission_names(&raw.mcp_tool_names),
+    }
+}
+
+fn department_permission_candidates<'a>(
+    department: Option<&'a DepartmentConfig>,
+    category: DepartmentPermissionCategory,
+) -> Option<(&'a DepartmentPermissionControl, &'a [String])> {
+    let department = department?;
+    let control = &department.permission_control;
+    if !control.enabled {
+        return None;
+    }
+    let list = match category {
+        DepartmentPermissionCategory::BuiltinTool => &control.builtin_tool_names,
+        DepartmentPermissionCategory::Skill => &control.skill_names,
+        DepartmentPermissionCategory::McpTool => &control.mcp_tool_names,
+    };
+    Some((control, list.as_slice()))
+}
+
+fn department_permission_allows_any_name(
+    department: Option<&DepartmentConfig>,
+    category: DepartmentPermissionCategory,
+    candidate_names: &[&str],
+) -> bool {
+    let Some((control, list)) = department_permission_candidates(department, category) else {
+        return true;
+    };
+    let matches = candidate_names.iter().any(|candidate| {
+        let candidate = candidate.trim();
+        !candidate.is_empty() && list.iter().any(|item| item == candidate)
+    });
+    if normalize_department_permission_mode(&control.mode) == "whitelist" {
+        matches
+    } else {
+        !matches
+    }
+}
+
+fn department_permission_mode_label(mode: &str) -> &'static str {
+    if normalize_department_permission_mode(mode) == "whitelist" {
+        "白名单"
+    } else {
+        "黑名单"
+    }
+}
+
+fn department_permission_restricted_reason(
+    department: Option<&DepartmentConfig>,
+    category: DepartmentPermissionCategory,
+    item_name: &str,
+) -> Option<String> {
+    let Some((control, _)) = department_permission_candidates(department, category) else {
+        return None;
+    };
+    if department_permission_allows_any_name(department, category, &[item_name]) {
+        return None;
+    }
+    let category_label = match category {
+        DepartmentPermissionCategory::BuiltinTool => "工具",
+        DepartmentPermissionCategory::Skill => "Skill",
+        DepartmentPermissionCategory::McpTool => "MCP 工具",
+    };
+    Some(format!(
+        "因为当前部门权限卡采用{}机制，{} `{}` 未被允许",
+        department_permission_mode_label(&control.mode),
+        category_label,
+        item_name.trim()
+    ))
+}
+
 fn tool_restricted_by_department(
     department: Option<&DepartmentConfig>,
     tool_id: &str,
 ) -> Option<String> {
     let department = department?;
     let is_assistant = department.id == ASSISTANT_DEPARTMENT_ID || department.is_built_in_assistant;
-    if is_assistant {
-        return None;
-    }
     if department.id == REMOTE_CUSTOMER_SERVICE_DEPARTMENT_ID && tool_id == "remote_im_send" {
         return None;
     }
-    if !matches!(
-        tool_id,
-        "command" | "screenshot" | "operate" | "task" | "delegate" | "remote_im_send"
-    ) {
-        return None;
+    if !is_assistant
+        && matches!(
+            tool_id,
+            "command" | "screenshot" | "operate" | "task" | "delegate" | "remote_im_send"
+        )
+    {
+        let department_name = department.name.trim();
+        let department_name = if department_name.is_empty() {
+            "当前部门"
+        } else {
+            department_name
+        };
+        return Some(format!(
+            "因为当前人格在 {department_name} 部门，本工具不被允许"
+        ));
     }
-    let department_name = department.name.trim();
-    let department_name = if department_name.is_empty() {
-        "当前部门"
-    } else {
-        department_name
-    };
-    Some(format!(
-        "因为当前人格在 {department_name} 部门，本工具不被允许"
-    ))
+    department_permission_restricted_reason(
+        Some(department),
+        DepartmentPermissionCategory::BuiltinTool,
+        tool_id,
+    )
 }
 
 fn tool_forced_by_department(
@@ -342,4 +454,78 @@ fn user_persona_intro(data: &AppData) -> String {
         .find(|a| a.id == USER_PERSONA_ID || a.is_built_in_user)
         .map(|a| a.system_prompt.trim().to_string())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod types_storage_tests {
+    use super::*;
+
+    fn build_department_with_permission_control(
+        mode: &str,
+        builtin_tool_names: Vec<&str>,
+        skill_names: Vec<&str>,
+        mcp_tool_names: Vec<&str>,
+    ) -> DepartmentConfig {
+        let mut department = default_assistant_department("api-a");
+        department.permission_control = DepartmentPermissionControl {
+            enabled: true,
+            mode: mode.to_string(),
+            builtin_tool_names: builtin_tool_names.into_iter().map(|value| value.to_string()).collect(),
+            skill_names: skill_names.into_iter().map(|value| value.to_string()).collect(),
+            mcp_tool_names: mcp_tool_names.into_iter().map(|value| value.to_string()).collect(),
+        };
+        department
+    }
+
+    #[test]
+    fn department_permission_allows_any_name_should_handle_whitelist_and_blacklist() {
+        let whitelist = build_department_with_permission_control(
+            "whitelist",
+            vec!["fetch"],
+            vec!["workspace-guide"],
+            vec!["server-a::search"],
+        );
+        assert!(department_permission_allows_any_name(
+            Some(&whitelist),
+            DepartmentPermissionCategory::BuiltinTool,
+            &["fetch"],
+        ));
+        assert!(!department_permission_allows_any_name(
+            Some(&whitelist),
+            DepartmentPermissionCategory::BuiltinTool,
+            &["websearch"],
+        ));
+        assert!(department_permission_allows_any_name(
+            Some(&whitelist),
+            DepartmentPermissionCategory::McpTool,
+            &["server-a::search", "search"],
+        ));
+        assert!(!department_permission_allows_any_name(
+            Some(&whitelist),
+            DepartmentPermissionCategory::Skill,
+            &["mcp-setup"],
+        ));
+
+        let blacklist = build_department_with_permission_control(
+            "blacklist",
+            vec!["fetch"],
+            vec!["workspace-guide"],
+            vec!["server-a::search"],
+        );
+        assert!(!department_permission_allows_any_name(
+            Some(&blacklist),
+            DepartmentPermissionCategory::BuiltinTool,
+            &["fetch"],
+        ));
+        assert!(department_permission_allows_any_name(
+            Some(&blacklist),
+            DepartmentPermissionCategory::BuiltinTool,
+            &["websearch"],
+        ));
+        assert!(!department_permission_allows_any_name(
+            Some(&blacklist),
+            DepartmentPermissionCategory::McpTool,
+            &["server-a::search", "search"],
+        ));
+    }
 }

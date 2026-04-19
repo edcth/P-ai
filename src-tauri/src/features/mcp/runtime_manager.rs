@@ -776,6 +776,7 @@ struct McpRuntimeAttachOutcome {
 async fn attach_enabled_mcp_tools_for_runtime(
     tools: &mut Vec<Box<dyn RuntimeToolDyn>>,
     app_state: Option<&AppState>,
+    current_department: Option<&DepartmentConfig>,
 ) -> Result<McpRuntimeAttachOutcome, String> {
     let Some(state) = app_state else {
         return Ok(McpRuntimeAttachOutcome::default());
@@ -812,16 +813,23 @@ async fn attach_enabled_mcp_tools_for_runtime(
         };
         for def in defs {
             let tool_name = def.name.to_string();
+            let qualified_by_name = format!("{}::{}", server.name, tool_name);
+            let qualified_by_id = format!("{}::{}", server.id, tool_name);
             if !mcp_policy_enabled_for_tool(server, &tool_name) {
                 continue;
             }
             if !mcp_tool_allowed_by_definition(server, &tool_name) {
                 continue;
             }
+            if !department_permission_allows_any_name(
+                current_department,
+                DepartmentPermissionCategory::McpTool,
+                &[qualified_by_name.as_str(), qualified_by_id.as_str(), tool_name.as_str()],
+            ) {
+                continue;
+            }
             tools.push(boxed_mcp_runtime_tool(def, peer.clone()));
-            outcome
-                .attached_tool_names
-                .push(format!("{}::{}", server.name, tool_name));
+            outcome.attached_tool_names.push(qualified_by_name);
         }
     }
 

@@ -137,6 +137,28 @@ export type DepartmentConfig = {
   isBuiltInAssistant?: boolean;
   source?: string;
   scope?: string;
+  permissionControl?: DepartmentPermissionControl;
+};
+
+export type DepartmentPermissionMode = "whitelist" | "blacklist";
+
+export type DepartmentPermissionControl = {
+  enabled: boolean;
+  mode: DepartmentPermissionMode;
+  builtinToolNames: string[];
+  skillNames: string[];
+  mcpToolNames: string[];
+};
+
+export type DepartmentPermissionCatalogItem = {
+  name: string;
+  description: string;
+};
+
+export type DepartmentPermissionCatalog = {
+  builtinTools: DepartmentPermissionCatalogItem[];
+  skills: DepartmentPermissionCatalogItem[];
+  mcpTools: DepartmentPermissionCatalogItem[];
 };
 
 export type AppConfig = {

@@ -66,6 +66,11 @@ function mapDepartmentConfig(item: unknown): AppConfig["departments"][number] {
     : [];
   const legacyApiConfigId = String((item as { apiConfigId?: unknown })?.apiConfigId || "").trim();
   const normalizedApiConfigIds = Array.from(new Set((apiConfigIds.length > 0 ? apiConfigIds : [legacyApiConfigId]).filter(Boolean)));
+  const permissionControlRaw = (item as { permissionControl?: Record<string, unknown> | null })?.permissionControl;
+  const normalizeNameList = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? Array.from(new Set(value.map((v) => String(v || "").trim()).filter(Boolean)))
+      : [];
   return {
     id: String((item as { id?: unknown })?.id || "").trim(),
     name: String((item as { name?: unknown })?.name || "").trim(),
@@ -82,6 +87,13 @@ function mapDepartmentConfig(item: unknown): AppConfig["departments"][number] {
     isBuiltInAssistant: !!(item as { isBuiltInAssistant?: unknown })?.isBuiltInAssistant,
     source: String((item as { source?: unknown })?.source || "").trim() || "main_config",
     scope: String((item as { scope?: unknown })?.scope || "").trim() || "global",
+    permissionControl: {
+      enabled: !!permissionControlRaw?.enabled,
+      mode: String(permissionControlRaw?.mode || "").trim() === "whitelist" ? "whitelist" : "blacklist",
+      builtinToolNames: normalizeNameList(permissionControlRaw?.builtinToolNames),
+      skillNames: normalizeNameList(permissionControlRaw?.skillNames),
+      mcpToolNames: normalizeNameList(permissionControlRaw?.mcpToolNames),
+    },
   };
 }
 

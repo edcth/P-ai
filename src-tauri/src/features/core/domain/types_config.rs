@@ -104,6 +104,37 @@ fn default_mcp_servers() -> Vec<McpServerConfig> {
     Vec::new()
 }
 
+fn default_department_permission_mode() -> String {
+    "blacklist".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DepartmentPermissionControl {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_department_permission_mode")]
+    mode: String,
+    #[serde(default)]
+    builtin_tool_names: Vec<String>,
+    #[serde(default)]
+    skill_names: Vec<String>,
+    #[serde(default)]
+    mcp_tool_names: Vec<String>,
+}
+
+impl Default for DepartmentPermissionControl {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: default_department_permission_mode(),
+            builtin_tool_names: Vec::new(),
+            skill_names: Vec::new(),
+            mcp_tool_names: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DepartmentConfig {
@@ -128,6 +159,8 @@ struct DepartmentConfig {
     source: String,
     #[serde(default = "default_global_scope")]
     scope: String,
+    #[serde(default)]
+    permission_control: DepartmentPermissionControl,
 }
 
 fn default_main_source() -> String {
@@ -167,6 +200,7 @@ fn default_assistant_department(api_config_id: &str) -> DepartmentConfig {
         is_built_in_assistant: true,
         source: default_main_source(),
         scope: default_global_scope(),
+        permission_control: DepartmentPermissionControl::default(),
     }
 }
 
@@ -191,6 +225,7 @@ fn default_deputy_department(api_config_id: &str) -> DepartmentConfig {
         is_built_in_assistant: false,
         source: default_main_source(),
         scope: default_global_scope(),
+        permission_control: DepartmentPermissionControl::default(),
     }
 }
 
@@ -215,6 +250,7 @@ fn default_remote_customer_service_department(api_config_id: &str) -> Department
         is_built_in_assistant: false,
         source: default_main_source(),
         scope: default_global_scope(),
+        permission_control: DepartmentPermissionControl::default(),
     }
 }
 

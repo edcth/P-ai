@@ -576,6 +576,7 @@ fn main() {
             codex_logout,
             check_tools_status,
             list_tool_catalog,
+            list_department_permission_catalog,
             get_image_text_cache_stats,
             clear_image_text_cache,
             list_recent_llm_round_logs,

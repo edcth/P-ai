@@ -154,9 +154,11 @@ async fn get_prompt_preview(
         .rev()
         .find(|c| !conversation_is_delegate(c) && !c.summary.trim().is_empty())
         .map(|c| c.summary.clone());
+    let current_department = department_for_agent_id(&app_config, &agent.id);
     let mut prepared = match preview_mode {
         PromptPreviewMode::Chat => {
-            let mut system_preamble_blocks = vec![build_hidden_skill_snapshot_block(&state)];
+            let mut system_preamble_blocks =
+                vec![build_hidden_skill_snapshot_block_for_department(&state, current_department)];
             if let Some(workspace_agents_block) = build_workspace_agents_md_block(&conversation, &state) {
                 system_preamble_blocks.push(workspace_agents_block);
             }

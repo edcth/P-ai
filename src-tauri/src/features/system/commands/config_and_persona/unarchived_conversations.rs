@@ -2060,6 +2060,7 @@ mod unarchived_conversations_tests {
             updated_at: "2026-04-18T10:00:00Z".to_string(),
             source: "main_config".to_string(),
             scope: "global".to_string(),
+            permission_control: DepartmentPermissionControl::default(),
         };
 
         let derived = build_derived_conversation_record_from_selection(

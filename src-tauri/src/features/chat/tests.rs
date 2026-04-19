@@ -2181,6 +2181,7 @@
             is_built_in_assistant: false,
             source: "main_config".to_string(),
             scope: "global".to_string(),
+            permission_control: DepartmentPermissionControl::default(),
         };
 
         let resolved = delegate_target_chat_api_config_ids(&app_config, &department);
@@ -2230,6 +2231,7 @@
             is_built_in_assistant: false,
             source: "main_config".to_string(),
             scope: "global".to_string(),
+            permission_control: DepartmentPermissionControl::default(),
         };
 
         let resolved = delegate_target_chat_api_config_ids(&app_config, &department);

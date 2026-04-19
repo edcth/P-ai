@@ -20,18 +20,13 @@ fn check_tools_status(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| "缺少人格 ID".to_string())?;
-    let selected_agent = data
+    data
         .agents
         .iter()
         .find(|item| item.id == target_agent_id)
         .cloned()
         .ok_or_else(|| format!("未找到人格：{target_agent_id}"))?;
-    let mut selected_tools = selected_agent.tools.clone();
-    for default_tool in default_agent_tools() {
-        if !selected_tools.iter().any(|tool| tool.id == default_tool.id) {
-            selected_tools.push(default_tool);
-        }
-    }
+    let selected_tools = default_agent_tools();
     let current_department = department_for_agent_id(&config, &target_agent_id);
 
     let effective_api_id = department_for_agent_id(&config, &target_agent_id)
@@ -54,9 +49,9 @@ fn check_tools_status(
                 } else if tool.id == "screenshot" {
                     "旧 screenshot 工具已并入 operate，请改用 operate。".to_string()
                 } else if tool.enabled {
-                    "当前人格已启用该工具，但尚未委任部门，暂不校验运行模型。".to_string()
+                    "系统默认已启用该工具，但当前尚未绑定部门运行模型。".to_string()
                 } else {
-                    "当前人格未启用该工具。".to_string()
+                    "系统默认未启用该工具。".to_string()
                 };
                 ToolLoadStatus {
                     id: tool.id.clone(),
@@ -103,7 +98,7 @@ fn check_tools_status(
             statuses.push(ToolLoadStatus {
                 id: tool.id,
                 status: "disabled".to_string(),
-                detail: "当前人格未启用该工具。".to_string(),
+                detail: "系统默认未启用该工具。".to_string(),
             });
             continue;
         }

@@ -274,6 +274,21 @@ struct ToolLoadStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DepartmentPermissionCatalogItem {
+    name: String,
+    description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DepartmentPermissionCatalog {
+    builtin_tools: Vec<DepartmentPermissionCatalogItem>,
+    skills: Vec<DepartmentPermissionCatalogItem>,
+    mcp_tools: Vec<DepartmentPermissionCatalogItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FrontendToolFunctionDefinition {
     name: String,
     description: String,
