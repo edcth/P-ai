@@ -1,9 +1,14 @@
 # 变更日志
 
+## 更新：撤回会话时恢复 Todo 状态
+
+- 修复（rewind-conversation-restore-todos）：会话撤回不再只截断消息；现在会从剩余消息里回溯最近一次 `todo` 工具调用并恢复对应 Todo 状态，若找不到历史 Todo 则清空当前 Todo；同时补发 `conversation-todos-updated` 与会话概览更新事件，确保前端撤回后立刻看到正确的 Todo 面板状态
+
 ## 更新：主工作目录 Git 幽灵快照撤回骨架
 
-- 功能（main-workspace-git-ghost-snapshot-demo）：为主工作目录 Git 幽灵快照撤回补齐基础骨架，拆出独立模块 `git_ghost_snapshot.rs`，打通“用户消息附带快照记录 / 撤回优先尝试 Git 恢复 / 非 Git 或失败自动降级”的主链路，并补充定向测试验证 provider_meta 记录与工作区恢复流程
-- 调整（main-workspace-git-ghost-snapshot-disabled）：当前版本先将 Git 幽灵快照能力默认关闭，运行时无条件跳过创建与恢复，仅保留后续继续迭代所需的最小骨架，不影响现有撤回逻辑
+- 功能（main-workspace-git-ghost-snapshot-demo）：为主工作目录 Git 幽灵快照撤回补齐实验性骨架，拆出独立模块 `git_ghost_snapshot.rs`，打通“用户消息附带快照记录 / 撤回优先尝试 Git 恢复 / 非 Git 或失败自动降级”的主链路，并补充定向测试验证 provider_meta 记录与工作区恢复流程
+- 调整（main-workspace-git-ghost-snapshot-disabled）：当前版本明确不实装 Git 幽灵快照能力，运行时无条件跳过创建与恢复，仅保留后续研究所需的最小骨架，不影响现有撤回逻辑
+- 结论（main-workspace-git-ghost-snapshot-not-adopted）：暂不采用 Git 幽灵快照作为正式撤回方案，原因是其会额外消耗性能、适用范围不够广、存在错误撤回用户后续手动更改的风险，并且当前没有观察到其相较现有工具回滚链路具有显著更好的实际效果
 
 ## 发布：v0.9.17
 

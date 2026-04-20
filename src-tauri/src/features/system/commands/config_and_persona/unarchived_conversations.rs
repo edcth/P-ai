@@ -1756,9 +1756,10 @@ fn resolve_rewind_target_conversation_index(
 fn persist_rewind_conversation_state(
     conversation: &mut Conversation,
     remove_from: usize,
-) -> Result<(usize, usize), String> {
+) -> Result<(usize, usize, Option<String>, Vec<ConversationTodoItem>), String> {
     let removed_count = conversation.messages.len().saturating_sub(remove_from);
     conversation.messages.truncate(remove_from);
+    restore_conversation_todos_after_rewind(conversation)?;
     conversation.updated_at = now_iso();
     conversation.last_user_at = conversation
         .messages
@@ -1774,7 +1775,58 @@ fn persist_rewind_conversation_state(
         .map(|m| m.created_at.clone());
     conversation.last_context_usage_ratio = 0.0;
     conversation.last_effective_prompt_tokens = 0;
-    Ok((removed_count, remove_from))
+    Ok((
+        removed_count,
+        remove_from,
+        conversation_current_todo_text(conversation),
+        conversation.current_todos.clone(),
+    ))
+}
+
+fn latest_todos_from_message_tool_history(
+    message: &ChatMessage,
+) -> Result<Option<Vec<ConversationTodoItem>>, String> {
+    for event in normalize_message_tool_history_events(message, MessageToolHistoryView::Display)
+        .into_iter()
+        .rev()
+    {
+        if event.role != "assistant" {
+            continue;
+        }
+        for call in event.tool_calls.into_iter().rev() {
+            if call.tool_name.as_deref().map(str::trim) != Some("todo") {
+                continue;
+            }
+            let raw_arguments = match &call.raw_arguments {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            let request = serde_json::from_str::<TodoWriteRequest>(&raw_arguments)
+                .map_err(|err| format!("todo 参数不是合法 JSON：{err}"))?;
+            let normalized = todo_items_normalized(&request.todos)?;
+            let stored = if !normalized.is_empty()
+                && normalized.iter().all(|item| item.status == "completed")
+            {
+                Vec::new()
+            } else {
+                normalized
+            };
+            return Ok(Some(stored));
+        }
+    }
+    Ok(None)
+}
+
+fn restore_conversation_todos_after_rewind(conversation: &mut Conversation) -> Result<(), String> {
+    let mut restored = None::<Vec<ConversationTodoItem>>;
+    for message in conversation.messages.iter().rev() {
+        if let Some(todos) = latest_todos_from_message_tool_history(message)? {
+            restored = Some(todos);
+            break;
+        }
+    }
+    conversation.current_todos = restored.unwrap_or_default();
+    Ok(())
 }
 
 #[tauri::command]
@@ -1826,7 +1878,15 @@ async fn rewind_conversation_from_message(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let idx = resolve_rewind_target_conversation_index(&data, &requested_agent_id, requested_conversation_id)?;
-    let (conversation_id, removed_count, remaining_count, mut recalled_user_message, git_snapshot) = {
+    let (
+        conversation_id,
+        removed_count,
+        remaining_count,
+        current_todo,
+        current_todos,
+        mut recalled_user_message,
+        git_snapshot,
+    ) = {
         let conversation = data
             .conversations
             .get_mut(idx)
@@ -1880,12 +1940,14 @@ async fn rewind_conversation_from_message(
                 );
             }
         }
-        let (removed_count, remaining_count) =
+        let (removed_count, remaining_count, current_todo, current_todos) =
             persist_rewind_conversation_state(conversation, remove_from)?;
         (
             conversation_id,
             removed_count,
             remaining_count,
+            current_todo,
+            current_todos,
             recalled_user_message,
             git_snapshot,
         )
@@ -1894,6 +1956,18 @@ async fn rewind_conversation_from_message(
         persist_single_conversation_runtime_fast(&state, &data, &conversation_id)?;
     }
     drop(guard);
+
+    if removed_count > 0 {
+        emit_conversation_todos_updated_payload(
+            state.inner(),
+            &ConversationTodosUpdatedPayload {
+                conversation_id: conversation_id.clone(),
+                current_todo,
+                current_todos,
+            },
+        );
+        let _ = emit_unarchived_conversation_overview_updated_from_state(state.inner());
+    }
 
     if let Some(snapshot) = git_snapshot.as_ref() {
         if snapshot.status.trim() == "created"
@@ -2010,6 +2084,115 @@ mod unarchived_conversations_tests {
             }
         }));
         message
+    }
+
+    fn build_test_todo_tool_message(
+        id: &str,
+        todos: serde_json::Value,
+        tool_result: &str,
+    ) -> ChatMessage {
+        let mut message = build_test_message(id, "");
+        message.tool_call = Some(vec![
+            serde_json::json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": format!("call_{id}"),
+                    "type": "function",
+                    "function": {
+                        "name": "todo",
+                        "arguments": serde_json::json!({ "todos": todos }),
+                    }
+                }]
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": format!("call_{id}"),
+                "content": tool_result,
+            }),
+        ]);
+        message
+    }
+
+    #[test]
+    fn persist_rewind_conversation_state_should_restore_previous_todos_from_remaining_messages() {
+        let mut conversation = build_test_conversation();
+        conversation.messages = vec![
+            ChatMessage {
+                id: "user-1".to_string(),
+                role: "user".to_string(),
+                created_at: "2026-04-18T10:00:00Z".to_string(),
+                speaker_agent_id: None,
+                parts: vec![MessagePart::Text {
+                    text: "先做任务".to_string(),
+                }],
+                extra_text_blocks: Vec::new(),
+                provider_meta: None,
+                tool_call: None,
+                mcp_call: None,
+            },
+            build_test_todo_tool_message(
+                "assistant-1",
+                serde_json::json!([
+                    { "content": "第一步", "status": "completed" },
+                    { "content": "第二步", "status": "in_progress" }
+                ]),
+                "## Current Todo List\n\n✓ 第一步\n→ 第二步",
+            ),
+            ChatMessage {
+                id: "user-2".to_string(),
+                role: "user".to_string(),
+                created_at: "2026-04-18T10:02:00Z".to_string(),
+                speaker_agent_id: None,
+                parts: vec![MessagePart::Text {
+                    text: "再做一轮".to_string(),
+                }],
+                extra_text_blocks: Vec::new(),
+                provider_meta: None,
+                tool_call: None,
+                mcp_call: None,
+            },
+            build_test_todo_tool_message(
+                "assistant-2",
+                serde_json::json!([{ "content": "新步骤", "status": "in_progress" }]),
+                "## Current Todo List\n\n→ 新步骤",
+            ),
+        ];
+        conversation.current_todos = vec![ConversationTodoItem {
+            content: "新步骤".to_string(),
+            status: "in_progress".to_string(),
+        }];
+
+        let (removed_count, remaining_count, current_todo, current_todos) =
+            persist_rewind_conversation_state(&mut conversation, 2).expect("rewind state");
+
+        assert_eq!(removed_count, 2);
+        assert_eq!(remaining_count, 2);
+        assert_eq!(current_todo.as_deref(), Some("第二步"));
+        assert_eq!(current_todos.len(), 2);
+        assert_eq!(conversation.current_todos.len(), 2);
+        assert_eq!(conversation.current_todos[0].content, "第一步");
+        assert_eq!(conversation.current_todos[0].status, "completed");
+        assert_eq!(conversation.current_todos[1].content, "第二步");
+        assert_eq!(conversation.current_todos[1].status, "in_progress");
+    }
+
+    #[test]
+    fn persist_rewind_conversation_state_should_clear_todos_when_no_history_found() {
+        let mut conversation = build_test_conversation();
+        conversation.current_todos = vec![ConversationTodoItem {
+            content: "残留步骤".to_string(),
+            status: "in_progress".to_string(),
+        }];
+
+        let (removed_count, remaining_count, current_todo, current_todos) =
+            persist_rewind_conversation_state(&mut conversation, 1).expect("rewind state");
+
+        assert_eq!(removed_count, 1);
+        assert_eq!(remaining_count, 1);
+        assert_eq!(current_todo, None);
+        assert!(current_todos.is_empty());
+        assert!(conversation.current_todos.is_empty());
     }
 
     #[test]
