@@ -1185,8 +1185,8 @@ fn prompt_recall_memory_block_for_message(
 }
 
 fn prompt_user_extra_blocks_for_message(
-    state: Option<&AppState>,
-    conversation: Option<&Conversation>,
+    _state: Option<&AppState>,
+    _conversation: Option<&Conversation>,
     message: &ChatMessage,
     _agents: &[AgentProfile],
     _prompt_user_name: &str,
@@ -1194,7 +1194,7 @@ fn prompt_user_extra_blocks_for_message(
     _include_remote_identity: bool,
     recall_memories: Option<&[MemoryEntry]>,
     seen_memory_ids: &mut HashSet<String>,
-    include_conversation_workspace: bool,
+    _include_conversation_workspace: bool,
 ) -> Vec<String> {
     let mut blocks = Vec::<String>::new();
     if let Some(recall_block) =
@@ -1233,15 +1233,6 @@ fn prompt_user_extra_blocks_for_message(
                     "用户上传了附件，文件位于你工作区的 downloads 目录（路径：{}）。\n你可以先用 shell 工具定位或查看基础文件信息；具体解析方式应按文件类型选择合适 skill 或在线检索正确方法。\n仅当用户明确要求处理该附件时再处理；若用户未明确要求，请先询问用户想如何处理。",
                     relative_path
                 ));
-            }
-        }
-    }
-    if include_conversation_workspace {
-        if let (Some(state), Some(conversation)) = (state, conversation) {
-            if let Some(workspace_block) =
-                terminal_conversation_workspaces_extra_block(state, Some(conversation))
-            {
-                blocks.push(workspace_block);
             }
         }
     }

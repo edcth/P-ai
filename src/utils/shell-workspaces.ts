@@ -4,6 +4,9 @@ const LEGACY_SYSTEM_NAMES = [
   "system workspace",
   "系统工作目录",
   "系統工作目錄",
+  "助理私人目录",
+  "助理私人目錄",
+  "assistant private workspace",
 ];
 
 const LEGACY_MAIN_NAMES = [
@@ -62,7 +65,7 @@ export function isLegacyGenericWorkspaceName(level: ShellWorkspaceLevel, name: s
 export function inferWorkspaceName(level: ShellWorkspaceLevel, path: string, index: number): string {
   const fromPath = defaultWorkspaceNameFromPath(path);
   if (fromPath) return fromPath;
-  if (level === "system") return "system";
+  if (level === "system") return "assistant-private";
   if (level === "main") return "main";
   return `secondary-${index + 1}`;
 }

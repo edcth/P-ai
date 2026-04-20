@@ -1,5 +1,10 @@
 # 变更日志
 
+## 更新：Shell 工作区提示词与目录命名统一
+
+- 修复（shell-workspace-prompt-alignment）：系统提示词中的 `<shell workspace>` 不再只显示系统级目录；现在会按当前会话直接列出助理私人目录、Shell 默认启动/执行目录以及当前允许的全部工作目录，避免前端已保存的主目录和附加目录在系统提示词预览里缺失
+- 修复（assistant-private-workspace-labeling）：对外文案统一将原“系统工作目录 / 系统目录 / system workspace”收口为“助理私人目录 / Assistant Private”，仅调整用户可见命名，不变更内部存储字段与工作区 level/id
+
 ## 更新：聊天流式草稿不再触发历史气泡重播动画
 
 - 修复（chat-history-bubble-enter-animation-regression）：聊天区消息气泡的入场动画不再无条件挂在所有消息节点上；现在只对乐观用户草稿与助理流式草稿启用入场动画，避免助理流式草稿出现时历史消息因补流 patch 重新挂载而整屏再次闪动

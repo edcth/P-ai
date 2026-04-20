@@ -303,7 +303,7 @@ fn ensure_default_shell_workspace_in_config(config: &mut AppConfig, state: &AppS
             {
                 workspace.path = default_path.clone();
                 runtime_log_info(format!(
-                    "[终端工作空间迁移] 系统工作目录路径已更新: '{}' -> '{}'",
+                    "[终端工作空间迁移] 助理私人目录路径已更新: '{}' -> '{}'",
                     candidate.display(),
                     workspace.path
                 ));
@@ -401,27 +401,6 @@ fn normalize_conversation_shell_workspaces(
             .then_with(|| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()))
     });
     rebuilt
-}
-
-fn shell_workspaces_log_summary(entries: &[ShellWorkspaceConfig]) -> String {
-    if entries.is_empty() {
-        return "[]".to_string();
-    }
-    entries
-        .iter()
-        .map(|workspace| {
-            format!(
-                "{{id='{}', name='{}', level='{}', access='{}', path='{}', built_in={}}}",
-                workspace.id.trim(),
-                workspace.name.trim(),
-                workspace.level.trim(),
-                workspace.access.trim(),
-                workspace.path.trim(),
-                workspace.built_in
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[derive(Debug, Clone)]
@@ -586,7 +565,7 @@ fn terminal_allowed_workspaces_for_conversation_canonical(
         .find(|workspace| workspace.level == SHELL_WORKSPACE_LEVEL_SYSTEM)
         .cloned()
         .or_else(|| config_workspaces.first().cloned())
-        .ok_or_else(|| "No system workspace available".to_string())?;
+        .ok_or_else(|| "No assistant private workspace available".to_string())?;
 
     let mut out = vec![system_workspace];
     let mut seen_paths = std::collections::HashSet::<String>::new();
@@ -677,7 +656,7 @@ fn terminal_system_workspace_resolved(state: &AppState) -> Result<TerminalWorksp
     terminal_config_allowed_workspaces_canonical(state)?
         .into_iter()
         .find(|workspace| workspace.level == SHELL_WORKSPACE_LEVEL_SYSTEM)
-        .ok_or_else(|| "No system workspace available".to_string())
+        .ok_or_else(|| "No assistant private workspace available".to_string())
 }
 
 fn terminal_default_workspace_resolved(state: &AppState) -> Result<TerminalWorkspaceResolved, String> {
@@ -741,7 +720,11 @@ fn terminal_match_workspace_for_session_target(
     terminal_match_workspace_for_target_in_conversation(state, conversation.as_ref(), target)
 }
 
-fn terminal_prompt_trusted_roots_block(state: &AppState, selected_api: &ApiConfig, _conversation: Option<&Conversation>) -> Option<String> {
+fn terminal_prompt_trusted_roots_block(
+    state: &AppState,
+    selected_api: &ApiConfig,
+    conversation: Option<&Conversation>,
+) -> Option<String> {
     let terminal_enabled = selected_api.enable_tools
         && selected_api
             .tools
@@ -757,7 +740,20 @@ fn terminal_prompt_trusted_roots_block(state: &AppState, selected_api: &ApiConfi
         return None;
     }
 
-    let system_workspace = terminal_system_workspace_resolved(state).ok();
+    let workspaces = conversation
+        .map(|value| terminal_allowed_workspaces_for_conversation_canonical(state, Some(value)))
+        .unwrap_or_else(|| terminal_allowed_workspaces_canonical(state))
+        .ok()
+        .unwrap_or_default();
+    let system_workspace = workspaces
+        .iter()
+        .find(|workspace| workspace.level == SHELL_WORKSPACE_LEVEL_SYSTEM)
+        .cloned()
+        .or_else(|| terminal_system_workspace_resolved(state).ok());
+    let default_workspace = conversation
+        .map(|value| terminal_default_workspace_for_conversation_resolved(state, Some(value)))
+        .unwrap_or_else(|| terminal_default_workspace_resolved(state))
+        .ok();
     let runtime_shell = terminal_shell_for_state(state);
 
     let mut lines = Vec::<String>::new();
@@ -765,72 +761,37 @@ fn terminal_prompt_trusted_roots_block(state: &AppState, selected_api: &ApiConfi
     lines.push(format!("当前 shell: {}", terminal_shell_runtime_label(&runtime_shell)));
     if let Some(system) = &system_workspace {
         lines.push(format!(
-            "系统工作目录: {} [{} / {}] {}",
+            "助理私人目录: {} [{} / {}] {}",
             system.name,
             system.level,
             system.access,
             terminal_path_for_user(&system.path)
         ));
     }
-    lines.push("exec 默认在 main > system 工作目录执行。".to_string());
+    if let Some(default_workspace) = &default_workspace {
+        lines.push(format!(
+            "Shell 默认启动/执行目录: {} [{} / {}] {}",
+            default_workspace.name,
+            default_workspace.level,
+            default_workspace.access,
+            terminal_path_for_user(&default_workspace.path)
+        ));
+    }
+    if !workspaces.is_empty() {
+        lines.push("当前允许的工作目录：".to_string());
+        for workspace in &workspaces {
+            lines.push(format!(
+                "- {} [{} / {}] {}",
+                workspace.name,
+                workspace.level,
+                workspace.access,
+                terminal_path_for_user(&workspace.path)
+            ));
+        }
+    }
     lines.push("显式绝对路径可用于读取；若绝对路径未命中任何已配置工作目录，则禁止写入。".to_string());
     lines.push("审批只用于 apply_patch 与明确写文件的终端命令；python/py 只有 full_access 才允许。".to_string());
     Some(prompt_xml_block("shell workspace", lines.join("\n")))
-}
-
-fn terminal_conversation_workspaces_extra_block(
-    state: &AppState,
-    conversation: Option<&Conversation>,
-) -> Option<String> {
-    let Some(conversation) = conversation else {
-        eprintln!("[会话工作目录注入] 跳过: 原因=conversation 为空");
-        return None;
-    };
-    let raw_summary = shell_workspaces_log_summary(&conversation.shell_workspaces);
-    let workspaces = normalize_conversation_shell_workspaces(state, &conversation.shell_workspaces);
-    eprintln!(
-        "[会话工作目录注入] 检查: conversation_id={}, 原始数量={}, 原始条目={}, 归一化数量={}, 归一化条目={}",
-        conversation.id,
-        conversation.shell_workspaces.len(),
-        raw_summary,
-        workspaces.len(),
-        shell_workspaces_log_summary(&workspaces)
-    );
-    if workspaces.is_empty() {
-        eprintln!(
-            "[会话工作目录注入] 跳过: conversation_id={}, 原因=归一化后为空",
-            conversation.id
-        );
-        return None;
-    }
-
-    let mut lines = vec!["用户为当前会话额外提供了以下工作目录：".to_string()];
-    for workspace in workspaces {
-        if workspace.level == SHELL_WORKSPACE_LEVEL_SYSTEM {
-            continue;
-        }
-        lines.push(format!(
-            "- {} [{} / {}] {}",
-            workspace.name,
-            workspace.level,
-            workspace.access,
-            workspace.path
-        ));
-    }
-    if lines.len() == 1 {
-        eprintln!(
-            "[会话工作目录注入] 跳过: conversation_id={}, 原因=归一化后仅剩 system 级目录",
-            conversation.id
-        );
-        return None;
-    }
-    let block = prompt_xml_block("conversation workspace", lines.join("\n"));
-    eprintln!(
-        "[会话工作目录注入] 生成完成: conversation_id={}, 内容={}",
-        conversation.id,
-        block
-    );
-    Some(block)
 }
 
 fn terminal_default_session_root_canonical(state: &AppState) -> Result<PathBuf, String> {
