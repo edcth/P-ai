@@ -1,5 +1,9 @@
 # 变更日志
 
+## 发布：v0.9.17
+
+- 发布（release-0.9.17）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.17`，纳入本轮“删除当前未归档会话时优先切换到相邻会话”的交互修复
+
 ## 更新：删除当前会话时立即切换相邻会话
 
 - 修复（delete-conversation-optimistic-switch）：删除或丢弃当前未归档会话时，前端现在会先按当前列表乐观切换到相邻会话，不再等待后端删除完成后才切走；若当前不存在相邻会话，则先清空前景并在删除完成后用后端返回的 `activeConversationId` 兜底恢复，避免“删当前会话后停在空白态”或切换明显滞后
