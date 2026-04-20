@@ -1983,8 +1983,27 @@ async fn send_chat_message_inner(
             }
             log_run_stage("prepare_context.memory_recall_done");
             let now = now_iso();
+            let user_message_id = Uuid::new_v4().to_string();
+            if let Some(record) = tauri::async_runtime::block_on(
+                git_ghost_snapshot::create_main_workspace_git_ghost_snapshot_record(
+                    &state,
+                    &snapshot.prompt_conversation_before,
+                    &user_message_id,
+                ),
+            ) {
+                if let Err(err) = git_ghost_snapshot::write_git_snapshot_record_into_provider_meta(
+                    &mut user_provider_meta,
+                    &record,
+                )
+                {
+                    runtime_log_error(format!(
+                        "[Git幽灵快照] 失败，conversation_id={}，message_id={}，stage=write_provider_meta，error={}",
+                        snapshot.prompt_conversation_before.id, user_message_id, err
+                    ));
+                }
+            }
             let user_message = ChatMessage {
-                id: Uuid::new_v4().to_string(),
+                id: user_message_id,
                 role: "user".to_string(),
                 created_at: now.clone(),
                 speaker_agent_id: Some(input.speaker_agent_id.clone().unwrap_or_else(|| USER_PERSONA_ID.to_string())),

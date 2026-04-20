@@ -1,5 +1,10 @@
 # 变更日志
 
+## 更新：主工作目录 Git 幽灵快照撤回骨架
+
+- 功能（main-workspace-git-ghost-snapshot-demo）：为主工作目录 Git 幽灵快照撤回补齐基础骨架，拆出独立模块 `git_ghost_snapshot.rs`，打通“用户消息附带快照记录 / 撤回优先尝试 Git 恢复 / 非 Git 或失败自动降级”的主链路，并补充定向测试验证 provider_meta 记录与工作区恢复流程
+- 调整（main-workspace-git-ghost-snapshot-disabled）：当前版本先将 Git 幽灵快照能力默认关闭，运行时无条件跳过创建与恢复，仅保留后续继续迭代所需的最小骨架，不影响现有撤回逻辑
+
 ## 发布：v0.9.17
 
 - 发布（release-0.9.17）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.17`，纳入本轮“删除当前未归档会话时优先切换到相邻会话”的交互修复

@@ -1,3 +1,8 @@
+mod git_ghost_snapshot;
+
+use git_ghost_snapshot::read_git_snapshot_record_from_provider_meta;
+use git_ghost_snapshot::restore_main_workspace_from_git_ghost_snapshot;
+
 #[tauri::command]
 fn switch_active_conversation_snapshot(
     input: SwitchActiveConversationSnapshotInput,
@@ -1773,7 +1778,7 @@ fn persist_rewind_conversation_state(
 }
 
 #[tauri::command]
-fn rewind_conversation_from_message(
+async fn rewind_conversation_from_message(
     input: RewindConversationInput,
     state: State<'_, AppState>,
 ) -> Result<RewindConversationResult, String> {
@@ -1821,7 +1826,7 @@ fn rewind_conversation_from_message(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let idx = resolve_rewind_target_conversation_index(&data, &requested_agent_id, requested_conversation_id)?;
-    let (conversation_id, removed_count, remaining_count, mut recalled_user_message) = {
+    let (conversation_id, removed_count, remaining_count, mut recalled_user_message, git_snapshot) = {
         let conversation = data
             .conversations
             .get_mut(idx)
@@ -1842,6 +1847,9 @@ fn rewind_conversation_from_message(
 
         let recalled_user_message = conversation.messages.get(remove_from).cloned();
         let removed_messages = conversation.messages[remove_from..].to_vec();
+        let git_snapshot = recalled_user_message
+            .as_ref()
+            .and_then(|message| read_git_snapshot_record_from_provider_meta(message.provider_meta.as_ref()));
         if input.undo_apply_patch {
             runtime_log_info(format!(
                 "[会话撤回] 开始工具逆向，任务=rewind_conversation_from_message，removed_messages={}，message_id={}",
@@ -1879,12 +1887,48 @@ fn rewind_conversation_from_message(
             removed_count,
             remaining_count,
             recalled_user_message,
+            git_snapshot,
         )
     };
     if removed_count > 0 {
         persist_single_conversation_runtime_fast(&state, &data, &conversation_id)?;
     }
     drop(guard);
+
+    if let Some(snapshot) = git_snapshot.as_ref() {
+        if snapshot.status.trim() == "created"
+            && snapshot
+                .ghost_commit_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some()
+        {
+            runtime_log_info(format!(
+                "[会话撤回] 开始 Git 幽灵快照恢复，任务=rewind_conversation_from_message，conversation_id={}，message_id={}，workspace={}",
+                conversation_id,
+                message_id,
+                snapshot.main_workspace_path
+            ));
+            match restore_main_workspace_from_git_ghost_snapshot(snapshot).await {
+                Ok(()) => runtime_log_info(format!(
+                    "[会话撤回] Git 幽灵快照恢复完成，任务=rewind_conversation_from_message，conversation_id={}，message_id={}，commit_id={}",
+                    conversation_id,
+                    message_id,
+                    snapshot.ghost_commit_id.as_deref().unwrap_or_default()
+                )),
+                Err(err) => runtime_log_error(format!(
+                    "[会话撤回] Git 幽灵快照恢复失败，任务=rewind_conversation_from_message，conversation_id={}，message_id={}，error={}",
+                    conversation_id, message_id, err
+                )),
+            }
+        } else {
+            runtime_log_info(format!(
+                "[会话撤回] 跳过 Git 幽灵快照恢复，任务=rewind_conversation_from_message，conversation_id={}，message_id={}，status={}",
+                conversation_id, message_id, snapshot.status
+            ));
+        }
+    }
 
     if let Some(message) = recalled_user_message.as_mut() {
         materialize_message_parts_from_media_refs(&mut message.parts, &state.data_path);
