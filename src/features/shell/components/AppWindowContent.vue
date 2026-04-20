@@ -5,7 +5,7 @@
       ? 'flex flex-col min-h-0 overflow-hidden'
       : viewMode === 'config'
         ? 'p-0 min-h-0 overflow-hidden'
-        : 'p-2 overflow-auto'"
+        : 'p-0 min-h-0 overflow-hidden'"
   >
     <ConfigView
       v-if="viewMode === 'config'"
@@ -214,6 +214,7 @@
       :remote-im-contact-conversations="remoteImContactConversations"
       :selected-remote-im-contact-id="selectedRemoteImContactId"
       :remote-im-contact-messages="remoteImContactMessages"
+      :user-alias="userAlias"
       :persona-name-map="chatPersonaNameMap"
       @load-archives="loadArchives"
       @select-archive="selectArchive"

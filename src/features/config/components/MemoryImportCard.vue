@@ -80,10 +80,10 @@
                   :key="sample.id"
                   class="rounded-box border border-base-300 bg-base-100 p-3"
                 >
-                  <div class="whitespace-pre-wrap break-words text-sm font-semibold leading-relaxed">{{ sample.judgment }}</div>
+                  <div class="whitespace-pre-wrap wrap-break-word text-sm font-semibold leading-relaxed">{{ sample.judgment }}</div>
                   <div
                     v-if="sample.reasoning"
-                    class="mt-2 border-l-2 border-base-300 pl-2 text-sm italic opacity-70 whitespace-pre-wrap break-words"
+                    class="mt-2 border-l-2 border-base-300 pl-2 text-sm italic opacity-70 whitespace-pre-wrap wrap-break-word"
                   >
                     {{ sample.reasoning }}
                   </div>

@@ -82,7 +82,7 @@
     </div>
 
     <!-- 记忆列表区 -->
-    <div class="card bg-base-100 min-h-[280px]">
+    <div class="card bg-base-100 min-h-70">
       <div class="card-body p-3 min-h-0 flex flex-col gap-3">
         <!-- 标题 + 操作 -->
         <div class="flex items-center justify-between">
@@ -151,11 +151,11 @@
                   >
                     <div class="card-body gap-2 p-3">
                       <!-- 内容 -->
-                      <div class="whitespace-pre-wrap break-words leading-relaxed text-sm font-bold">{{ memory.judgment }}</div>
+                      <div class="whitespace-pre-wrap wrap-break-word leading-relaxed text-sm font-bold">{{ memory.judgment }}</div>
 
                       <!-- 推理 -->
                       <div v-if="memory.reasoning" class="py-2">
-                        <div class="pl-2 border-l-2 border-base-300 opacity-70 whitespace-pre-wrap break-words italic text-sm">
+                        <div class="pl-2 border-l-2 border-base-300 opacity-70 whitespace-pre-wrap wrap-break-word italic text-sm">
                           {{ memory.reasoning }}
                         </div>
                       </div>

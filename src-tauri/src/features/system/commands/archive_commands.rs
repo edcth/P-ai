@@ -323,7 +323,15 @@ fn archive_first_user_preview(conversation: &Conversation, ui_language: &str) ->
     let text = conversation
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| {
+            m.role == "user"
+                && m
+                    .speaker_agent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    != Some(SYSTEM_PERSONA_ID)
+        })
         .map(|m| {
             m.parts
                 .iter()

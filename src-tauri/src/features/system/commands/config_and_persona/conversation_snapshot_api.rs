@@ -202,7 +202,15 @@ fn conversation_preview_title(conversation: &Conversation) -> String {
     let text = conversation
         .messages
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| {
+            m.role == "user"
+                && m
+                    .speaker_agent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    != Some(SYSTEM_PERSONA_ID)
+        })
         .map(|m| {
             m.parts
                 .iter()
@@ -216,10 +224,16 @@ fn conversation_preview_title(conversation: &Conversation) -> String {
         })
         .unwrap_or_default();
     let compact = clean_text(text.trim());
-    if compact.is_empty() {
+    let sentence = compact
+        .split(['。', '！', '？', '!', '?', ';', '；', '\n', '\r'])
+        .map(str::trim)
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("");
+    let preview = if sentence.is_empty() { compact.as_str() } else { sentence };
+    if preview.is_empty() {
         "无内容".to_string()
     } else {
-        compact.chars().take(12).collect::<String>()
+        preview.chars().take(12).collect::<String>()
     }
 }
 

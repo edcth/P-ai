@@ -1,180 +1,186 @@
 <template>
-  <div class="flex flex-col gap-3 h-full">
-    <div class="join w-fit">
-      <button
-        type="button"
-        class="btn btn-sm join-item"
-        :class="viewMode === 'current' ? 'btn-primary' : 'btn-ghost'"
-        @click="switchViewMode('current')"
-      >
-        {{ t("archives.currentUnarchived") }}
-      </button>
-      <button
-        type="button"
-        class="btn btn-sm join-item"
-        :class="viewMode === 'delegate' ? 'btn-primary' : 'btn-ghost'"
-        @click="switchViewMode('delegate')"
-      >
-        {{ t("archives.delegateConversations") }}
-      </button>
-      <button
-        type="button"
-        class="btn btn-sm join-item"
-        :class="viewMode === 'archive' ? 'btn-primary' : 'btn-ghost'"
-        @click="switchViewMode('archive')"
-      >
-        {{ t("archives.archivedMessages") }}
-      </button>
-      <button
-        type="button"
-        class="btn btn-sm join-item"
-        :class="viewMode === 'remoteIm' ? 'btn-primary' : 'btn-ghost'"
-        @click="switchViewMode('remoteIm')"
-      >
-        联系人消息
-      </button>
-    </div>
-    <div class="flex items-center gap-2">
-      <button class="btn bg-base-100 border-base-300 hover:bg-base-200" @click="$emit('loadArchives')">{{ t("archives.refresh") }}</button>
-      <button class="btn bg-base-100 border-base-300 hover:bg-base-200" @click="triggerArchiveImport">{{ t("archives.importJson") }}</button>
-      <button class="btn bg-base-100 border-base-300 hover:bg-base-200" :disabled="viewMode !== 'archive' || !selectedArchiveId" @click="$emit('exportArchive', { format: 'markdown' })">{{ t("archives.exportMarkdown") }}</button>
-      <button class="btn bg-base-100 border-base-300 hover:bg-base-200" :disabled="viewMode !== 'archive' || !selectedArchiveId" @click="$emit('exportArchive', { format: 'json' })">{{ t("archives.exportJson") }}</button>
-      <button
-        class="btn bg-base-100 border-base-300 hover:bg-base-200 text-error"
-        :disabled="viewMode === 'delegate' || (viewMode === 'archive' && !selectedArchiveId) || (viewMode === 'current' && !selectedUnarchivedConversationId) || (viewMode === 'remoteIm' && !selectedRemoteImContactId)"
-        @click="viewMode === 'archive' ? onDeleteArchiveClick(selectedArchiveId) : viewMode === 'remoteIm' ? onDeleteRemoteImContactClick(selectedRemoteImContactId) : onDeleteUnarchivedClick(selectedUnarchivedConversationId)"
-      >
-        {{ t("common.delete") }}
-      </button>
-      <input
-        ref="archiveImportInputRef"
-        type="file"
-        accept=".json,application/json"
-        class="hidden"
-        @change="onArchiveImportChange"
-      />
-    </div>
-    <div class="flex gap-3 flex-1 min-h-0">
-      <div class="w-56 overflow-auto">
-        <div v-if="viewMode === 'current'" class="flex flex-col gap-2">
-          <div
-            v-for="c in unarchivedConversations"
-            :key="c.conversationId"
-            class="p-2 rounded"
-            :class="[
-              c.conversationId === selectedUnarchivedConversationId ? 'bg-primary/10' : '',
-              c.runtimeState === 'organizing_context' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-base-200',
-            ]"
-            :title="c.runtimeState === 'organizing_context' ? t('archives.organizingContextDisabled') : ''"
-            @click="c.runtimeState === 'organizing_context' ? undefined : $emit('selectUnarchivedConversation', c.conversationId)"
-          >
-            <div class="font-medium truncate text-sm">{{ c.title }}</div>
-            <div class="text-sm opacity-70 truncate">{{ formatDate(c.lastMessageAt || c.updatedAt) }}</div>
-          </div>
-        </div>
-        <div v-else-if="viewMode === 'archive'" class="flex flex-col gap-2">
-          <div
-            v-for="a in archives"
-            :key="a.archiveId"
-            class="p-2 rounded cursor-pointer hover:bg-base-200"
-            :class="{ 'bg-primary/10': a.archiveId === selectedArchiveId }"
-            @click="$emit('selectArchive', a.archiveId)"
-          >
-            <div class="font-medium truncate text-sm">{{ a.title }}</div>
-            <div v-if="a.archivedAt" class="text-sm opacity-70 truncate">{{ formatDate(a.archivedAt) }}</div>
-          </div>
-        </div>
-        <div v-else-if="viewMode === 'delegate'" class="flex flex-col gap-2">
-          <div
-            v-for="c in delegateConversations"
-            :key="c.conversationId"
-            class="p-2 rounded cursor-pointer hover:bg-base-200"
-            :class="{ 'bg-primary/10': c.conversationId === selectedDelegateConversationId }"
-            @click="$emit('selectDelegateConversation', c.conversationId)"
-          >
-            <div class="font-medium truncate text-sm">{{ c.title }}</div>
-            <div class="text-sm opacity-70 truncate">{{ formatDate(c.archivedAt || c.lastMessageAt || c.updatedAt) }}</div>
-          </div>
-        </div>
-        <div v-else class="flex flex-col gap-2">
-          <div
-            v-for="c in remoteImContactConversations"
-            :key="c.contactId"
-            class="p-2 rounded cursor-pointer hover:bg-base-200"
-            :class="{ 'bg-primary/10': c.contactId === selectedRemoteImContactId }"
-            @click="$emit('selectRemoteImContactConversation', c.contactId)"
-          >
-            <div class="font-medium truncate text-sm">{{ c.contactDisplayName }}</div>
-            <div class="text-xs opacity-70 truncate">{{ c.boundDepartmentId || "-" }} · {{ c.processingMode }}</div>
-            <div class="text-sm opacity-70 truncate">{{ formatDate(c.lastMessageAt || c.updatedAt) }}</div>
-          </div>
-        </div>
-      </div>
-      <div class="flex-1 overflow-auto space-y-2">
-        <div class="text-sm opacity-70 sticky top-0 z-10 bg-base-200/90 backdrop-blur px-1 py-1">
-          {{ viewMode === "current" ? t("archives.currentUnarchived") : viewMode === "delegate" ? t("archives.delegateConversations") : viewMode === "archive" ? t("archives.archivedMessages") : "联系人消息" }}
-        </div>
-        <div
-          v-if="viewMode === 'archive' && archiveSummaryText"
-          class="border border-primary/20 rounded p-3 bg-primary/5"
+  <div class="flex h-full min-h-0 flex-col">
+    <div class="flex shrink-0 flex-col items-center gap-2 p-2">
+      <div role="tablist" class="tabs tabs-border">
+        <button
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ 'tab-active font-semibold': viewMode === 'current' }"
+          @click="switchViewMode('current')"
         >
-          <div class="text-sm opacity-70 mb-1">{{ t("archives.summary") }}</div>
-          <div class="whitespace-pre-wrap wrap-break-word text-sm">{{ archiveSummaryText }}</div>
-        </div>
-        <div v-for="m in visibleMessages" :key="m.id" class="border border-base-300 rounded p-3 bg-base-100">
-          <div class="flex items-center justify-between mb-1">
-            <div class="badge badge-primary badge-sm">{{ speakerLabel(m) }}</div>
-            <div class="opacity-60 text-sm">{{ formatDate(m.createdAt) }}</div>
-          </div>
-          <div
-            v-if="messageMemeSegments(m).length > 0"
-            class="archive-meme-segment-flow"
-          >
-            <template v-for="(segment, index) in messageMemeSegments(m)" :key="`${m.id}-meme-${index}`">
-              <span
-                v-if="segment.type === 'text' && archiveMemeText(segment)"
-                class="archive-meme-segment-text"
-              >{{ archiveMemeText(segment) }}</span>
-              <img
-                v-else-if="segment.type === 'meme'"
-                :src="archiveMemeSegmentDataUrl(segment)"
-                :alt="archiveMemeName(segment)"
-                :title="`:${archiveMemeName(segment)}:`"
-                class="archive-inline-meme"
-              />
-            </template>
-          </div>
-          <div v-else-if="messageText(m)" class="whitespace-pre-wrap wrap-break-word">{{ messageText(m) }}</div>
-          <div
-            v-if="messageAttachments(m).length > 0"
-            class="mt-2 flex flex-wrap gap-2"
-          >
+          {{ t("archives.currentUnarchived") }}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ 'tab-active font-semibold': viewMode === 'delegate' }"
+          @click="switchViewMode('delegate')"
+        >
+          {{ t("archives.delegateConversations") }}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ 'tab-active font-semibold': viewMode === 'archive' }"
+          @click="switchViewMode('archive')"
+        >
+          {{ t("archives.archivedMessages") }}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ 'tab-active font-semibold': viewMode === 'remoteIm' }"
+          @click="switchViewMode('remoteIm')"
+        >
+          联系人消息
+        </button>
+      </div>
+      <div class="flex flex-wrap items-center justify-center gap-2">
+        <button class="btn bg-base-100 border-base-300 hover:bg-base-200" @click="$emit('loadArchives')">{{ t("archives.refresh") }}</button>
+        <button class="btn bg-base-100 border-base-300 hover:bg-base-200" @click="triggerArchiveImport">{{ t("archives.importJson") }}</button>
+        <button class="btn bg-base-100 border-base-300 hover:bg-base-200" :disabled="viewMode !== 'archive' || !selectedArchiveId" @click="$emit('exportArchive', { format: 'markdown' })">{{ t("archives.exportMarkdown") }}</button>
+        <button class="btn bg-base-100 border-base-300 hover:bg-base-200" :disabled="viewMode !== 'archive' || !selectedArchiveId" @click="$emit('exportArchive', { format: 'json' })">{{ t("archives.exportJson") }}</button>
+        <button
+          class="btn bg-base-100 border-base-300 hover:bg-base-200 text-error"
+          :disabled="viewMode === 'delegate' || (viewMode === 'archive' && !selectedArchiveId) || (viewMode === 'current' && !selectedUnarchivedConversationId) || (viewMode === 'remoteIm' && !selectedRemoteImContactId)"
+          @click="viewMode === 'archive' ? onDeleteArchiveClick(selectedArchiveId) : viewMode === 'remoteIm' ? onDeleteRemoteImContactClick(selectedRemoteImContactId) : onDeleteUnarchivedClick(selectedUnarchivedConversationId)"
+        >
+          {{ t("common.delete") }}
+        </button>
+        <input
+          ref="archiveImportInputRef"
+          type="file"
+          accept=".json,application/json"
+          class="hidden"
+          @change="onArchiveImportChange"
+        />
+      </div>
+    </div>
+    <div class="flex flex-1 min-h-0">
+      <div class="w-56 shrink-0 overflow-auto">
+        <ul v-if="viewMode === 'current'" class="menu menu-sm w-full p-0 gap-1">
+          <li v-for="c in unarchivedConversations" :key="c.conversationId">
             <button
-              v-for="(file, idx) in messageAttachments(m)"
-              :key="`${m.id}-attachment-${idx}`"
               type="button"
-              class="link link-primary text-sm"
-              :title="file.relativePath"
-              @click="openAttachment(file.relativePath)"
+              class="flex flex-col items-start text-left"
+              :class="{ 'menu-active': c.conversationId === selectedUnarchivedConversationId }"
+              :title="c.runtimeState === 'organizing_context' ? t('archives.organizingContextDisabled') : ''"
+              :disabled="c.runtimeState === 'organizing_context'"
+              @click="$emit('selectUnarchivedConversation', c.conversationId)"
             >
-              {{ file.fileName }}
+              <span class="font-medium truncate text-sm block">{{ c.title }}</span>
+              <span class="text-xs opacity-70 truncate block">{{ formatDate(c.lastMessageAt || c.updatedAt) }}</span>
             </button>
+          </li>
+        </ul>
+        <ul v-else-if="viewMode === 'archive'" class="menu menu-sm w-full p-0 gap-1">
+          <li v-for="a in archives" :key="a.archiveId">
+            <button
+              type="button"
+              class="flex flex-col items-start text-left"
+              :class="{ 'menu-active': a.archiveId === selectedArchiveId }"
+              @click="$emit('selectArchive', a.archiveId)"
+            >
+              <span class="font-medium truncate text-sm block">{{ a.title }}</span>
+              <span v-if="a.archivedAt" class="text-xs opacity-70 truncate block">{{ formatDate(a.archivedAt) }}</span>
+            </button>
+          </li>
+        </ul>
+        <ul v-else-if="viewMode === 'delegate'" class="menu menu-sm w-full p-0 gap-1">
+          <li v-for="c in delegateConversations" :key="c.conversationId">
+            <button
+              type="button"
+              class="flex flex-col items-start text-left"
+              :class="{ 'menu-active': c.conversationId === selectedDelegateConversationId }"
+              @click="$emit('selectDelegateConversation', c.conversationId)"
+            >
+              <span class="font-medium truncate text-sm block">{{ c.title }}</span>
+              <span class="text-xs opacity-70 truncate block">{{ formatDate(c.archivedAt || c.lastMessageAt || c.updatedAt) }}</span>
+            </button>
+          </li>
+        </ul>
+        <ul v-else class="menu menu-sm w-full p-0 gap-1">
+          <li v-for="c in remoteImContactConversations" :key="c.contactId">
+            <button
+              type="button"
+              class="flex flex-col items-start text-left"
+              :class="{ 'menu-active': c.contactId === selectedRemoteImContactId }"
+              @click="$emit('selectRemoteImContactConversation', c.contactId)"
+            >
+              <span class="font-medium truncate text-sm block">{{ c.contactDisplayName }}</span>
+              <span class="text-xs opacity-70 truncate block">{{ formatDate(c.lastMessageAt || c.updatedAt) }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+      <div class="flex min-w-0 flex-1 flex-col">
+        <div class="flex-1 min-h-0 overflow-auto space-y-2">
+          <div
+            v-if="viewMode === 'archive' && archiveSummaryText"
+            class="border border-primary/20 rounded p-3 bg-primary/5"
+          >
+            <div class="text-sm opacity-70 mb-1">{{ t("archives.summary") }}</div>
+            <div class="whitespace-pre-wrap wrap-break-word text-sm">{{ archiveSummaryText }}</div>
           </div>
-          <div v-if="toolSummaries(m).length > 0" class="mt-2 space-y-1">
-            <details v-for="(tool, idx) in toolSummaries(m)" :key="`${m.id}-tool-${idx}`" class="collapse collapse-arrow border border-base-300 bg-base-200">
-              <summary class="collapse-title py-2 px-3 min-h-0 text-sm font-medium">{{ t("archives.toolCall", { name: tool.name }) }}</summary>
-              <div class="collapse-content px-3 pb-2">
-                <div class="whitespace-pre-wrap wrap-break-word text-sm opacity-80">{{ tool.content }}</div>
-              </div>
-            </details>
-          </div>
-          <div v-if="messageImages(m).length > 0" class="mt-2 grid gap-1">
-            <img
-              v-for="(img, idx) in messageImages(m)"
-              :key="`${img.mime}-${idx}`"
-              :src="resolvedArchiveImageSrc(m.id, img, idx)"
-              class="rounded max-h-32 object-contain bg-base-100/40 border border-base-300"
-            />
+          <div v-for="m in visibleMessages" :key="m.id" class="border border-base-300 rounded p-3 bg-base-100">
+            <div class="flex items-center justify-between mb-1">
+              <div class="badge badge-primary badge-sm">{{ speakerLabel(m) }}</div>
+              <div class="opacity-60 text-sm">{{ formatDate(m.createdAt) }}</div>
+            </div>
+            <div
+              v-if="messageMemeSegments(m).length > 0"
+              class="archive-meme-segment-flow"
+            >
+              <template v-for="(segment, index) in messageMemeSegments(m)" :key="`${m.id}-meme-${index}`">
+                <span
+                  v-if="segment.type === 'text' && archiveMemeText(segment)"
+                  class="archive-meme-segment-text"
+                >{{ archiveMemeText(segment) }}</span>
+                <img
+                  v-else-if="segment.type === 'meme'"
+                  :src="archiveMemeSegmentDataUrl(segment)"
+                  :alt="archiveMemeName(segment)"
+                  :title="`:${archiveMemeName(segment)}:`"
+                  class="archive-inline-meme"
+                />
+              </template>
+            </div>
+            <div v-else-if="messageText(m)" class="whitespace-pre-wrap wrap-break-word">{{ messageText(m) }}</div>
+            <div
+              v-if="messageAttachments(m).length > 0"
+              class="mt-2 flex flex-wrap gap-2"
+            >
+              <button
+                v-for="(file, idx) in messageAttachments(m)"
+                :key="`${m.id}-attachment-${idx}`"
+                type="button"
+                class="link link-primary text-sm"
+                :title="file.relativePath"
+                @click="openAttachment(file.relativePath)"
+              >
+                {{ file.fileName }}
+              </button>
+            </div>
+            <div v-if="toolSummaries(m).length > 0" class="mt-2 space-y-1">
+              <details v-for="(tool, idx) in toolSummaries(m)" :key="`${m.id}-tool-${idx}`" class="collapse collapse-arrow border border-base-300 bg-base-200">
+                <summary class="collapse-title py-2 px-3 min-h-0 text-sm font-medium">{{ t("archives.toolCall", { name: tool.name }) }}</summary>
+                <div class="collapse-content px-3 pb-2">
+                  <div class="whitespace-pre-wrap wrap-break-word text-sm opacity-80">{{ tool.content }}</div>
+                </div>
+              </details>
+            </div>
+            <div v-if="messageImages(m).length > 0" class="mt-2 grid gap-1">
+              <img
+                v-for="(img, idx) in messageImages(m)"
+                :key="`${img.mime}-${idx}`"
+                :src="resolvedArchiveImageSrc(m.id, img, idx)"
+                class="rounded max-h-32 object-contain bg-base-100/40 border border-base-300"
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -228,6 +234,7 @@ const props = defineProps<{
   remoteImContactConversations: RemoteImContactConversationSummary[];
   selectedRemoteImContactId: string;
   remoteImContactMessages: ChatMessage[];
+  userAlias: string;
   personaNameMap?: Record<string, string>;
 }>();
 const { t, locale } = useI18n();
@@ -479,6 +486,9 @@ function speakerLabel(msg: ChatMessage): string {
   const speakerId = String(msg.speakerAgentId || "").trim();
   if (speakerId) {
     return props.personaNameMap?.[speakerId] || speakerId;
+  }
+  if (msg.role === "user") {
+    return String(props.userAlias || "").trim() || t("archives.roleUser");
   }
   if (msg.role === "tool") return t("archives.roleTool");
   return String(msg.role || "").trim() || "-";
