@@ -176,7 +176,7 @@
         @selection-action-copy-error="setStatus(props.t('chat.copyFailed'))"
         @selection-action-derive="onDeriveConversationFromSelection($event)"
         @selection-action-deliver="onDeliverConversationFromSelection($event)"
-        @selection-action-share="setStatus(props.t('chat.shareNotSupported'))"
+        @selection-action-share="openSelectionShareDialog($event)"
         @lock-workspace="onLockChatWorkspace"
         @open-supervision-task="openSupervisionTaskDialog"
         @close-supervision-task="closeSupervisionTaskDialog"
@@ -271,6 +271,19 @@
         @close="closePromptPreview"
       />
     </dialog>
+    <SelectionShareDialog
+      :open="selectionShareDialogOpen"
+      :loading="selectionShareDialogLoading"
+      :title-text="t('chat.shareDialogTitle')"
+      :message-text="t('chat.shareDialogMessage', { count: selectionSharePayload?.count || 0 })"
+      :hint-text="selectionShareDialogLoading ? t('common.loading') : t('chat.shareDialogHint')"
+      :image-text="t('chat.shareAsImage')"
+      :html-text="t('chat.shareAsHtml')"
+      :cancel-text="t('common.cancel')"
+      @close="closeSelectionShareDialog"
+      @export-image="exportSelectionAsImage"
+      @export-html="exportSelectionAsHtml"
+    />
   </div>
 </template>
 
@@ -280,7 +293,9 @@ import ChatView from "../../chat/views/ChatView.vue";
 import ArchivesView from "../../archive/views/ArchivesView.vue";
 import MemoryDialog from "../../memory/components/dialogs/MemoryDialog.vue";
 import PromptPreviewDialog from "../../chat/components/dialogs/PromptPreviewDialog.vue";
-import { computed, type VNodeRef } from "vue";
+import SelectionShareDialog from "../../chat/components/dialogs/SelectionShareDialog.vue";
+import { computed, ref, type VNodeRef } from "vue";
+import { save } from "@tauri-apps/plugin-dialog";
 import type {
   ApiConfigItem,
   AppConfig,
@@ -300,6 +315,13 @@ import type {
   ToolLoadStatus,
   UnarchivedConversationSummary,
 } from "../../../types/app";
+import {
+  buildShareExportFileName,
+  buildShareHtmlDocument,
+  prepareShareEntries,
+  renderShareDocumentToPngDataUrl,
+} from "../../chat/utils/share-export";
+import { invokeTauri } from "../../../services/tauri-api";
 
 type MemoryItem = {
   id: string;
@@ -308,6 +330,12 @@ type MemoryItem = {
   reasoning: string;
   tags: string[];
   ownerAgentId?: string;
+};
+
+type SelectionSharePayload = {
+  count: number;
+  messageIds: string[];
+  blocks: ChatMessageBlock[];
 };
 
 const props = defineProps<{
@@ -547,6 +575,10 @@ const promptPreviewDialogVNodeRef: VNodeRef = (el) => {
   props.setPromptPreviewDialogRef((el as Element | null) ?? null);
 };
 
+const selectionShareDialogOpen = ref(false);
+const selectionShareDialogLoading = ref(false);
+const selectionSharePayload = ref<SelectionSharePayload | null>(null);
+
 const chatBusyOverlay = computed(() => {
   if (props.forcingArchive) {
     return {
@@ -568,4 +600,93 @@ const chatBusyOverlay = computed(() => {
   }
   return null;
 });
+
+function openSelectionShareDialog(payload: SelectionSharePayload) {
+  if (!payload || payload.count <= 0 || !Array.isArray(payload.blocks) || payload.blocks.length === 0) {
+    return;
+  }
+  selectionSharePayload.value = payload;
+  selectionShareDialogOpen.value = true;
+}
+
+function closeSelectionShareDialog() {
+  if (selectionShareDialogLoading.value) return;
+  selectionShareDialogOpen.value = false;
+}
+
+async function exportSelectionAsHtml() {
+  const payload = selectionSharePayload.value;
+  if (!payload || payload.count <= 0 || payload.blocks.length === 0) return;
+  selectionShareDialogLoading.value = true;
+  try {
+    const path = await save({
+      filters: [{ name: "HTML", extensions: ["html"] }],
+      defaultPath: buildShareExportFileName("html"),
+    });
+    if (!path) return;
+    const entries = await prepareShareEntries({
+      blocks: payload.blocks,
+      userAlias: props.userAlias,
+      personaNameMap: props.chatPersonaNameMap,
+      trigger: "selection_share_html",
+    });
+    const html = buildShareHtmlDocument({
+      title: props.t("chat.shareDocumentTitle"),
+      subtitle: props.t("chat.shareDocumentSubtitle", { count: payload.count }),
+      entries,
+    });
+    await invokeTauri("write_utf8_text_file_to_path", {
+      input: {
+        path,
+        text: html,
+      },
+    });
+    props.setStatus(props.t("chat.shareHtmlExported", { path }));
+    selectionShareDialogOpen.value = false;
+  } catch (error) {
+    props.setStatus(props.t("chat.shareExportFailed", { err: String(error) }));
+  } finally {
+    selectionShareDialogLoading.value = false;
+  }
+}
+
+async function exportSelectionAsImage() {
+  const payload = selectionSharePayload.value;
+  if (!payload || payload.count <= 0 || payload.blocks.length === 0) return;
+  selectionShareDialogLoading.value = true;
+  try {
+    const path = await save({
+      filters: [{ name: "PNG", extensions: ["png"] }],
+      defaultPath: buildShareExportFileName("png"),
+    });
+    if (!path) return;
+    const entries = await prepareShareEntries({
+      blocks: payload.blocks,
+      userAlias: props.userAlias,
+      personaNameMap: props.chatPersonaNameMap,
+      trigger: "selection_share_image",
+    });
+    const dataUrl = await renderShareDocumentToPngDataUrl({
+      title: props.t("chat.shareDocumentTitle"),
+      subtitle: props.t("chat.shareDocumentSubtitle", { count: payload.count }),
+      entries,
+    });
+    const bytesBase64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : "";
+    if (!bytesBase64) {
+      throw new Error(props.t("chat.shareImageGenerationFailed"));
+    }
+    await invokeTauri("write_base64_file_to_path", {
+      input: {
+        path,
+        bytesBase64,
+      },
+    });
+    props.setStatus(props.t("chat.shareImageExported", { path }));
+    selectionShareDialogOpen.value = false;
+  } catch (error) {
+    props.setStatus(props.t("chat.shareExportFailed", { err: String(error) }));
+  } finally {
+    selectionShareDialogLoading.value = false;
+  }
+}
 </script>

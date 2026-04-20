@@ -1,5 +1,11 @@
 # 变更日志
 
+## 更新：多选消息分享图片与 HTML
+
+- 功能（chat-selection-share-image-and-html）：聊天窗口的多选操作条补齐真实分享能力；点击“分享”后不再提示暂不支持，而是弹出分享方式对话框，允许将已选消息导出为长图 PNG 或独立静态 HTML 历史页
+- 功能（share-export-static-html-and-png）：新增前端分享渲染链路与后端文件写出命令；HTML 分享会生成不依赖应用运行时的单文件静态历史页，图片分享会将同一份静态内容渲染为 PNG 长图并保存到本地
+- 修复（share-export-hardening-and-logs）：补齐分享导出链路的本地化错误提示、路径跳转防护与中文运行日志；单张图片读取失败不再拖垮整批分享，导出命令会记录目标路径、字节大小与耗时，便于诊断导出失败
+
 ## 更新：检查更新代理与后台预下载
 
 - 优化（updater-proxy-fallback-and-ready-to-restart）：检查更新、manifest 下载与更新包下载统一接入 `gh-proxy -> edgeone.gh-proxy -> hk.gh-proxy` 三段降级链路，每个地址最多重试 3 次，总计最多 9 次尝试；同时 release workflow 生成的 updater manifest 资产 URL 也切到代理地址，避免远端构建产物仍回落直连 GitHub

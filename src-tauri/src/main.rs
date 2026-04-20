@@ -536,6 +536,8 @@ fn main() {
             import_memories,
             preview_import_angel_memories,
             import_angel_memories,
+            write_utf8_text_file_to_path,
+            write_base64_file_to_path,
             search_memories_mixed,
             sync_memory_embedding_provider,
             test_memory_embedding_provider,

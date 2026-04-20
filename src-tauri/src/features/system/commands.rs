@@ -13,6 +13,9 @@ include!("commands/prompt_assembly.rs");
 // ==================== 调试日志命令 ====================
 include!("commands/debug_log_commands.rs");
 
+// ==================== 分享导出命令 ====================
+include!("commands/share_export_commands.rs");
+
 // ==================== 记忆整理（独立模块） ====================
 include!("commands/memory_curation/prompt_contract.rs");
 
