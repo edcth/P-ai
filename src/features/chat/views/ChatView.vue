@@ -295,8 +295,8 @@
           @stop-chat="$emit('stopChat')"
           @exit-selection-mode="exitMessageSelectionMode"
           @selection-action-copy="copySelectedMessages"
-          @selection-action-derive="emitSelectionAction('derive')"
-          @selection-action-deliver="emitSelectionAction('deliver', $event)"
+          @selection-action-branch="emitSelectionAction('branch')"
+          @selection-action-forward="emitSelectionAction('forward', $event)"
           @selection-action-share="emitSelectionAction('share')"
           @force-archive="$emit('forceArchive')"
           @switch-conversation="$emit('switchConversation', $event)"
@@ -667,8 +667,8 @@ const emit = defineEmits<{
   (e: "refreshToolReviewMessages"): void;
   (e: "selectionActionCopy", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
   (e: "selectionActionCopyError", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[]; error: string }): void;
-  (e: "selectionActionDerive", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
-  (e: "selectionActionDeliver", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[]; targetConversationId: string }): void;
+  (e: "selectionActionBranch", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
+  (e: "selectionActionForward", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[]; targetConversationId: string }): void;
   (e: "selectionActionShare", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
 }>();
 const { t } = useI18n();
@@ -1005,17 +1005,17 @@ async function copySelectedMessages() {
   }
 }
 
-function emitSelectionAction(kind: "derive" | "share" | "deliver", targetConversationId = "") {
+function emitSelectionAction(kind: "branch" | "share" | "forward", targetConversationId = "") {
   const payload = selectionPayload();
   if (payload.count === 0) return;
-  if (kind === "derive") {
-    emit("selectionActionDerive", payload);
+  if (kind === "branch") {
+    emit("selectionActionBranch", payload);
     return;
   }
-  if (kind === "deliver") {
+  if (kind === "forward") {
     const normalizedTargetConversationId = String(targetConversationId || "").trim();
     if (!normalizedTargetConversationId) return;
-    emit("selectionActionDeliver", {
+    emit("selectionActionForward", {
       ...payload,
       targetConversationId: normalizedTargetConversationId,
     });

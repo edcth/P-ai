@@ -1,5 +1,9 @@
 # 变更日志
 
+## 更新：会话分支与转发到会话口径统一
+
+- 重构（chat-branch-and-forward-wording-unification）：项目内原“派生”统一更名为“会话分支”，原“投送”统一更名为“转发到会话”；同步收口前后端命令名、输入输出结构、忙态字段、事件名、状态提示、多语言文案与测试标题，避免同一功能在字段、英文名与中文口径上继续混用旧术语
+
 ## 更新：压缩上下文构造与压缩入口收口
 
 - 修复（summary-context-preserve-full-history-and-department-context）：`SummaryContext` 在归档与上下文压缩场景下，继续完整复用正常聊天消息组建，不再篡改历史工具调用记录；同时恢复传入当前可用 `agents/departments`，避免压缩模型丢失当前会话部门上下文
@@ -219,7 +223,7 @@
 
 - 优化（foreground-conversation-light-snapshot）：前台切会话主路径新增轻量快照接口 `get_foreground_conversation_light_snapshot`，只返回当前会话最近消息、`hasMoreHistory` 与当前 `todo/todos`，不再在首屏热路径中同步构建整份 `unarchivedConversations`
   - Rust 侧保留原有 `switch_active_conversation_snapshot(...)` 作为重型兼容入口，但新增共享 helper 将“当前会话最近消息快照”抽出为独立核心逻辑，避免切会话首屏继续被会话列表摘要、全局归一化与持久化副作用拖慢
-  - 前端 `UnifiedWindowApp.vue` 的切会话、新建、派生、投送与前台恢复链路改为优先调用轻量快照接口，只在独立链路中刷新未归档会话摘要，同时保留现有异步补消息 `request_conversation_messages_after_async(...)` 不变
+  - 前端 `UnifiedWindowApp.vue` 的切会话、新建、会话分支、转发到会话与前台恢复链路改为优先调用轻量快照接口，只在独立链路中刷新未归档会话摘要，同时保留现有异步补消息 `request_conversation_messages_after_async(...)` 不变
   - 这样前台切换首屏只依赖“当前会话内容”，会话列表摘要与补消息解耦，实测切会话卡顿显著下降
 
 ## 发布：v0.9.14
@@ -241,10 +245,10 @@
 ## 发布：v0.9.12
 
 - 修复（chat-local-link-percent-decode）：聊天消息里的本地文件链接在浏览器自动编码中文文件名或 `file:` URL 后，现在会先做安全解码再交给本地打开链路；修正 `%E8%8E%89...` 这类 UTF-8 百分号编码路径无法被 Windows 资源管理器识别的问题，并兼容盘符路径、`file://` 形式与 UNC 路径
-- 功能（chat-selection-derive-and-deliver）：聊天窗口新增消息多选模式；可从单条消息操作区进入多选，整行勾选消息，并在输入区切换为 `派生 / 复制 / 分享 / 投送 / 取消` 操作条；其中 `复制` 已支持按 `[角色名]: 内容` 格式汇总已选消息，`分享` 当前保留为暂不支持提示，`投送` 会把已选原消息连同工具调用与元数据一起插入目标会话末尾，`派生` 会继承当前会话部门/人格/计划模式/工作区等设置，并以“最新压缩消息 + 已选原消息”生成新会话；同时新增“继承当前会话”创建入口、派生/投送忙态遮罩，以及目标会话忙碌时的拒绝保护
+- 功能（chat-selection-derive-and-deliver）：聊天窗口新增消息多选模式；可从单条消息操作区进入多选，整行勾选消息，并在输入区切换为 `会话分支 / 复制 / 分享 / 转发到会话 / 取消` 操作条；其中 `复制` 已支持按 `[角色名]: 内容` 格式汇总已选消息，`分享` 当前保留为暂不支持提示，`转发到会话` 会把已选原消息连同工具调用与元数据一起插入目标会话末尾，`会话分支` 会继承当前会话部门/人格/计划模式/工作区等设置，并以“最新压缩消息 + 已选原消息”生成新会话；同时新增“继承当前会话”创建入口、会话分支/转发到会话忙态遮罩，以及目标会话忙碌时的拒绝保护
 - 功能（archive-report-and-fork-scope）：会话分叉与归档语义继续收口；前台会话关系以父会话与分叉点为主，归档统一生成结论汇报，并在存在有效 `fork_message_cursor` 时仅总结分叉点之后的讨论；处理当前会话弹窗收口为“压缩 / 丢弃 / 归档”，不再在当前前台主流程暴露归档投放目标
 - 修复（prompt-adjacent-assistant-normalization）：最终请求体构建新增连续 assistant 归一化，`build_prompt`、工具回放追加、最终 JSON 序列化与 provider request 构建前都会消除相邻 assistant 消息，并合并 `text / reasoning_content / tool_calls`；同时修复非 self persona 历史消息与最新用户消息的说话人/时间元数据落位，避免 prompt 中 speaker block 丢失
-- 修复（selection-deliver-and-copy-hardening）：修正投送链路在会话锁外预读运行态导致的 TOCTOU 竞态，改为先拿 `conversation_lock` 再检查目标会话流式/整理态；补齐多选投送目标有效性校验、选择态 `v-memo` 依赖、剪贴板复制异常处理，以及多选摘要/忙态提示/分享提示的 i18n 文案
+- 修复（selection-deliver-and-copy-hardening）：修正转发到会话链路在会话锁外预读运行态导致的 TOCTOU 竞态，改为先拿 `conversation_lock` 再检查目标会话流式/整理态；补齐多选转发到会话目标有效性校验、选择态 `v-memo` 依赖、剪贴板复制异常处理，以及多选摘要/忙态提示/分享提示的 i18n 文案
 - 修复（read-file-start-count-rename）：`read_file` 工具参数从 `offset/limit` 重命名为 `start/count`，并同步更新返回字段与续读提示；现在对文本/代码/Office 明确表示“起始行 + 行数”，对 PDF 明确表示“起始页 + 页数”，降低模型把分页参数误解为通用偏移量的概率
 - 修复（chat-session-binding-rebind）：聊天发送与 `@人格` 发送前新增会话绑定纠偏；当旧会话引用的部门已不存在时，直接提示“部门已经消失”；当部门仍在但原人格已不再属于该部门时，会自动切换到该部门当前可用人格并回写会话绑定，避免继续抛出 `Agent ... is not assigned to department ...`
 - 修复（mcp-tool-parameter-visibility）：MCP 配置页工具列表新增参数展示；后端会把工具 `input_schema` 一并返回前端，已部署工具现在可在名称下看到参数类型、必填标记、枚举/范围与示例内容，避免只能看见工具名和描述却无法判断调用入参

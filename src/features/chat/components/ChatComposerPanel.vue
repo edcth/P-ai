@@ -23,9 +23,9 @@
           type="button"
           class="btn btn-sm btn-primary"
           :disabled="selectedMessageCount === 0"
-          @click="emit('selectionActionDerive')"
+          @click="emit('selectionActionBranch')"
         >
-          派生
+          会话分支
         </button>
         <button
           type="button"
@@ -33,7 +33,7 @@
           :disabled="selectedMessageCount === 0 || selectionDeliverTargetOptions.length === 0"
           @click="openSelectionDeliverCard"
         >
-          投送
+          转发到会话
         </button>
         <button
           type="button"
@@ -63,7 +63,7 @@
         v-if="selectionDeliverCardOpen"
         class="mt-3 rounded-box border border-base-300 bg-base-200/50 px-3 py-3"
       >
-        <div class="text-sm font-medium">投送到会话</div>
+        <div class="text-sm font-medium">转发到会话</div>
         <div class="mt-1 text-xs opacity-70">会把当前选中的原消息插入到目标会话末尾；如果目标会话正在流式输出，会直接失败。</div>
         <select
           v-model="selectionDeliverTargetConversationId"
@@ -92,7 +92,7 @@
             :disabled="!selectionDeliverTargetConversationId"
             @click="confirmSelectionDeliver"
           >
-            确定投送
+            确定转发
           </button>
         </div>
       </div>
@@ -361,8 +361,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "exitSelectionMode"): void;
-  (e: "selectionActionDerive"): void;
-  (e: "selectionActionDeliver", targetConversationId: string): void;
+  (e: "selectionActionBranch"): void;
+  (e: "selectionActionForward", targetConversationId: string): void;
   (e: "selectionActionCopy"): void;
   (e: "selectionActionShare"): void;
   (e: "update:chatInput", value: string): void;
@@ -501,7 +501,7 @@ function confirmSelectionDeliver() {
   const targetConversationId = String(selectionDeliverTargetConversationId.value || "").trim();
   if (!targetConversationId) return;
   closeSelectionDeliverCard();
-  emit("selectionActionDeliver", targetConversationId);
+  emit("selectionActionForward", targetConversationId);
 }
 
 function handleExitSelectionMode() {

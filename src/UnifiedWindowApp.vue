@@ -129,8 +129,8 @@
       :chatting="chatting"
       :forcing-archive="forcingArchive"
       :compacting-conversation="compactingConversation"
-      :deriving-conversation="derivingConversation"
-      :delivering-conversation-selection="deliveringConversationSelection"
+      :branching-conversation="branchingConversation"
+      :forwarding-conversation-selection="forwardingConversationSelection"
       :visible-message-blocks="displayMessageBlocks"
       :latest-own-message-align-request="latestOwnMessageAlignRequest"
       :conversation-scroll-to-bottom-request="conversationScrollToBottomRequest"
@@ -239,8 +239,8 @@
       :on-rename-conversation="renameCurrentConversation"
       :on-toggle-conversation-pin="toggleConversationPin"
       :on-create-conversation="createUnarchivedConversation"
-      :on-derive-conversation-from-selection="deriveConversationFromSelection"
-      :on-deliver-conversation-from-selection="deliverConversationFromSelection"
+      :on-branch-conversation-from-selection="branchConversationFromSelection"
+      :on-forward-conversation-from-selection="forwardConversationFromSelection"
       :on-open-skill-panel="openSkillPlaceholderDialog"
       :load-archives="loadArchives"
       :select-archive="selectArchive"
@@ -598,8 +598,8 @@ const chatting = ref(false);
 const forcingArchive = ref(false);
 const compactingConversation = ref(false);
 const conversationBusy = computed(() => forcingArchive.value || compactingConversation.value);
-const derivingConversation = ref(false);
-const deliveringConversationSelection = ref(false);
+const branchingConversation = ref(false);
+const forwardingConversationSelection = ref(false);
 const hasMoreBackendHistory = ref(false);
 const refreshingModels = ref(false);
 const modelRefreshError = ref("");
@@ -2696,11 +2696,11 @@ async function createUnarchivedConversation(input?: { title?: string; department
     const snapshot = await requestConversationLightSnapshot(conversationId);
     applyConversationSnapshot(snapshot);
   } catch (error) {
-    setStatus(`投送失败：${formatI18nError(tr, "status.requestFailed", error)}`);
+    setStatus(`转发到会话失败：${formatI18nError(tr, "status.requestFailed", error)}`);
   }
 }
 
-async function deriveConversationFromSelection(payload: { count: number; messageIds: string[] }) {
+async function branchConversationFromSelection(payload: { count: number; messageIds: string[] }) {
   const sourceConversationId = String(currentChatConversationId.value || "").trim();
   const selectedMessageIds = Array.isArray(payload?.messageIds)
     ? payload.messageIds
@@ -2710,16 +2710,16 @@ async function deriveConversationFromSelection(payload: { count: number; message
   if (
     !sourceConversationId
     || selectedMessageIds.length === 0
-    || derivingConversation.value
-    || deliveringConversationSelection.value
+    || branchingConversation.value
+    || forwardingConversationSelection.value
   ) return;
-  derivingConversation.value = true;
+  branchingConversation.value = true;
   try {
     const result = await invokeTauri<{
       conversationId: string;
       title: string;
       warning?: string | null;
-    }>("derive_unarchived_conversation_from_selection", {
+    }>("branch_unarchived_conversation_from_selection", {
       input: {
         sourceConversationId,
         selectedMessageIds,
@@ -2732,18 +2732,18 @@ async function deriveConversationFromSelection(payload: { count: number; message
     applyConversationSnapshot(snapshot);
     const warning = String(result?.warning || "").trim();
     if (warning) {
-      setStatus(`派生完成（降级整理）：${warning}`);
+      setStatus(`会话分支创建完成（降级整理）：${warning}`);
     } else {
-      setStatus(`已派生为新会话：${String(result?.title || "").trim() || conversationId}`);
+      setStatus(`已创建会话分支：${String(result?.title || "").trim() || conversationId}`);
     }
   } catch (error) {
     setStatusError("status.loadMessagesFailed", error);
   } finally {
-    derivingConversation.value = false;
+    branchingConversation.value = false;
   }
 }
 
-async function deliverConversationFromSelection(payload: {
+async function forwardConversationFromSelection(payload: {
   count: number;
   messageIds: string[];
   targetConversationId: string;
@@ -2760,15 +2760,15 @@ async function deliverConversationFromSelection(payload: {
     || !targetConversationId
     || selectedMessageIds.length === 0
     || forcingArchive.value
-    || derivingConversation.value
-    || deliveringConversationSelection.value
+    || branchingConversation.value
+    || forwardingConversationSelection.value
   ) return;
-  deliveringConversationSelection.value = true;
+  forwardingConversationSelection.value = true;
   try {
     const result = await invokeTauri<{
       targetConversationId: string;
-      deliveredCount: number;
-    }>("deliver_unarchived_conversation_selection", {
+      forwardedCount: number;
+    }>("forward_unarchived_conversation_selection", {
       input: {
         sourceConversationId,
         targetConversationId,
@@ -2780,11 +2780,11 @@ async function deliverConversationFromSelection(payload: {
     await refreshUnarchivedConversationOverview();
     const snapshot = await requestConversationLightSnapshot(effectiveTargetConversationId);
     applyConversationSnapshot(snapshot);
-    setStatus(`已投送 ${Number(result?.deliveredCount || selectedMessageIds.length)} 条消息`);
+    setStatus(`已转发到会话 ${Number(result?.forwardedCount || selectedMessageIds.length)} 条消息`);
   } catch (error) {
     setStatusError("status.loadMessagesFailed", error);
   } finally {
-    deliveringConversationSelection.value = false;
+    forwardingConversationSelection.value = false;
   }
 }
 

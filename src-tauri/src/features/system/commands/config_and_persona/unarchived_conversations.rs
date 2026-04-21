@@ -236,14 +236,14 @@ struct CreateUnarchivedConversationOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DeriveUnarchivedConversationFromSelectionInput {
+struct BranchUnarchivedConversationFromSelectionInput {
     source_conversation_id: String,
     selected_message_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DeriveUnarchivedConversationFromSelectionOutput {
+struct BranchUnarchivedConversationFromSelectionOutput {
     conversation_id: String,
     title: String,
     #[serde(default)]
@@ -252,7 +252,7 @@ struct DeriveUnarchivedConversationFromSelectionOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DeliverUnarchivedConversationSelectionInput {
+struct ForwardUnarchivedConversationSelectionInput {
     source_conversation_id: String,
     target_conversation_id: String,
     selected_message_ids: Vec<String>,
@@ -260,9 +260,9 @@ struct DeliverUnarchivedConversationSelectionInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DeliverUnarchivedConversationSelectionOutput {
+struct ForwardUnarchivedConversationSelectionOutput {
     target_conversation_id: String,
-    delivered_count: usize,
+    forwarded_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -359,7 +359,7 @@ fn clone_foreground_conversation_for_copy(
     conversation
 }
 
-fn build_derived_conversation_title(
+fn build_branch_conversation_title(
     source_title: &str,
     first_selected_ordinal: usize,
     source_is_main_conversation: bool,
@@ -372,10 +372,10 @@ fn build_derived_conversation_title(
     } else {
         base_title
     };
-    format!("{prefix}[派生自第{first_selected_ordinal}条对话]")
+    format!("{prefix}[会话分支自第{first_selected_ordinal}条对话]")
 }
 
-fn collect_selected_messages_for_derive(
+fn collect_selected_messages_for_branch(
     source: &Conversation,
     selected_message_ids: &[String],
 ) -> (Vec<ChatMessage>, usize) {
@@ -403,7 +403,7 @@ fn collect_selected_messages_for_derive(
     (selected_messages, first_selected_ordinal)
 }
 
-fn derive_conversation_settings_agent_id(
+fn branch_conversation_settings_agent_id(
     data: &AppData,
     department: &DepartmentConfig,
     requested_agent_id: &str,
@@ -425,7 +425,7 @@ fn derive_conversation_settings_agent_id(
         .unwrap_or_else(|| data.assistant_department_agent_id.trim().to_string())
 }
 
-fn build_derived_conversation_record_from_selection(
+fn build_branch_conversation_record_from_selection(
     data_path: &PathBuf,
     data: &AppData,
     source: &Conversation,
@@ -434,7 +434,7 @@ fn build_derived_conversation_record_from_selection(
     latest_compaction_message: Option<&ChatMessage>,
     selected_messages: &[ChatMessage],
 ) -> Conversation {
-    let agent_id = derive_conversation_settings_agent_id(data, department, &source.agent_id);
+    let agent_id = branch_conversation_settings_agent_id(data, department, &source.agent_id);
     let mut conversation = build_conversation_record(
         &department_primary_api_config_id(department),
         &agent_id,
@@ -457,7 +457,7 @@ fn build_derived_conversation_record_from_selection(
             Ok(snapshot) => snapshot,
             Err(err) => {
                 runtime_log_warn(format!(
-                    "[派生会话] 跳过，任务=构建用户画像快照，agent_id={}，error={}",
+                    "[会话分支] 跳过，任务=构建用户画像快照，agent_id={}，error={}",
                     agent.id, err
                 ));
                 None
@@ -498,7 +498,7 @@ fn build_derived_conversation_record_from_selection(
     conversation
 }
 
-fn latest_compaction_message_for_derive(source: &Conversation) -> Option<ChatMessage> {
+fn latest_compaction_message_for_branch(source: &Conversation) -> Option<ChatMessage> {
     source
         .messages
         .iter()
@@ -619,10 +619,10 @@ fn create_unarchived_conversation(
 }
 
 #[tauri::command]
-async fn derive_unarchived_conversation_from_selection(
-    input: DeriveUnarchivedConversationFromSelectionInput,
+async fn branch_unarchived_conversation_from_selection(
+    input: BranchUnarchivedConversationFromSelectionInput,
     state: State<'_, AppState>,
-) -> Result<DeriveUnarchivedConversationFromSelectionOutput, String> {
+) -> Result<BranchUnarchivedConversationFromSelectionOutput, String> {
     let source_conversation_id = input.source_conversation_id.trim();
     if source_conversation_id.is_empty() {
         return Err("sourceConversationId 不能为空".to_string());
@@ -642,7 +642,7 @@ async fn derive_unarchived_conversation_from_selection(
         app_config,
         source_conversation,
         selected_messages,
-        derived_title,
+        branched_title,
         department,
         latest_compaction_message,
     ) = {
@@ -663,27 +663,27 @@ async fn derive_unarchived_conversation_from_selection(
             .cloned()
             .ok_or_else(|| "源会话不存在或已归档".to_string())?;
         let (selected_messages, first_selected_ordinal) =
-            collect_selected_messages_for_derive(&source_conversation, &normalized_selected_message_ids);
+            collect_selected_messages_for_branch(&source_conversation, &normalized_selected_message_ids);
         if selected_messages.is_empty() {
             drop(guard);
-            return Err("未找到可派生的已选消息".to_string());
+            return Err("未找到可创建会话分支的已选消息".to_string());
         }
         let department = department_by_id(&app_config, source_conversation.department_id.trim())
             .cloned()
             .ok_or_else(|| "源会话所属部门不存在".to_string())?;
-        let derived_title = build_derived_conversation_title(
+        let branched_title = build_branch_conversation_title(
             &source_conversation.title,
             first_selected_ordinal.max(1),
             data.main_conversation_id.as_deref().map(str::trim)
                 == Some(source_conversation.id.as_str()),
         );
-        let latest_compaction_message = latest_compaction_message_for_derive(&source_conversation);
+        let latest_compaction_message = latest_compaction_message_for_branch(&source_conversation);
         drop(guard);
         (
             app_config,
             source_conversation,
             selected_messages,
-            derived_title,
+            branched_title,
             department,
             latest_compaction_message,
         )
@@ -702,12 +702,12 @@ async fn derive_unarchived_conversation_from_selection(
         drop(guard);
         return Err("源会话已变化，请重新选择消息后再试".to_string());
     }
-    let conversation = build_derived_conversation_record_from_selection(
+    let conversation = build_branch_conversation_record_from_selection(
         &state.data_path,
         &data,
         &source_conversation,
         &department,
-        &derived_title,
+        &branched_title,
         latest_compaction_message.as_ref(),
         &selected_messages,
     );
@@ -728,30 +728,30 @@ async fn derive_unarchived_conversation_from_selection(
         state.inner(),
         &data,
         std::slice::from_ref(&conversation_id),
-        "derive_unarchived_conversation_from_selection",
+        "branch_unarchived_conversation_from_selection",
     )?;
     drop(guard);
     emit_unarchived_conversation_overview_updated_payload(state.inner(), &overview_payload);
     runtime_log_info(format!(
-        "[派生会话] 完成，任务=按已选消息派生新会话，source_conversation_id={}，conversation_id={}，selected_count={}，has_compaction_seed={}",
+        "[会话分支] 完成，任务=按已选消息创建会话分支，source_conversation_id={}，conversation_id={}，selected_count={}，has_compaction_seed={}",
         source_conversation.id,
         conversation_id,
         selected_messages.len(),
         latest_compaction_message.is_some()
     ));
 
-    Ok(DeriveUnarchivedConversationFromSelectionOutput {
+    Ok(BranchUnarchivedConversationFromSelectionOutput {
         conversation_id,
-        title: derived_title,
+        title: branched_title,
         warning: None,
     })
 }
 
 #[tauri::command]
-fn deliver_unarchived_conversation_selection(
-    input: DeliverUnarchivedConversationSelectionInput,
+fn forward_unarchived_conversation_selection(
+    input: ForwardUnarchivedConversationSelectionInput,
     state: State<'_, AppState>,
-) -> Result<DeliverUnarchivedConversationSelectionOutput, String> {
+) -> Result<ForwardUnarchivedConversationSelectionOutput, String> {
     let source_conversation_id = input.source_conversation_id.trim();
     let target_conversation_id = input.target_conversation_id.trim();
     if source_conversation_id.is_empty() {
@@ -787,11 +787,11 @@ fn deliver_unarchived_conversation_selection(
     };
     if target_runtime_state == MainSessionState::AssistantStreaming {
         drop(guard);
-        return Err("目标会话正在流式输出中，暂时无法投送".to_string());
+        return Err("目标会话正在流式输出中，暂时无法转发到会话".to_string());
     }
     if target_runtime_state == MainSessionState::OrganizingContext {
         drop(guard);
-        return Err("目标会话正在整理上下文，暂时无法投送".to_string());
+        return Err("目标会话正在整理上下文，暂时无法转发到会话".to_string());
     }
     let app_config = state_read_config_cached(&state)?;
     let mut data = state_read_app_data_cached(&state)?;
@@ -807,10 +807,10 @@ fn deliver_unarchived_conversation_selection(
         .cloned()
         .ok_or_else(|| "源会话不存在或已归档".to_string())?;
     let (selected_messages, _) =
-        collect_selected_messages_for_derive(&source_conversation, &normalized_selected_message_ids);
+        collect_selected_messages_for_branch(&source_conversation, &normalized_selected_message_ids);
     if selected_messages.is_empty() {
         drop(guard);
-        return Err("未找到可投送的已选消息".to_string());
+        return Err("未找到可转发到会话的已选消息".to_string());
     }
 
     let target_idx = data
@@ -852,15 +852,15 @@ fn deliver_unarchived_conversation_selection(
     drop(guard);
     emit_unarchived_conversation_overview_updated_payload(state.inner(), &overview_payload);
     runtime_log_info(format!(
-        "[投送消息] 完成，任务=投送已选消息到目标会话，source_conversation_id={}，target_conversation_id={}，message_count={}",
+        "[转发到会话] 完成，任务=转发已选消息到目标会话，source_conversation_id={}，target_conversation_id={}，message_count={}",
         source_conversation_id,
         target_conversation_id,
         selected_messages.len()
     ));
 
-    Ok(DeliverUnarchivedConversationSelectionOutput {
+    Ok(ForwardUnarchivedConversationSelectionOutput {
         target_conversation_id: target_conversation_id.to_string(),
-        delivered_count: selected_messages.len(),
+        forwarded_count: selected_messages.len(),
     })
 }
 
@@ -2283,13 +2283,13 @@ mod unarchived_conversations_tests {
     }
 
     #[test]
-    fn collect_selected_messages_for_derive_should_keep_source_order_and_visible_ordinal() {
+    fn collect_selected_messages_for_branch_should_keep_source_order_and_visible_ordinal() {
         let mut source = build_test_conversation();
         source.messages.insert(
             0,
             build_initial_summary_context_message(Some("历史摘要"), None, None),
         );
-        let (selected, first_selected_ordinal) = collect_selected_messages_for_derive(
+        let (selected, first_selected_ordinal) = collect_selected_messages_for_branch(
             &source,
             &["m2".to_string(), "m1".to_string()],
         );
@@ -2301,19 +2301,19 @@ mod unarchived_conversations_tests {
     }
 
     #[test]
-    fn build_derived_conversation_title_should_include_source_title_and_ordinal() {
+    fn build_branch_conversation_title_should_include_source_title_and_ordinal() {
         assert_eq!(
-            build_derived_conversation_title("原会话", 7, false),
-            "原会话[派生自第7条对话]"
+            build_branch_conversation_title("原会话", 7, false),
+            "原会话[会话分支自第7条对话]"
         );
         assert_eq!(
-            build_derived_conversation_title("Chat 2026-04-18T10:00", 3, true),
-            "主会话[派生自第3条对话]"
+            build_branch_conversation_title("Chat 2026-04-18T10:00", 3, true),
+            "主会话[会话分支自第3条对话]"
         );
     }
 
     #[test]
-    fn build_derived_conversation_record_should_copy_latest_compaction_and_selected_messages() {
+    fn build_branch_conversation_record_should_copy_latest_compaction_and_selected_messages() {
         let mut data = AppData::default();
         data.assistant_department_agent_id = "agent-a".to_string();
         data.user_alias = "用户".to_string();
@@ -2358,29 +2358,29 @@ mod unarchived_conversations_tests {
             permission_control: DepartmentPermissionControl::default(),
         };
 
-        let derived = build_derived_conversation_record_from_selection(
+        let branched = build_branch_conversation_record_from_selection(
             &PathBuf::from("."),
             &data,
             &source,
             &department,
-            "派生标题",
-            latest_compaction_message_for_derive(&source).as_ref(),
+            "会话分支标题",
+            latest_compaction_message_for_branch(&source).as_ref(),
             &[source.messages[1].clone(), source.messages[3].clone()],
         );
 
-        assert_eq!(derived.messages.len(), 3);
+        assert_eq!(branched.messages.len(), 3);
         assert_eq!(
-            render_prompt_message_text(&derived.messages[0]),
+            render_prompt_message_text(&branched.messages[0]),
             render_prompt_message_text(&source.messages[2])
         );
         assert_eq!(
-            render_prompt_message_text(&derived.messages[1]),
+            render_prompt_message_text(&branched.messages[1]),
             render_prompt_message_text(&source.messages[1])
         );
         assert_eq!(
-            render_prompt_message_text(&derived.messages[2]),
+            render_prompt_message_text(&branched.messages[2]),
             render_prompt_message_text(&source.messages[3])
         );
-        assert_ne!(derived.messages[0].id, source.messages[2].id);
+        assert_ne!(branched.messages[0].id, source.messages[2].id);
     }
 }

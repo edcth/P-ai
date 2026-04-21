@@ -139,7 +139,7 @@
         :forcing-archive="forcingArchive"
         :compacting-conversation="compactingConversation"
         :conversation-busy="forcingArchive || compactingConversation"
-        :frozen="derivingConversation || deliveringConversationSelection"
+        :frozen="branchingConversation || forwardingConversationSelection"
         :message-blocks="visibleMessageBlocks"
         :latest-own-message-align-request="latestOwnMessageAlignRequest"
         :conversation-scroll-to-bottom-request="conversationScrollToBottomRequest"
@@ -178,8 +178,8 @@
         @force-archive="openForceArchiveActionDialog"
         @selection-action-copy="setStatus(`已复制 ${$event.count} 条消息`)"
         @selection-action-copy-error="setStatus(props.t('chat.copyFailed'))"
-        @selection-action-derive="onDeriveConversationFromSelection($event)"
-        @selection-action-deliver="onDeliverConversationFromSelection($event)"
+        @selection-action-branch="onBranchConversationFromSelection($event)"
+        @selection-action-forward="onForwardConversationFromSelection($event)"
         @selection-action-share="openSelectionShareDialog($event)"
         @lock-workspace="onLockChatWorkspace"
         @open-supervision-task="openSupervisionTaskDialog"
@@ -428,8 +428,8 @@ const props = defineProps<{
   chatting: boolean;
   forcingArchive: boolean;
   compactingConversation: boolean;
-  derivingConversation: boolean;
-  deliveringConversationSelection: boolean;
+  branchingConversation: boolean;
+  forwardingConversationSelection: boolean;
   visibleMessageBlocks: ChatMessageBlock[];
   latestOwnMessageAlignRequest: number;
   conversationScrollToBottomRequest: number;
@@ -552,8 +552,8 @@ const props = defineProps<{
   onRenameConversation: (payload: { conversationId: string; title: string }) => void;
   onToggleConversationPin: (conversationId: string) => void;
   onCreateConversation: (input?: { title?: string; departmentId?: string }) => void;
-  onDeriveConversationFromSelection: (payload: { count: number; messageIds: string[] }) => void;
-  onDeliverConversationFromSelection: (payload: { count: number; messageIds: string[]; targetConversationId: string }) => void;
+  onBranchConversationFromSelection: (payload: { count: number; messageIds: string[] }) => void;
+  onForwardConversationFromSelection: (payload: { count: number; messageIds: string[]; targetConversationId: string }) => void;
   loadArchives: () => void;
   selectArchive: (id: string) => void;
   selectUnarchivedConversation: (id: string) => void;
@@ -588,16 +588,16 @@ const selectionShareDialogLoading = ref(false);
 const selectionSharePayload = ref<SelectionSharePayload | null>(null);
 
 const chatBusyOverlay = computed(() => {
-  if (props.derivingConversation) {
+  if (props.branchingConversation) {
     return {
-      title: props.t("chat.derivingConversation"),
-      detail: props.t("chat.derivingConversationDetail"),
+      title: props.t("chat.branchingConversation"),
+      detail: props.t("chat.branchingConversationDetail"),
     };
   }
-  if (props.deliveringConversationSelection) {
+  if (props.forwardingConversationSelection) {
     return {
-      title: props.t("chat.deliveringConversationSelection"),
-      detail: props.t("chat.deliveringConversationSelectionDetail"),
+      title: props.t("chat.forwardingConversationSelection"),
+      detail: props.t("chat.forwardingConversationSelectionDetail"),
     };
   }
   return null;
