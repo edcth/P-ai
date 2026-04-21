@@ -1,7 +1,7 @@
 <template>
-  <div class="flex items-start gap-4 min-h-0 h-full pr-1">
+  <div class="flex flex-wrap items-start gap-4 min-h-0 h-full pr-1">
     <!-- 左侧：渠道列表 -->
-    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 w-1/3 shrink-0 flex flex-col overflow-hidden">
+    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 basis-[22rem] min-w-[20rem] max-w-full shrink-0 flex flex-col overflow-hidden">
       <div class="flex items-center justify-between px-3 py-2 shrink-0">
         <span class="font-semibold text-sm">{{ t("config.remoteIm.title") }}</span>
         <div class="flex gap-1">
@@ -51,7 +51,7 @@
     </div>
 
     <!-- 右侧：联系人列表 -->
-    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 w-2/3 flex flex-col overflow-hidden min-w-0">
+    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 min-w-[22rem] flex-1 basis-[28rem] flex flex-col overflow-hidden">
       <div class="flex items-center justify-between px-3 py-2 shrink-0">
         <span class="flex items-center gap-2 font-semibold text-sm">
           {{ t("config.remoteIm.contactsTitle") }}

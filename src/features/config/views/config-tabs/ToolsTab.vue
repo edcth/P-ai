@@ -1,9 +1,11 @@
 <template>
   <div class="grid gap-3">
     <div class="card bg-base-100 border border-base-300">
-      <div class="flex items-center justify-between gap-3 p-4">
-        <span class="text-sm font-medium">{{ t('config.tools.shellWorkspace') }}</span>
-        <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center justify-between gap-3 p-4">
+        <div class="min-w-0 flex-1">
+          <span class="text-sm font-medium">{{ t('config.tools.shellWorkspace') }}</span>
+        </div>
+        <div class="flex flex-wrap items-center justify-end gap-2">
           <button class="btn btn-sm" type="button" @click="openShellWorkspaceDir">{{ t('config.tools.openDir') }}</button>
           <button class="btn btn-sm" type="button" :disabled="shellWorkspacePathResetting" @click="resetShellWorkspacePath">{{ t('config.tools.resetWorkspacePath') }}</button>
           <button class="btn btn-sm" type="button" :disabled="shellWorkspaceInitializing" @click="initializeShellWorkspace">{{ t('config.tools.initializeWorkspace') }}</button>

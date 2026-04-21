@@ -2,13 +2,13 @@
   <div class="grid gap-3">
     <div class="card bg-base-100 border border-base-300">
       <div class="card-body p-4">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             <div class="text-sm opacity-70">SKILL 列表</div>
             <select
               v-if="skills.length > 0"
               v-model="selectedSkillPath"
-              class="select select-bordered w-[clamp(14rem,40vw,34rem)] max-w-full"
+              class="select select-bordered min-w-[12rem] flex-1 max-w-full"
               :disabled="loading"
             >
               <option v-for="item in skills" :key="item.path" :value="item.path">
@@ -16,7 +16,7 @@
               </option>
             </select>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center justify-end gap-2">
             <button class="btn btn-sm bg-base-200" type="button" @click="reload" :disabled="loading">刷新</button>
             <button class="btn btn-sm btn-primary" type="button" @click="openSkillsDir" :disabled="loading">打开目录</button>
           </div>

@@ -332,6 +332,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invokeTauri } from "./services/tauri-api";
 import { useAppBootstrap } from "./features/shell/composables/use-app-bootstrap";
@@ -474,6 +475,10 @@ const recordHotkeyProbeDown = ref(false);
 const chatWindowActiveSynced = ref<boolean | null>(null);
 const tauriWindowLabel = ref("unknown");
 const isChatTauriWindow = ref(false);
+const webviewZoomFactor = ref(1);
+const WEBVIEW_ZOOM_MIN = 0.8;
+const WEBVIEW_ZOOM_MAX = 2.0;
+const WEBVIEW_ZOOM_STEP = 0.1;
 let chatHistoryFlushedUnlisten: UnlistenFn | null = null;
 let chatRoundCompletedUnlisten: UnlistenFn | null = null;
 let chatRoundFailedUnlisten: UnlistenFn | null = null;
@@ -2988,6 +2993,57 @@ function handleVisibilityForMicPrewarm() {
   scheduleChatMicPrewarm("visibility_visible", CHAT_WINDOW_MIC_PREWARM_DEBOUNCE_MS);
 }
 
+function clampWebviewZoom(value: number) {
+  return Math.min(WEBVIEW_ZOOM_MAX, Math.max(WEBVIEW_ZOOM_MIN, value));
+}
+
+async function applyWebviewZoom(nextZoom: number) {
+  const normalized = Number(nextZoom);
+  if (!Number.isFinite(normalized)) return;
+  const clamped = clampWebviewZoom(normalized);
+  if (Math.abs(clamped - webviewZoomFactor.value) < 0.001) return;
+  await getCurrentWebview().setZoom(clamped);
+  webviewZoomFactor.value = clamped;
+}
+
+function hasZoomModifier(event: WheelEvent | KeyboardEvent) {
+  return !!event.ctrlKey || !!event.metaKey;
+}
+
+function handleGlobalZoomWheel(event: WheelEvent) {
+  if (!hasZoomModifier(event)) return;
+  event.preventDefault();
+  const direction = event.deltaY < 0 ? 1 : -1;
+  void applyWebviewZoom(webviewZoomFactor.value + direction * WEBVIEW_ZOOM_STEP).catch((error) => {
+    console.error("[外观] WebView 缩放失败", error);
+  });
+}
+
+function handleGlobalZoomKeydown(event: KeyboardEvent) {
+  if (!hasZoomModifier(event)) return;
+  const key = String(event.key || "").trim();
+  if (key === "+" || key === "=") {
+    event.preventDefault();
+    void applyWebviewZoom(webviewZoomFactor.value + WEBVIEW_ZOOM_STEP).catch((error) => {
+      console.error("[外观] WebView 缩放失败", error);
+    });
+    return;
+  }
+  if (key === "-" || key === "_") {
+    event.preventDefault();
+    void applyWebviewZoom(webviewZoomFactor.value - WEBVIEW_ZOOM_STEP).catch((error) => {
+      console.error("[外观] WebView 缩放失败", error);
+    });
+    return;
+  }
+  if (key === "0") {
+    event.preventDefault();
+    void applyWebviewZoom(1).catch((error) => {
+      console.error("[外观] WebView 缩放失败", error);
+    });
+  }
+}
+
 onMounted(() => {
   try {
     const label = String(getCurrentWindow().label || "").trim();
@@ -3137,6 +3193,8 @@ onMounted(() => {
   document.addEventListener("visibilitychange", handleVisibilityForStateSync);
   window.addEventListener("focus", handleWindowFocusForMicPrewarm);
   document.addEventListener("visibilitychange", handleVisibilityForMicPrewarm);
+  window.addEventListener("wheel", handleGlobalZoomWheel, { passive: false });
+  window.addEventListener("keydown", handleGlobalZoomKeydown);
 });
 
 onBeforeUnmount(() => {
@@ -3187,6 +3245,8 @@ onBeforeUnmount(() => {
   }
   window.removeEventListener("focus", handleWindowFocusForMicPrewarm);
   document.removeEventListener("visibilitychange", handleVisibilityForMicPrewarm);
+  window.removeEventListener("wheel", handleGlobalZoomWheel);
+  window.removeEventListener("keydown", handleGlobalZoomKeydown);
   cancelPendingRewindConfirm();
 });
 
