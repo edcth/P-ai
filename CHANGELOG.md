@@ -1,5 +1,9 @@
 # 变更日志
 
+## 发布：v0.9.21
+
+- 发布（release-0.9.21）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.21`，纳入本轮已完成的“配置窗口内联更新日志卡片、远程 changelog 代理读取修正、多语言补齐与流式跨工具分段相关脏逻辑清理”等更新
+
 ## 更新：配置窗口内联更新日志卡片
 
 - 功能（config-inline-remote-changelog-card）：配置窗口左上角新增“更新日志”入口，点击后会先弹出占据窗口约 90% 的应用内卡片，再懒加载远程 `CHANGELOG.md` 并直接按 Markdown 渲染展示，支持关闭按钮、遮罩点击与 `Esc` 关闭

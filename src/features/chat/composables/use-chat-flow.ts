@@ -203,7 +203,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
   // ── 流式统计 ──
   let streamToolCallCount = 0;
   let streamLastToolName = "";
-  let pendingAssistantParagraphBreak = false;
   let activeHistoryMessageCount = 0;
   const conversationStreamCache = new Map<string, ConversationStreamCache>();
 
@@ -810,27 +809,14 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
   function applyAssistantDeltaToDraft(draftId: string, delta: string) {
     if (!draftId || !delta) return;
-    let nextDelta = delta;
-    if (pendingAssistantParagraphBreak && delta.trim()) {
-      const currentText = String(options.latestAssistantText.value || "");
-      const separator = currentText.endsWith("\n\n")
-        ? ""
-        : currentText.endsWith("\n")
-          ? "\n"
-          : currentText
-            ? "\n\n"
-            : "";
-      nextDelta = `${separator}${delta}`;
-      pendingAssistantParagraphBreak = false;
-    }
-    options.latestAssistantText.value += nextDelta;
+    options.latestAssistantText.value += delta;
     const currentSegments = readDraftStreamSegments(draftId);
     const currentTail = readDraftStreamTail(draftId);
-    const parsed = consumeClosedMarkdownBlocks(`${currentTail}${nextDelta}`);
+    const parsed = consumeClosedMarkdownBlocks(`${currentTail}${delta}`);
     const nextStreamSegments = parsed.chunks.length > 0
       ? [...currentSegments, ...parsed.chunks]
       : currentSegments;
-    updateDraftText(draftId, nextStreamSegments, parsed.tail, nextDelta);
+    updateDraftText(draftId, nextStreamSegments, parsed.tail, delta);
   }
 
   function finalizeDeferredRoundCompletion() {
@@ -931,7 +917,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     queuedStreamingState = null;
     streamToolCallCount = 0;
     streamLastToolName = "";
-    pendingAssistantParagraphBreak = false;
     options.latestUserText.value = "";
     options.latestUserImages.value = [];
     options.latestAssistantText.value = "";
@@ -1350,9 +1335,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     if (parsed.kind === "tool_status") {
       const toolName = String(parsed.toolName || "").trim();
       if (parsed.toolStatus === "running" && toolName) {
-        if (String(options.latestAssistantText.value || "").trim()) {
-          pendingAssistantParagraphBreak = true;
-        }
         streamToolCallCount += 1;
         streamLastToolName = toolName;
         if (options.streamToolCalls) {
