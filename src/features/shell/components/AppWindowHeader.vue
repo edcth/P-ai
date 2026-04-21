@@ -48,8 +48,8 @@
       </button>
 
       <div
-        class="inline-flex h-8 items-center px-2"
-        :title="`当前上下文已使用 ${chatUsagePercent}%`"
+        class="inline-flex h-8 w-8 items-center justify-center text-base-content/70"
+        :title="`当前上下文已使用 ${normalizedChatUsagePercent}%`"
       >
         <svg
           class="h-5 w-5 -rotate-90"
@@ -69,7 +69,7 @@
             cy="18"
             r="14"
             fill="none"
-            :stroke="chatUsagePercent >= 70 ? 'var(--fallback-wa,oklch(var(--wa)/1))' : 'currentColor'"
+            stroke="currentColor"
             stroke-width="4"
             stroke-linecap="round"
             :stroke-dasharray="circumference"
@@ -429,8 +429,12 @@ const conversationListOpen = ref(false);
 
 const circumference = RING_CIRCUMFERENCE;
 
+const normalizedChatUsagePercent = computed(() =>
+  Math.min(100, Math.max(0, Math.round(Number(props.chatUsagePercent || 0)))),
+);
+
 const strokeDashoffset = computed(() => {
-  const percent = Math.min(100, Math.max(0, props.chatUsagePercent));
+  const percent = normalizedChatUsagePercent.value;
   return RING_CIRCUMFERENCE * (1 - percent / 100);
 });
 
