@@ -19,6 +19,8 @@ const UPDATER_GITHUB_EDGEONE_PROXY_PREFIX: &str = "https://edgeone.gh-proxy.org/
 const UPDATER_GITHUB_HK_PROXY_PREFIX: &str = "https://hk.gh-proxy.org/";
 const UPDATER_GITHUB_RELEASE_API_ORIGIN: &str =
     "https://api.github.com/repos/kawayiYokami/P-ai/releases/latest";
+const UPDATER_GITHUB_CHANGELOG_RAW_ORIGIN: &str =
+    "https://raw.githubusercontent.com/kawayiYokami/P-ai/main/CHANGELOG.md";
 const UPDATER_GITHUB_RELEASE_PAGE_ORIGIN: &str =
     "https://github.com/kawayiYokami/P-ai/releases/latest";
 const UPDATER_GITHUB_INSTALLER_MANIFEST_ORIGIN: &str =
@@ -164,6 +166,20 @@ fn updater_release_api_fallback_urls() -> Vec<String> {
         ),
         format!(
             "{UPDATER_GITHUB_HK_PROXY_PREFIX}{UPDATER_GITHUB_RELEASE_API_ORIGIN}"
+        ),
+    ]
+}
+
+fn updater_changelog_api_fallback_urls() -> Vec<String> {
+    vec![
+        format!(
+            "{UPDATER_GITHUB_PROXY_PREFIX}{UPDATER_GITHUB_CHANGELOG_RAW_ORIGIN}"
+        ),
+        format!(
+            "{UPDATER_GITHUB_EDGEONE_PROXY_PREFIX}{UPDATER_GITHUB_CHANGELOG_RAW_ORIGIN}"
+        ),
+        format!(
+            "{UPDATER_GITHUB_HK_PROXY_PREFIX}{UPDATER_GITHUB_CHANGELOG_RAW_ORIGIN}"
         ),
     ]
 }
@@ -354,6 +370,101 @@ async fn fetch_latest_release_payload() -> Result<GithubLatestReleasePayload, St
     Err(last_error)
 }
 
+async fn fetch_remote_changelog_markdown() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_secs(8))
+        .build()
+        .map_err(|err| format!("初始化更新日志客户端失败：{err}"))?;
+    let mut last_error = String::new();
+    for endpoint in updater_changelog_api_fallback_urls() {
+        for attempt in 1..=3 {
+            let response = client
+                .get(&endpoint)
+                .header(
+                    reqwest::header::USER_AGENT,
+                    format!("p-ai/{}", env!("CARGO_PKG_VERSION")),
+                )
+                .header(reqwest::header::ACCEPT, "application/json")
+                .send()
+                .await;
+            let response = match response {
+                Ok(response) => response,
+                Err(err) => {
+                    last_error = format!(
+                        "请求更新日志接口失败（地址：{endpoint}，第 {attempt} 次）：{err}"
+                    );
+                    continue;
+                }
+            };
+            if !response.status().is_success() {
+                last_error = format!(
+                    "GitHub 更新日志接口返回异常状态码：{}（地址：{endpoint}，第 {attempt} 次）",
+                    response.status().as_u16()
+                );
+                continue;
+            }
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|err| {
+                    format!(
+                        "解析 GitHub 更新日志响应失败（地址：{endpoint}，第 {attempt} 次）：{err}"
+                    )
+                })?;
+            return String::from_utf8(bytes.to_vec()).map_err(|err| {
+                format!(
+                    "解析 GitHub 更新日志文本失败（地址：{endpoint}，第 {attempt} 次）：{err}"
+                )
+            });
+        }
+    }
+    Err(last_error)
+}
+
+fn extract_latest_changelog_section(markdown: &str) -> Option<String> {
+    let normalized = markdown.replace("\r\n", "\n");
+    let mut sections = Vec::<(String, Vec<String>)>::new();
+    let mut current_title = String::new();
+    let mut current_lines = Vec::<String>::new();
+    for line in normalized.lines() {
+        if let Some(title) = line.strip_prefix("## ") {
+            if !current_title.is_empty() {
+                sections.push((current_title.clone(), current_lines.clone()));
+            }
+            current_title = title.trim().to_string();
+            current_lines.clear();
+            continue;
+        }
+        if !current_title.is_empty() {
+            current_lines.push(line.to_string());
+        }
+    }
+    if !current_title.is_empty() {
+        sections.push((current_title, current_lines));
+    }
+    let (title, lines) = sections.into_iter().next()?;
+    let mut body = lines.join("\n");
+    body = body.trim().to_string();
+    let mut result = String::new();
+    result.push_str(title.trim());
+    if !body.is_empty() {
+        result.push_str("\n\n");
+        result.push_str(&body);
+    }
+    Some(result)
+}
+
+async fn fetch_latest_changelog_notes() -> Result<String, String> {
+    let markdown = fetch_remote_changelog_markdown().await?;
+    extract_latest_changelog_section(&markdown)
+        .ok_or_else(|| "CHANGELOG.md 中未找到可展示的最新节".to_string())
+}
+
+#[tauri::command]
+async fn fetch_project_changelog_markdown() -> Result<String, String> {
+    fetch_remote_changelog_markdown().await
+}
+
 #[tauri::command]
 async fn check_github_update() -> Result<GithubUpdateInfo, String> {
     let runtime = detect_update_runtime_paths()?;
@@ -366,6 +477,13 @@ async fn check_github_update() -> Result<GithubUpdateInfo, String> {
         .filter(|v| !v.is_empty())
         .ok_or_else(|| "GitHub Release 未返回有效版本号".to_string())?;
     let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let release_notes = match fetch_latest_changelog_notes().await {
+        Ok(notes) => notes,
+        Err(err) => {
+            eprintln!("[自动更新] 远程更新日志读取失败：{err}");
+            payload.body.clone().unwrap_or_default()
+        }
+    };
     Ok(GithubUpdateInfo {
         current_version: current_version.clone(),
         latest_version: latest_version.clone(),
@@ -377,7 +495,7 @@ async fn check_github_update() -> Result<GithubUpdateInfo, String> {
                 .unwrap_or(UPDATER_GITHUB_RELEASE_PAGE_ORIGIN),
         ),
         update_source: "github".to_string(),
-        release_notes: payload.body.unwrap_or_default(),
+        release_notes,
         published_at: payload.published_at,
         runtime_kind: runtime.runtime_kind.as_str().to_string(),
         can_force_update: true,

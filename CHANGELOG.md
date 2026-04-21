@@ -1,5 +1,11 @@
 # 变更日志
 
+## 更新：配置窗口内联更新日志卡片
+
+- 功能（config-inline-remote-changelog-card）：配置窗口左上角新增“更新日志”入口，点击后会先弹出占据窗口约 90% 的应用内卡片，再懒加载远程 `CHANGELOG.md` 并直接按 Markdown 渲染展示，支持关闭按钮、遮罩点击与 `Esc` 关闭
+- 修复（remote-changelog-raw-proxy-fallback）：远程更新日志读取链路避开 `api.github.com/contents` 经代理时可能出现的响应体解码异常，改为通过 `gh-proxy -> edgeone.gh-proxy -> hk.gh-proxy` 读取 `raw.githubusercontent.com` 原始 Markdown 文本，并在更新检查弹窗中优先复用最新 changelog 摘要
+- 优化（inline-changelog-i18n）：补齐内联更新日志卡片的中英繁文案，统一走 i18n，避免按钮标题、加载态与空态继续硬编码
+
 ## 更新：会话分支与转发到会话口径统一
 
 - 重构（chat-branch-and-forward-wording-unification）：项目内原“派生”统一更名为“会话分支”，原“投送”统一更名为“转发到会话”；同步收口前后端命令名、输入输出结构、忙态字段、事件名、状态提示、多语言文案与测试标题，避免同一功能在字段、英文名与中文口径上继续混用旧术语

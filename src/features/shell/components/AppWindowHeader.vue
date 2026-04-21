@@ -96,6 +96,15 @@
 
     <div v-if="viewMode !== 'chat'" class="relative z-10 min-w-0 justify-self-start flex items-center gap-2" @mousedown.stop>
       <button
+        v-if="viewMode === 'config'"
+        class="btn btn-ghost btn-sm h-8 min-h-8 w-8 px-0"
+        :title="t('about.changelog')"
+        @click.stop="openChangelogDialog"
+      >
+        <ScrollText class="h-3.5 w-3.5" />
+      </button>
+
+      <button
         v-if="viewMode === 'config' && showUpdateToLatestButton"
         class="btn btn-success btn-sm h-8 min-h-8 gap-2 px-3 relative shadow-sm"
         :title="updateToLatestTitle || ''"
@@ -257,15 +266,70 @@
       <button @click.prevent="closeCreateConversationDialog">close</button>
     </form>
   </dialog>
+
+  <dialog v-if="viewMode === 'config'" class="modal" :class="{ 'modal-open': changelogDialogOpen }">
+    <div class="modal-box h-[90vh] w-[90vw] max-w-none p-0">
+      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <div class="text-sm font-medium">{{ t("about.changelog") }}</div>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="btn btn-sm btn-ghost"
+            :disabled="changelogLoading"
+            @click="loadProjectChangelog(true)"
+          >
+            <span v-if="changelogLoading" class="loading loading-spinner loading-xs"></span>
+            {{ t("common.refresh") }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm btn-ghost"
+            @click="closeChangelogDialog"
+          >
+            {{ t("common.close") }}
+          </button>
+        </div>
+      </div>
+      <div class="config-changelog-markdown h-[calc(90vh-118px)] overflow-auto px-5 py-4">
+        <div v-if="changelogLoading && !changelogMarkdown" class="flex h-full min-h-0 items-center justify-center text-sm text-base-content/70">
+          <span class="loading loading-spinner loading-sm mr-2"></span>
+          {{ t("about.changelogLoading") }}
+        </div>
+        <div v-else-if="changelogError" class="rounded-box border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
+          {{ changelogError }}
+        </div>
+        <MarkdownRender
+          v-else-if="changelogMarkdown"
+          class="ecall-markdown-content max-w-none"
+          custom-id="chat-markstream"
+          :nodes="changelogNodes"
+          :is-dark="markdownIsDark"
+          :code-block-props="markdownCodeBlockProps"
+          :mermaid-props="markdownMermaidProps"
+          :typewriter="false"
+        />
+        <div v-else class="flex h-full min-h-0 items-center justify-center text-sm text-base-content/70">
+          {{ t("about.changelogEmpty") }}
+        </div>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button @click.prevent="closeChangelogDialog">close</button>
+    </form>
+  </dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Download, FoldVertical, History, Minus, Search, Settings, Square, SquarePen, TextAlignJustify, X } from "lucide-vue-next";
+import { invokeTauri } from "../../../services/tauri-api";
+import MarkdownRender, { enableKatex, enableMermaid, getMarkdown, parseMarkdownToStructure } from "markstream-vue";
+import { Download, FoldVertical, History, Minus, ScrollText, Search, Settings, Square, SquarePen, TextAlignJustify, X } from "lucide-vue-next";
 import type { ChatConversationOverviewItem } from "../../../types/app";
 import ChatConversationListCard from "../../chat/components/ChatConversationListCard.vue";
+import { registerChatMarkstreamComponents } from "../../chat/markdown/register-chat-markstream";
 import type { ConfigSearchResult, ConfigSearchTab } from "../../config/search/config-search";
+import "markstream-vue/index.css";
 
 const RING_RADIUS = 14;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -284,6 +348,34 @@ type CreateConversationInput = {
 
 const RECENT_CONVERSATION_TOPICS_STORAGE_KEY = "easy_call.recent_conversation_topics.v1";
 const RECENT_CONVERSATION_TOPICS_LIMIT = 7;
+
+enableMermaid();
+enableKatex();
+registerChatMarkstreamComponents();
+
+const markstreamMarkdown = getMarkdown();
+const markdownCodeBlockProps = {
+  showHeader: true,
+  showCopyButton: true,
+  showPreviewButton: false,
+  showExpandButton: true,
+  showCollapseButton: true,
+  showFontSizeButtons: false,
+  enableFontSizeControl: false,
+  isShowPreview: false,
+  showTooltips: false,
+};
+const markdownMermaidProps = {
+  showHeader: true,
+  showCopyButton: true,
+  showExportButton: false,
+  showFullscreenButton: true,
+  showCollapseButton: false,
+  showZoomControls: true,
+  showModeToggle: false,
+  enableWheelZoom: true,
+  showTooltips: false,
+};
 
 const props = defineProps<{
   viewMode: "chat" | "archives" | "config";
@@ -384,6 +476,19 @@ const createConversationTitle = ref("");
 const createConversationDepartmentId = ref("");
 const createConversationCopyCurrent = ref(false);
 const configSearchOpen = ref(false);
+const changelogDialogOpen = ref(false);
+const changelogLoading = ref(false);
+const changelogError = ref("");
+const changelogMarkdown = ref("");
+const changelogLoaded = ref(false);
+
+const changelogNodes = computed(() =>
+  parseMarkdownToStructure(changelogMarkdown.value || "", markstreamMarkdown, { final: true }),
+);
+const markdownIsDark = computed(() => {
+  const theme = String(document.documentElement.getAttribute("data-theme") || "").toLowerCase();
+  return ["dark", "night", "black", "business", "dracula", "dim", "forest", "synthwave"].includes(theme);
+});
 
 function loadRecentConversationTopics() {
   try {
@@ -464,6 +569,9 @@ function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape" && configSearchOpen.value) {
     configSearchOpen.value = false;
   }
+  if (event.key === "Escape" && changelogDialogOpen.value) {
+    closeChangelogDialog();
+  }
 }
 
 function openConfigSearchPopover() {
@@ -507,6 +615,30 @@ function handleCreateConversation() {
   createConversationCopyCurrent.value = false;
   createConversationDialogOpen.value = true;
   nextTick(() => createConversationInputRef.value?.focus());
+}
+
+async function loadProjectChangelog(force = false) {
+  if (changelogLoading.value) return;
+  if (changelogLoaded.value && !force) return;
+  changelogLoading.value = true;
+  changelogError.value = "";
+  try {
+    changelogMarkdown.value = await invokeTauri<string>("fetch_project_changelog_markdown");
+    changelogLoaded.value = true;
+  } catch (error) {
+    changelogError.value = String(error);
+  } finally {
+    changelogLoading.value = false;
+  }
+}
+
+function openChangelogDialog() {
+  changelogDialogOpen.value = true;
+  void loadProjectChangelog();
+}
+
+function closeChangelogDialog() {
+  changelogDialogOpen.value = false;
 }
 
 function closeCreateConversationDialog() {
@@ -563,3 +695,44 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWindowKeydown);
 });
 </script>
+
+<style scoped>
+.config-changelog-markdown:deep(.ecall-markdown-content.prose) {
+  max-width: none;
+}
+
+.config-changelog-markdown:deep(.ecall-markdown-content) {
+  color: inherit;
+  line-height: 1.75;
+  font-size: 0.95rem;
+}
+
+.config-changelog-markdown:deep(.ecall-markdown-content :where(p,ul,ol,blockquote,pre,table,figure,.paragraph-node,.list-node,.blockquote,.table-node-wrapper,.code-block-container,._mermaid,.vmr-container)) {
+  margin-top: 0.85rem;
+  margin-bottom: 0.85rem;
+}
+
+.config-changelog-markdown:deep(.ecall-markdown-content :where(h1,h2,h3,h4,.heading-node)) {
+  margin-top: 1.25rem;
+  margin-bottom: 0.75rem;
+  font-weight: 700;
+}
+
+.config-changelog-markdown:deep(.ecall-markdown-content :where(a,.link-node)) {
+  color: hsl(var(--p));
+  text-decoration: underline;
+}
+
+.config-changelog-markdown:deep(.ecall-markdown-content :where(blockquote,.blockquote)) {
+  border-left: 3px solid color-mix(in srgb, currentColor 18%, transparent);
+  padding-left: 0.9rem;
+  opacity: 0.9;
+}
+
+.config-changelog-markdown:deep(.ecall-markdown-content :where(:not(pre) > code,.inline-code)) {
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 0.45rem;
+  padding: 0.08rem 0.35rem;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+</style>

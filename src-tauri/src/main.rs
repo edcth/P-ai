@@ -474,6 +474,7 @@ fn main() {
             check_github_update,
             start_github_update,
             apply_prepared_github_update,
+            fetch_project_changelog_markdown,
             get_app_version,
             get_project_repository_url,
             load_config,
