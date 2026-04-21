@@ -1,5 +1,9 @@
 # 变更日志
 
+## 更新：流式正文在多次工具调用之间保留分段
+
+- 修复（chat-streaming-text-paragraph-break-between-tool-rounds）：聊天窗口中的流式助理草稿在一次调度内跨多次工具调用继续发言时，不再把后续发言直接黏成同一段；当工具开始新一轮执行后，下一段流式正文首包会自动补上段落分隔，保持流式观感与最终落库消息更接近
+
 ## 发布：v0.9.20
 
 - 发布（release-0.9.20）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.20`，纳入本轮已完成的“会话置顶分组、主会话常驻置顶、图钉快速切换与分割线分组展示”等更新
