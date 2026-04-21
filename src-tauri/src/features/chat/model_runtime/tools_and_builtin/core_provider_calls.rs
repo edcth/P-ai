@@ -520,6 +520,55 @@ async fn call_model_openai_non_stream(
     })
 }
 
+async fn call_model_openai_responses_non_stream(
+    api_config: &ResolvedApiConfig,
+    model_name: &str,
+    prepared: PreparedPrompt,
+) -> Result<ModelReply, String> {
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
+    let client = genai::Client::builder().build();
+    let service_target = genai::ServiceTarget {
+        endpoint: genai::resolver::Endpoint::from_owned(normalize_openai_genai_base_url(
+            &api_config.base_url,
+        )),
+        auth: genai::resolver::AuthData::from_single(request_api_key),
+        model: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAIResp, model_name),
+    };
+    let request = build_openai_responses_genai_request(&prepared)?;
+    let mut options = genai::chat::ChatOptions::default()
+        .with_capture_usage(true)
+        .with_capture_content(true)
+        .with_capture_reasoning_content(false)
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
+    if let Some(temperature) = api_config.temperature {
+        options = options.with_temperature(temperature);
+    }
+    if let Some(max_output_tokens) = api_config.max_output_tokens {
+        options = options.with_max_tokens(max_output_tokens);
+    }
+    let response = client
+        .exec_chat(service_target, request, Some(&options))
+        .await
+        .map_err(|err| format!("genai responses non-stream failed: {err}"))?;
+    Ok(ModelReply {
+        assistant_text: response.content.into_texts().join("\n"),
+        reasoning_standard: response.reasoning_content.unwrap_or_default(),
+        reasoning_inline: String::new(),
+        assistant_provider_meta: None,
+        tool_history_events: Vec::new(),
+        suppress_assistant_message: false,
+        trusted_input_tokens: response
+            .usage
+            .prompt_tokens
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0),
+    })
+}
+
 async fn call_model_openai_responses(
     api_config: &ResolvedApiConfig,
     model_name: &str,
@@ -646,6 +695,56 @@ async fn call_model_anthropic(
         .map_err(|err| format!("genai anthropic stream build failed: {err}"))?
         .stream;
     collect_streaming_model_reply_genai(&mut stream, None).await
+}
+
+async fn call_model_anthropic_non_stream(
+    api_config: &ResolvedApiConfig,
+    model_name: &str,
+    prepared: PreparedPrompt,
+) -> Result<ModelReply, String> {
+    let api_config = resolve_request_api_config(api_config).await?;
+    let request_api_key = consume_api_key_for_request(&api_config);
+    let client = genai::Client::builder().build();
+    let service_target = genai::ServiceTarget {
+        endpoint: genai::resolver::Endpoint::from_owned(normalize_provider_genai_base_url(
+            genai::adapter::AdapterKind::Anthropic,
+            &api_config.base_url,
+        )),
+        auth: genai::resolver::AuthData::from_single(request_api_key),
+        model: genai::ModelIden::new(genai::adapter::AdapterKind::Anthropic, model_name),
+    };
+    let request = build_anthropic_genai_request(&prepared)?;
+    let mut options = genai::chat::ChatOptions::default()
+        .with_capture_usage(true)
+        .with_capture_content(true)
+        .with_capture_reasoning_content(false)
+        .with_extra_headers(provider_genai_headers(&api_config));
+    if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
+        options = options.with_reasoning_effort(reasoning_effort);
+    }
+    if let Some(temperature) = api_config.temperature {
+        options = options.with_temperature(temperature);
+    }
+    if let Some(max_output_tokens) = api_config.max_output_tokens {
+        options = options.with_max_tokens(max_output_tokens);
+    }
+    let response = client
+        .exec_chat(service_target, request, Some(&options))
+        .await
+        .map_err(|err| format!("genai anthropic non-stream failed: {err}"))?;
+    Ok(ModelReply {
+        assistant_text: response.content.into_texts().join("\n"),
+        reasoning_standard: response.reasoning_content.unwrap_or_default(),
+        reasoning_inline: String::new(),
+        assistant_provider_meta: None,
+        tool_history_events: Vec::new(),
+        suppress_assistant_message: false,
+        trusted_input_tokens: response
+            .usage
+            .prompt_tokens
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0),
+    })
 }
 
 #[cfg(test)]

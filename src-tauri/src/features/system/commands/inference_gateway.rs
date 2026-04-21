@@ -201,6 +201,12 @@ async fn invoke_model_non_stream_by_format(
 ) -> Result<ModelReply, String> {
     match resolved_api.request_format {
         RequestFormat::OpenAI => call_model_openai_non_stream(resolved_api, model_name, prepared).await,
+        RequestFormat::OpenAIResponses | RequestFormat::Codex => {
+            call_model_openai_responses_non_stream(resolved_api, model_name, prepared).await
+        }
+        RequestFormat::Anthropic => {
+            call_model_anthropic_non_stream(resolved_api, model_name, prepared).await
+        }
         _ => invoke_model_by_format(resolved_api, model_name, prepared).await,
     }
 }
@@ -282,12 +288,13 @@ async fn invoke_model_with_policy(
     if policy.json_only {
         // json_only is enforced by prompt contract + caller-side JSON parse.
     }
-    let prefer_non_stream = provider_streaming_disabled(
-        app_state,
-        resolved_api.request_format,
-        &resolved_api.base_url,
-        model_name,
-    );
+    let prefer_non_stream = policy.json_only
+        || provider_streaming_disabled(
+            app_state,
+            resolved_api.request_format,
+            &resolved_api.base_url,
+            model_name,
+        );
     let first_result = if prefer_non_stream {
         if let Some(timeout_secs) = policy.timeout_secs {
             invoke_model_non_stream_by_format_with_timeout(

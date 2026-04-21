@@ -2,6 +2,7 @@
 
 ## 发布：v0.9.21
 
+- 修复（json-only-force-non-stream-across-openai-responses-anthropic）：`json_only` 模型请求现在会统一强制走非流式，不再只在 OpenAI Chat 路径生效；同时为 `OpenAIResponses/Codex` 与 `Anthropic` 补齐真正的非流式调用实现，避免工具安全审查、上下文整理与归档摘要这类只需要完整 JSON 结果的请求误走流式或名义非流式、实际仍落回流式链路
 - 发布（release-0.9.21）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.21`，纳入本轮已完成的“配置窗口内联更新日志卡片、远程 changelog 代理读取修正、多语言补齐与流式跨工具分段相关脏逻辑清理”等更新
 - 优化（request-log-pipeline-aggregation-and-ui）：设置页“调用日志”改为以调度 `chat_pipeline` 为主语展示，单次调度内的多轮 `chat` 会先在内存中暂存并在 pipeline 收口时聚合进同一条主日志；主列表仅按最近 10 次调度裁剪，同时日志页改成“调度主卡 + 轮次摘要列表 + 轮次详情弹层”，不再把多次工具轮转平铺成多张同级卡片
 - 优化（prompt-dirty-split-system-source-environment）：提示词缓存的脏标记拆分为“系统源变化”和“系统环境变化”两类，部门/人格配置与 shell workspace / remote IM 等会话环境不再共用同一种重建原因；同时补充回归测试，锁定系统源 dirty 不会误伤会话环境缓存、系统环境 dirty 不会误伤部门系统缓存
