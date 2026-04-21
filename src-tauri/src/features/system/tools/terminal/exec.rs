@@ -186,13 +186,17 @@ fn terminal_command_is_read_whitelist(
 ) -> bool {
     if terminal_is_python_like_command(command)
         || !matches!(analysis.write_risk, TerminalWriteRisk::None)
-        || analysis.has_directory_change
         || analysis.unresolved_write_targets
     {
         return false;
     }
 
-    if analysis.accesses.iter().any(|item| item.intent != TerminalPathIntent::Read) {
+    if analysis.accesses.iter().any(|item| {
+        !matches!(
+            item.intent,
+            TerminalPathIntent::Read | TerminalPathIntent::ChangeDirectory
+        )
+    }) {
         return false;
     }
 
@@ -226,7 +230,8 @@ fn terminal_command_is_read_whitelist(
         let allowed = match family {
             TerminalShellFamily::PowerShell => matches!(
                 base_cmd.as_str(),
-                "get-childitem"
+                "set-location"
+                    | "get-childitem"
                     | "get-content"
                     | "select-string"
                     | "select-object"
@@ -236,7 +241,10 @@ fn terminal_command_is_read_whitelist(
                     | "get-item"
                     | "test-path"
                     | "resolve-path"
+                    | "get-location"
                     | "pwd"
+                    | "rg"
+                    | "findstr"
                     | "where"
             ),
             TerminalShellFamily::Posix | TerminalShellFamily::Other => {
@@ -1549,5 +1557,21 @@ mod terminal_exec_tests {
         );
         assert!(!main_root.join("note.txt").exists(), "note.txt should not be created");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn powershell_set_location_then_rg_should_be_read_whitelist() {
+        let cwd = PathBuf::from("E:\\github\\easy_call_ai");
+        let command =
+            r#"Set-Location 'E:/github/easy_call_ai'; rg -n "codex|status" src src-tauri README.md"#;
+        let analysis = terminal_analyze_command(&cwd, command, "powershell7");
+
+        assert_eq!(analysis.write_risk, TerminalWriteRisk::None);
+        assert!(analysis.has_directory_change);
+        assert!(terminal_command_is_read_whitelist(
+            command,
+            "powershell7",
+            &analysis
+        ));
     }
 }
