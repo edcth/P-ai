@@ -1,15 +1,15 @@
 <template>
   <div class="flex h-[80vh] w-[80vw] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] flex-col rounded-box border border-base-300 bg-base-100 shadow-xl">
-    <div class="flex-1 min-h-0 overflow-y-auto p-2">
+    <div class="flex-1 min-h-0 overflow-y-auto p-0">
       <section
         v-for="section in conversationSections"
         :key="section.key"
-        class="mb-3 last:mb-0"
+        class="mb-2 last:mb-0"
       >
-        <div class="divider my-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-base-content/45 before:bg-base-300 after:bg-base-300">
+        <div class="divider my-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-base-content/45 before:bg-base-300 after:bg-base-300">
           {{ section.title }}
         </div>
-        <div class="space-y-2">
+        <div class="space-y-1">
           <component
             v-for="item in section.items"
             :key="item.conversationId"
@@ -24,7 +24,7 @@
             :title="conversationItemTitle(item)"
             @click="handleConversationCardClick(item)"
           >
-            <div class="flex items-center gap-3 p-3">
+            <div class="flex items-center gap-2 p-2">
               <div class="shrink-0">
                 <div class="avatar">
                   <div class="w-10 h-10 rounded-full bg-error text-error-content">
@@ -42,8 +42,8 @@
               </div>
 
               <div class="flex-1 min-w-0">
-                <div class="flex items-start justify-between gap-2">
-                  <div class="flex min-w-0 items-center gap-2">
+                <div class="flex items-start justify-between gap-1.5">
+                  <div class="flex min-w-0 items-center gap-1.5">
                     <input
                       v-if="isEditingTitle(item)"
                       :ref="setRenameInputRef"
@@ -106,18 +106,18 @@
               </div>
             </div>
 
-            <div class="px-3 pb-3 space-y-1">
+            <div class="space-y-1 px-2 pb-2">
               <div
                 v-for="preview in normalizedPreviewMessages(item).slice(0, 2)"
                 :key="preview.messageId"
-                class="flex items-start gap-2 text-xs"
+                class="flex items-start gap-1.5 text-xs"
               >
                 <span class="shrink-0 font-medium">
                   {{ speakerLabel(preview) }}:
                 </span>
                 <span class="truncate opacity-80">{{ previewText(preview) }}</span>
               </div>
-              <div v-if="normalizedPreviewMessages(item).length === 0" class="text-xs opacity-60 px-2">
+              <div v-if="normalizedPreviewMessages(item).length === 0" class="px-1 text-xs opacity-60">
                 {{ t("chat.conversationNoPreview") }}
               </div>
             </div>

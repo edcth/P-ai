@@ -1,21 +1,21 @@
 <template>
   <aside class="flex h-full w-88 shrink-0 flex-col border-r border-base-300 bg-base-200">
-    <div class="flex-1 min-h-0 overflow-y-auto py-2">
+    <div class="flex-1 min-h-0 overflow-y-auto py-1">
       <section
         v-for="section in conversationSections"
         :key="section.key"
-        class="mb-3 last:mb-0"
+        class="mb-2 last:mb-0"
       >
-        <div class="divider my-1 px-4 text-[11px] font-semibold uppercase tracking-wide text-base-content/45 before:bg-base-300 after:bg-base-300">
+        <div class="divider my-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-base-content/45 before:bg-base-300 after:bg-base-300">
           {{ section.title }}
         </div>
-        <div class="space-y-2">
+        <div class="space-y-1">
           <component
             v-for="item in section.items"
             :key="item.conversationId"
             :is="isCurrentConversation(item) ? 'div' : 'button'"
             :type="isCurrentConversation(item) ? undefined : 'button'"
-            class="mx-2 block w-[calc(100%-1rem)] rounded-box bg-base-200 text-left transition-colors hover:bg-base-100"
+            class="block w-full rounded-box text-left transition-colors hover:bg-base-100"
             :class="[
               item.conversationId === activeConversationId ? 'bg-base-300 hover:bg-base-300' : '',
               isConversationDisabled(item) ? 'cursor-not-allowed opacity-60' : '',
@@ -24,7 +24,7 @@
             :title="conversationItemTitle(item)"
             @click="handleConversationCardClick(item)"
           >
-            <div class="flex items-center gap-3 p-3">
+            <div class="flex items-center gap-2 p-2">
               <div class="shrink-0">
                 <div class="avatar">
                   <div class="flex h-10 w-10 items-center justify-center rounded-full bg-neutral text-neutral-content">
@@ -40,8 +40,8 @@
               </div>
 
               <div class="flex-1 min-w-0">
-                <div class="flex items-start justify-between gap-2">
-                  <div class="flex min-w-0 items-center gap-2">
+                <div class="flex items-start justify-between gap-1.5">
+                  <div class="flex min-w-0 items-center gap-1.5">
                     <input
                       v-if="isEditingTitle(item)"
                       :ref="setRenameInputRef"
@@ -100,16 +100,16 @@
               </div>
             </div>
 
-            <div class="space-y-1 px-3 pb-3">
+            <div class="space-y-1 px-2 pb-2">
               <div
                 v-for="preview in normalizedPreviewMessages(item).slice(0, 2)"
                 :key="preview.messageId"
-                class="flex items-start gap-2 text-xs"
+                class="flex items-start gap-1.5 text-xs"
               >
                 <span class="shrink-0 font-medium">{{ speakerLabel(preview) }}:</span>
                 <span class="truncate opacity-80">{{ previewText(preview) }}</span>
               </div>
-              <div v-if="normalizedPreviewMessages(item).length === 0" class="px-2 text-xs opacity-60">
+              <div v-if="normalizedPreviewMessages(item).length === 0" class="px-1 text-xs opacity-60">
                 {{ t("chat.conversationNoPreview") }}
               </div>
             </div>
