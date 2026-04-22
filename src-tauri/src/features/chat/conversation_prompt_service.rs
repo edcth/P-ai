@@ -180,6 +180,88 @@ fn build_abstract_message_projection(
 }
 
 impl ConversationPromptService {
+    fn trusted_prompt_usage_from_real_usage(
+        &self,
+        usage: PromptUsageResolution,
+    ) -> Option<TrustedPromptUsage> {
+        if usage.estimated_prompt_tokens.is_some() {
+            return None;
+        }
+        Some(TrustedPromptUsage {
+            effective_prompt_tokens: usage.effective_prompt_tokens,
+            context_usage_ratio: usage.usage_ratio,
+        })
+    }
+
+    fn prime_runtime_trusted_prompt_usage(
+        &self,
+        runtime_context: &mut RuntimeContext,
+        conversation: &Conversation,
+        selected_api: &ApiConfig,
+    ) {
+        if runtime_context.trusted_prompt_usage.is_some() {
+            return;
+        }
+        runtime_context.trusted_prompt_usage = self
+            .latest_real_prompt_usage(conversation, selected_api)
+            .and_then(|usage| self.trusted_prompt_usage_from_real_usage(usage));
+    }
+
+    fn consume_runtime_trusted_prompt_usage_or_estimate(
+        &self,
+        runtime_context: &mut RuntimeContext,
+        prepared: &PreparedPrompt,
+        selected_api: &ApiConfig,
+        current_agent: &AgentProfile,
+    ) -> PromptUsageResolution {
+        if let Some(usage) = runtime_context.trusted_prompt_usage.take() {
+            return PromptUsageResolution {
+                effective_prompt_tokens: usage.effective_prompt_tokens,
+                usage_ratio: usage.context_usage_ratio,
+                estimated_prompt_tokens: None,
+                source: "trusted_prompt_usage",
+            };
+        }
+        self.resolve_prompt_usage_from_estimate(prepared, selected_api, current_agent)
+    }
+
+    fn consume_shared_trusted_prompt_usage_or_estimate(
+        &self,
+        trusted_prompt_usage: &std::sync::Mutex<Option<TrustedPromptUsage>>,
+        prepared: &PreparedPrompt,
+        selected_api: &ApiConfig,
+        current_agent: &AgentProfile,
+    ) -> PromptUsageResolution {
+        let mut guard = cache_lock_recover("trusted_prompt_usage", trusted_prompt_usage);
+        if let Some(usage) = guard.take() {
+            return PromptUsageResolution {
+                effective_prompt_tokens: usage.effective_prompt_tokens,
+                usage_ratio: usage.context_usage_ratio,
+                estimated_prompt_tokens: None,
+                source: "trusted_prompt_usage",
+            };
+        }
+        drop(guard);
+        self.resolve_prompt_usage_from_estimate(prepared, selected_api, current_agent)
+    }
+
+    fn refresh_shared_trusted_prompt_usage(
+        &self,
+        trusted_prompt_usage: &std::sync::Mutex<Option<TrustedPromptUsage>>,
+        provider_prompt_tokens: Option<u64>,
+        selected_api: &ApiConfig,
+    ) {
+        let next = provider_prompt_tokens
+            .filter(|value| *value > 0)
+            .map(|effective_prompt_tokens| TrustedPromptUsage {
+                effective_prompt_tokens,
+                context_usage_ratio: effective_prompt_tokens as f64
+                    / f64::from(selected_api.context_window_tokens.max(1)),
+            });
+        let mut guard = cache_lock_recover("trusted_prompt_usage", trusted_prompt_usage);
+        *guard = next;
+    }
+
     fn latest_real_prompt_usage(
         &self,
         conversation: &Conversation,
@@ -187,6 +269,9 @@ impl ConversationPromptService {
     ) -> Option<PromptUsageResolution> {
         let context_window = f64::from(selected_api.context_window_tokens.max(1));
         for message in conversation.messages.iter().rev() {
+            if is_context_compaction_message(message, &message.role) {
+                return None;
+            }
             if message.role.trim() != "assistant" {
                 continue;
             }

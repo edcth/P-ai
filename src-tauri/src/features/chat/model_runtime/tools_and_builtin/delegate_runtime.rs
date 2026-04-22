@@ -235,6 +235,7 @@ async fn delegate_execute_agent_run(
             model_config_id: Some(target_api_config_id.to_string()),
             event_source: runtime_context_trimmed(Some("delegate_trigger")),
             dispatch_reason: runtime_context_trimmed(Some("delegate_send")),
+            ..RuntimeContext::default()
         }),
         trigger_only: false,
     };

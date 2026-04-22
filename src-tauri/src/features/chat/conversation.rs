@@ -655,7 +655,11 @@ fn decide_archive_before_send_from_usage(
     has_assistant_reply: bool,
 ) -> (ArchiveDecision, &'static str) {
     let decision = match usage.source {
-        "cached_effective_prompt_tokens" | "cached_usage_ratio" => {
+        "cached_effective_prompt_tokens"
+        | "cached_usage_ratio"
+        | "trusted_prompt_usage"
+        | "assistant_message_effective_prompt_tokens"
+        | "assistant_message_context_usage_ratio" => {
             build_archive_decision_from_usage_ratio(
                 usage.usage_ratio,
                 last_user_at,

@@ -166,6 +166,15 @@ struct RuntimeContext {
     event_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dispatch_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trusted_prompt_usage: Option<TrustedPromptUsage>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct TrustedPromptUsage {
+    effective_prompt_tokens: u64,
+    context_usage_ratio: f64,
 }
 
 fn runtime_context_trimmed(value: Option<&str>) -> Option<String> {

@@ -92,6 +92,7 @@ struct ToolLoopAutoCompactionContext {
     last_archive_summary: Option<String>,
     chat_overrides: Option<ChatPromptOverrides>,
     enable_pdf_images: bool,
+    trusted_prompt_usage: std::sync::Arc<std::sync::Mutex<Option<TrustedPromptUsage>>>,
 }
 
 fn tool_loop_transient_tool_history_message(events: &[Value]) -> Option<ChatMessage> {
@@ -582,9 +583,6 @@ async fn maybe_apply_auto_compaction_before_tool_continue_genai(
     resolved_api: &ResolvedApiConfig,
     on_delta: &tauri::ipc::Channel<AssistantDeltaEvent>,
     transient_tool_history: &[Value],
-    protocol_family: ToolCallProtocolFamily,
-    system_prompt: &mut Option<String>,
-    messages: &mut Vec<genai::chat::ChatMessage>,
 ) -> Result<bool, String> {
     let Some(state) = state else {
         return Ok(false);
@@ -611,21 +609,21 @@ async fn maybe_apply_auto_compaction_before_tool_continue_genai(
         return Ok(false);
     };
 
-    let usage = conversation_prompt_service().resolve_prompt_usage(
+    let usage = conversation_prompt_service().consume_shared_trusted_prompt_usage_or_estimate(
+        &context.trusted_prompt_usage,
         &prepared_before,
         selected_api,
         &context.agent,
-        &source,
     );
-    let force_threshold = if usage.source == "estimated_prompt_tokens" {
-        0.95
-    } else {
-        0.82
-    };
-    if usage.usage_ratio < force_threshold {
+    let (decision, decision_source) = decide_archive_before_send_from_usage(
+        &usage,
+        source.last_user_at.as_deref(),
+        archive_pipeline_has_assistant_reply(&source),
+    );
+    if !decision.should_archive {
         runtime_log_info(format!(
-            "[聊天] 工具续调前上下文整理检查 跳过 conversation_id={} usage_ratio={:.4} source={} threshold={:.2}",
-            context.conversation_id, usage.usage_ratio, usage.source, force_threshold
+            "[聊天] 工具续调前上下文整理检查 跳过 conversation_id={} usage_ratio={:.4} source={} reason={}",
+            context.conversation_id, decision.usage_ratio, decision_source, decision.reason
         ));
         return Ok(false);
     }
@@ -648,7 +646,7 @@ async fn maybe_apply_auto_compaction_before_tool_continue_genai(
         resolved_api,
         &source,
         &context.agent.id,
-        "force_context_usage_82_before_tool_continue",
+        &decision.reason,
         "COMPACTION-BEFORE-TOOL-CONTINUE",
     )
     .await;
@@ -683,31 +681,30 @@ async fn maybe_apply_auto_compaction_before_tool_continue_genai(
         ));
     } else {
         runtime_log_info(format!(
-            "[聊天] 工具续调前上下文整理 完成 conversation_id={} usage_ratio_before={:.4} source={} effective_prompt_tokens={} estimated_prompt_tokens={}",
+            "[聊天] 工具续调前上下文整理 完成 conversation_id={} usage_ratio_before={:.4} source={} reason={} forced={} effective_prompt_tokens={} estimated_prompt_tokens={}",
             context.conversation_id,
             usage.usage_ratio,
-            usage.source,
+            decision_source,
+            decision.reason,
+            decision.forced,
             usage.effective_prompt_tokens,
             usage.estimated_prompt_tokens.unwrap_or(0)
         ));
     }
 
-    let Some((_compacted_source, prepared_after)) = build_tool_loop_prepared_for_continuation(
-        state,
-        context,
-        selected_api,
-        resolved_api,
-        transient_tool_history,
-    )?
-    else {
-        return Err("自动整理完成后未找到当前会话，无法继续工具续调。".to_string());
-    };
+    let _ = on_delta.send(AssistantDeltaEvent {
+        delta: String::new(),
+        kind: Some("tool_status".to_string()),
+        request_id: None,
+        phase_id: None,
+        reason: None,
+        tool_name: Some("archive".to_string()),
+        tool_status: Some("done".to_string()),
+        tool_args: None,
+        message: Some("整理完成，正在重新开始当前调度...".to_string()),
+    });
 
-    let (next_system_prompt, next_messages) =
-        build_genai_message_state(&prepared_after, protocol_family)?;
-    *system_prompt = next_system_prompt;
-    *messages = next_messages;
-    Ok(true)
+    Err(CHAT_DISPATCH_RESTART_AFTER_COMPACTION.to_string())
 }
 
 async fn run_genai_tool_loop(
@@ -758,7 +755,7 @@ async fn run_genai_tool_loop(
     let mut full_reasoning_standard = String::new();
     let mut tool_history_events = Vec::<Value>::new();
     let mut trusted_input_tokens: Option<u64> = None;
-    let (mut system_prompt, mut messages) = build_genai_message_state(&prepared, protocol_family)?;
+    let (system_prompt, mut messages) = build_genai_message_state(&prepared, protocol_family)?;
 
     let mut auto_compaction_applied = false;
     let mut tool_repeat_guard = ToolRepeatGuard::default();
@@ -772,9 +769,6 @@ async fn run_genai_tool_loop(
                 resolved_api,
                 on_delta,
                 &tool_history_events,
-                protocol_family,
-                &mut system_prompt,
-                &mut messages,
             )
             .await?;
         }
@@ -878,6 +872,14 @@ async fn run_genai_tool_loop(
                 }
                 Err(err) => return Err(format!("GenAI 流式处理失败：{err}")),
             }
+        }
+
+        if let Some(context) = auto_compaction_context {
+            conversation_prompt_service().refresh_shared_trusted_prompt_usage(
+                &context.trusted_prompt_usage,
+                trusted_input_tokens,
+                selected_api,
+            );
         }
 
         if !turn_text.is_empty() {
@@ -1266,7 +1268,7 @@ async fn run_genai_tool_loop_non_stream(
     let mut full_reasoning_standard = String::new();
     let mut tool_history_events = Vec::<Value>::new();
     let mut trusted_input_tokens: Option<u64> = None;
-    let (mut system_prompt, mut messages) = build_genai_message_state(&prepared, protocol_family)?;
+    let (system_prompt, mut messages) = build_genai_message_state(&prepared, protocol_family)?;
 
     let mut auto_compaction_applied = false;
     let mut tool_repeat_guard = ToolRepeatGuard::default();
@@ -1279,9 +1281,6 @@ async fn run_genai_tool_loop_non_stream(
                 resolved_api,
                 on_delta,
                 &tool_history_events,
-                protocol_family,
-                &mut system_prompt,
-                &mut messages,
             )
             .await?;
         }

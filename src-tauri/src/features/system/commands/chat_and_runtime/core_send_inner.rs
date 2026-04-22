@@ -1855,9 +1855,13 @@ async fn send_chat_message_inner(
         })
         .collect::<Vec<_>>();
 
-    let mut archived_before_send = false;
+    let mut archived_before_send_any = false;
+    let mut compaction_restart_count = 0usize;
+    let mut persist_user_message_on_next_prepare = true;
 
     let mut preloaded_prepare_snapshot = preloaded_prepare_snapshot;
+    'dispatch: loop {
+
     let mut prepare_request_context = |persist_user_message: bool| -> Result<_, String> {
         log_run_stage("prepare_context.begin");
         let snapshot = if let Some(snapshot) = preloaded_prepare_snapshot.take() {
@@ -2114,10 +2118,9 @@ async fn send_chat_message_inner(
         } else {
             Some(ToolLoopAutoCompactionContext {
                 conversation_id: conversation.id.clone(),
-                request_id: input
-                    .runtime_context
-                    .as_ref()
-                    .and_then(|value| value.request_id.as_deref())
+                request_id: runtime_context
+                    .request_id
+                    .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned),
@@ -2132,6 +2135,7 @@ async fn send_chat_message_inner(
                 last_archive_summary: snapshot.last_archive_summary.clone(),
                 chat_overrides: chat_overrides.clone(),
                 enable_pdf_images: snapshot.enable_pdf_images,
+                trusted_prompt_usage: std::sync::Arc::new(std::sync::Mutex::new(None)),
             })
         };
 
@@ -2168,7 +2172,7 @@ async fn send_chat_message_inner(
             snapshot.is_runtime_conversation,
         ))
     };
-    let mut prepared_context = prepare_request_context(true)?;
+    let mut prepared_context = prepare_request_context(persist_user_message_on_next_prepare)?;
     if apply_prompt_image_fallbacks_to_prepared(
         &state,
         &app_config,
@@ -2195,13 +2199,18 @@ async fn send_chat_message_inner(
             );
         }
     } else {
-        let latest_real_usage = conversation_prompt_service()
-            .latest_real_prompt_usage(&conversation_for_compaction, &selected_api);
-        let usage_resolution = conversation_prompt_service().resolve_prompt_usage(
+        conversation_prompt_service().prime_runtime_trusted_prompt_usage(
+            &mut runtime_context,
+            &conversation_for_compaction,
+            &selected_api,
+        );
+        let latest_real_usage = runtime_context.trusted_prompt_usage.as_ref().copied();
+        let usage_resolution = conversation_prompt_service()
+            .consume_runtime_trusted_prompt_usage_or_estimate(
+            &mut runtime_context,
             &prepared_context.1,
             &selected_api,
             &prepared_context.4,
-            &conversation_for_compaction,
         );
         let (decision, decision_source) = decide_archive_before_send_from_usage(
             &usage_resolution,
@@ -2216,7 +2225,7 @@ async fn send_chat_message_inner(
             decision.usage_ratio,
             decision_source,
             latest_real_usage.map(|usage| usage.effective_prompt_tokens),
-            latest_real_usage.map(|usage| usage.usage_ratio),
+            latest_real_usage.map(|usage| usage.context_usage_ratio),
             usage_resolution.estimated_prompt_tokens.or(estimated_prompt_tokens_before_send),
             selected_api.context_window_tokens
         );
@@ -2248,13 +2257,13 @@ async fn send_chat_message_inner(
 
             match archive_res {
                 Ok(result) => {
-                    archived_before_send = result.archived;
+                    archived_before_send_any = archived_before_send_any || result.archived;
                     if decision.forced {
                         let done_message = if result.warning.as_deref().unwrap_or("").trim().is_empty() {
-                            "整理完成，将继续当前会话。".to_string()
+                            "整理完成，正在重新开始当前调度...".to_string()
                         } else {
                             format!(
-                                "整理完成（降级摘要）：{}",
+                                "整理完成（降级摘要），正在重新开始当前调度：{}",
                                 result.warning.unwrap_or_default()
                             )
                         };
@@ -2270,24 +2279,26 @@ async fn send_chat_message_inner(
                             message: Some(done_message),
                         });
                     }
-                    prepared_context = prepare_request_context(false)?;
-                    if apply_prompt_image_fallbacks_to_prepared(
-                        &state,
-                        &app_config,
-                        &selected_api,
-                        &mut prepared_context.1,
-                    )
-                    .await?
-                        && prepared_context.5.is_some()
-                    {
-                        prepared_context.5 = Some(
-                            conversation_prompt_service().estimate_prepared_prompt_tokens(
-                                &prepared_context.1,
-                                &selected_api,
-                                &prepared_context.4,
-                            ),
-                        );
+                    compaction_restart_count = compaction_restart_count.saturating_add(1);
+                    if compaction_restart_count > 3 {
+                        return Err("上下文整理后仍无法恢复发送，重开调度次数已超过上限。".to_string());
                     }
+                    runtime_log_info(format!(
+                        "[聊天调度] 发送前整理命中，当前调度闭口并准备重开: conversation_id={}，restart_count={}，reason={}",
+                        conversation_for_compaction.id,
+                        compaction_restart_count,
+                        decision.reason
+                    ));
+                    runtime_context.request_id = Some(format!("chat-{}", Uuid::new_v4()));
+                    runtime_context.dispatch_id = Some(Uuid::new_v4().to_string());
+                    runtime_context.event_source =
+                        runtime_context_trimmed(Some("compaction_restart"));
+                    runtime_context.dispatch_reason =
+                        runtime_context_trimmed(Some("after_auto_compaction"));
+                    runtime_context.trusted_prompt_usage = None;
+                    preloaded_prepare_snapshot = None;
+                    persist_user_message_on_next_prepare = false;
+                    continue 'dispatch;
                 }
                 Err(err) => {
                     if decision.forced {
@@ -2323,6 +2334,13 @@ async fn send_chat_message_inner(
         conversation_for_request,
         is_runtime_conversation,
     ) = prepared_context;
+    if let Some(context) = tool_loop_auto_compaction_context.as_ref() {
+        let mut guard = cache_lock_recover(
+            "trusted_prompt_usage",
+            &context.trusted_prompt_usage,
+        );
+        *guard = runtime_context.trusted_prompt_usage.take();
+    }
     log_run_stage("prompt_ready");
 
     let mut model_reply: Option<ModelReply> = None;
@@ -2403,28 +2421,56 @@ async fn send_chat_message_inner(
                 &chat_session_key,
             )
             .await;
-            push_llm_round_log(
-                Some(&state),
-                Some(format!("round-{chat_session_key}")),
-                Some(chat_session_key.to_string()),
-                chat_round_execution.log_parts.scene,
-                chat_round_execution.log_parts.request_format,
-                &chat_round_execution.log_parts.provider_name,
-                &chat_round_execution.log_parts.model_name,
-                &chat_round_execution.log_parts.base_url,
-                chat_round_execution.log_parts.headers.clone(),
-                chat_round_execution.log_parts.tools.clone(),
-                chat_round_execution.log_parts.response.clone(),
-                chat_round_execution.log_parts.error.clone(),
-                chat_round_execution.log_parts.elapsed_ms,
-                chat_round_execution.log_parts.timeline.clone(),
+            let restart_after_compaction = matches!(
+                &chat_round_execution.result,
+                Err(error) if error == CHAT_DISPATCH_RESTART_AFTER_COMPACTION
             );
+            if !restart_after_compaction {
+                push_llm_round_log(
+                    Some(&state),
+                    Some(format!("round-{chat_session_key}")),
+                    Some(chat_session_key.to_string()),
+                    chat_round_execution.log_parts.scene,
+                    chat_round_execution.log_parts.request_format,
+                    &chat_round_execution.log_parts.provider_name,
+                    &chat_round_execution.log_parts.model_name,
+                    &chat_round_execution.log_parts.base_url,
+                    chat_round_execution.log_parts.headers.clone(),
+                    chat_round_execution.log_parts.tools.clone(),
+                    chat_round_execution.log_parts.response.clone(),
+                    chat_round_execution.log_parts.error.clone(),
+                    chat_round_execution.log_parts.elapsed_ms,
+                    chat_round_execution.log_parts.timeline.clone(),
+                );
+            }
             let request_finish_stage = format!(
                 "model_request.finish[candidate_api_id={},attempt={}]",
                 candidate_selected_api.id,
                 attempt + 1
             );
             log_run_stage(&request_finish_stage);
+
+            if restart_after_compaction {
+                compaction_restart_count = compaction_restart_count.saturating_add(1);
+                if compaction_restart_count > 3 {
+                    return Err("上下文整理后仍无法恢复发送，重开调度次数已超过上限。".to_string());
+                }
+                runtime_log_info(format!(
+                    "[聊天调度] 续调整理命中，当前调度闭口并准备重开: conversation_id={}，restart_count={}",
+                    conversation_id,
+                    compaction_restart_count
+                ));
+                runtime_context.request_id = Some(format!("chat-{}", Uuid::new_v4()));
+                runtime_context.dispatch_id = Some(Uuid::new_v4().to_string());
+                runtime_context.event_source =
+                    runtime_context_trimmed(Some("compaction_restart"));
+                runtime_context.dispatch_reason =
+                    runtime_context_trimmed(Some("after_tool_continue_compaction"));
+                runtime_context.trusted_prompt_usage = None;
+                preloaded_prepare_snapshot = None;
+                persist_user_message_on_next_prepare = false;
+                continue 'dispatch;
+            }
 
             let (reason_text, final_error_text) = match chat_round_execution.result {
                 Ok(reply) => {
@@ -2734,24 +2780,27 @@ async fn send_chat_message_inner(
         );
     }
 
-    Ok(SendChatResult {
-        conversation_id,
-        latest_user_text,
-        assistant_text,
-        reasoning_standard,
-        reasoning_inline,
-        archived_before_send,
-        assistant_message: persisted_assistant_message,
-        provider_prompt_tokens: trusted_input_tokens,
-        estimated_prompt_tokens: Some(estimated_prompt_tokens),
-        effective_prompt_tokens: Some(effective_prompt_tokens),
-        effective_prompt_source: Some(effective_prompt_source.to_string()),
-        context_window_tokens: Some(active_selected_api.context_window_tokens),
-        max_output_tokens: active_resolved_api.max_output_tokens,
-        context_usage_percent: Some(context_usage_percent),
-        remote_im_reply_decision: remote_im_reply_decision.as_ref().map(|item| item.action.clone()),
-        remote_im_reply_target: remote_im_reply_decision.and_then(|item| item.target),
-    })
+        break Ok(SendChatResult {
+            conversation_id,
+            latest_user_text,
+            assistant_text,
+            reasoning_standard,
+            reasoning_inline,
+            archived_before_send: archived_before_send_any,
+            assistant_message: persisted_assistant_message,
+            provider_prompt_tokens: trusted_input_tokens,
+            estimated_prompt_tokens: Some(estimated_prompt_tokens),
+            effective_prompt_tokens: Some(effective_prompt_tokens),
+            effective_prompt_source: Some(effective_prompt_source.to_string()),
+            context_window_tokens: Some(active_selected_api.context_window_tokens),
+            max_output_tokens: active_resolved_api.max_output_tokens,
+            context_usage_percent: Some(context_usage_percent),
+            remote_im_reply_decision: remote_im_reply_decision
+                .as_ref()
+                .map(|item| item.action.clone()),
+            remote_im_reply_target: remote_im_reply_decision.and_then(|item| item.target),
+        });
+    }
     };
 
     let result = futures_util::future::Abortable::new(run, abort_registration).await;

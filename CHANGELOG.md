@@ -2,6 +2,7 @@
 
 ## 进行中
 
+- 重构（compaction-close-and-restart-dispatch）：上下文压缩现在被明确建模为调度边界事件；无论是发送前自动整理还是工具续调前整理，一旦命中压缩，当前调度都会闭口结束，并在压缩完成后以新的 `request_id / dispatch_id` 重开一次调度，不再在同一次调度里跨过压缩消息继续原地续跑；同时统一首发与续调两条链的压缩判定入口，确保真相层、展示层与抽象调度层都一致表现为“消息组 -> 压缩消息 -> 新消息组”
 - 修复（prompt-usage-source-unification-and-conversation-cache-removal）：提示词服务的上下文占用查询现在统一以最近一条 assistant 消息的 `providerMeta` 为真实真源，找不到时才回退到本地估算；同时移除 `Conversation.last_context_usage_ratio` 与 `Conversation.last_effective_prompt_tokens` 这组伪状态字段，避免前后端围绕“会话级缓存”和“消息级真实值”继续分叉，强制压缩判断、手动整理上下文预览与相关测试夹具也同步切到同一套真源语义
 - 重构（conversation-prompt-service-phase-1）：引入会话提示词服务第一阶段骨架，先收口提示词 owner 与只读 snapshot，不替换 `Conversation.messages` 作为持久化真源；系统提示词最终合成与对话消息投影入口开始统一经过服务层，并新增缓存命中稳定性与 `prompt_revision` 边界测试，确保 `todo/task` 与 `memory_recall` 不会误触发系统提示词 revision
 - 重构（conversation-prompt-service-phase-2）：继续收口提示词服务 owner，系统侧块生成统一改为由服务内部发起，并把主聊天、`SummaryContext`、工具安全审查、工具审查提交、vision 描述这几条高频真实业务入口的 latest user / prepared prompt 生成动作收进服务内部；外部主链只再传原始条件与场景意图，不再手搓系统块或 latest user 文本
