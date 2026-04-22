@@ -492,6 +492,7 @@ fn build_system_prompt_text_uncached(ordered_blocks: &[String]) -> String {
     prompt
 }
 
+#[cfg(test)]
 fn finalize_system_prompt_with_manager(
     state: Option<&AppState>,
     mode_label: &str,
@@ -505,11 +506,17 @@ fn finalize_system_prompt_with_manager(
     fixed_system_prompt_text: &str,
     user_profile_memory_block: Option<&str>,
     terminal_block: Option<&str>,
-    system_preamble_blocks: &[String],
+    _system_preamble_blocks: &[String],
     stage_logger: Option<&dyn Fn(&str)>,
 ) -> String {
+    let mode = match mode_label.trim() {
+        "delegate" => PromptBuildMode::Delegate,
+        "summary_context" => PromptBuildMode::SummaryContext,
+        _ => PromptBuildMode::Chat,
+    };
     conversation_prompt_service().finalize_system_prompt(
         state,
+        mode,
         mode_label,
         conversation,
         agent,
@@ -519,7 +526,13 @@ fn finalize_system_prompt_with_manager(
         fixed_system_prompt_text,
         user_profile_memory_block,
         terminal_block,
-        system_preamble_blocks,
+        &ChatPromptOverrides {
+            latest_user_intent: None,
+            todo_tool_enabled: false,
+            remote_im_activation_sources: Vec::new(),
+            latest_images: None,
+            latest_audios: None,
+        },
         stage_logger,
     )
 }

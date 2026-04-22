@@ -1007,20 +1007,12 @@ async fn submit_tool_review_batch(
         .or_else(|| resolve_selected_api_config(&app_config, None))
         .ok_or_else(|| "当前会话模型不可用。".to_string())?;
     let resolved_api = resolve_api_config(&app_config, Some(&selected_api.id))?;
-    let prepared = PreparedPrompt {
-        preamble: tool_review_report_system_prompt(&app_config.ui_language),
-        history_messages: Vec::new(),
-        latest_user_text: tool_review_submission_user_prompt(
-            &batch,
-            &tool_review_collect_recent_context(&conversation, &batch, 20_000),
-            &tool_review_latest_unfinished_plan(&conversation),
-        ),
-        latest_user_meta_text: String::new(),
-        latest_user_extra_text: String::new(),
-        latest_user_extra_blocks: Vec::new(),
-        latest_images: Vec::new(),
-        latest_audios: Vec::new(),
-    };
+    let prepared = conversation_prompt_service().build_tool_review_submission_prepared_prompt(
+        &app_config.ui_language,
+        &batch,
+        &tool_review_collect_recent_context(&conversation, &batch, 20_000),
+        &tool_review_latest_unfinished_plan(&conversation),
+    );
     let review_submit_execution = invoke_model_with_policy(
         &resolved_api,
         &selected_api.model,

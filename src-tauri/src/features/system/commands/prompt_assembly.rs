@@ -7,12 +7,35 @@ enum PromptBuildMode {
 
 #[derive(Debug, Clone, Default)]
 struct ChatPromptOverrides {
-    latest_user_text: Option<String>,
-    latest_user_meta_text: Option<String>,
-    latest_user_extra_blocks: Vec<String>,
-    system_preamble_blocks: Vec<String>,
+    latest_user_intent: Option<LatestUserPayloadIntent>,
+    // 会话主链不允许外部直接注入系统侧块；系统提示词相关块必须由提示词服务内部生成。
+    todo_tool_enabled: bool,
+    remote_im_activation_sources: Vec<RemoteImActivationSource>,
     latest_images: Option<Vec<PreparedBinaryPayload>>,
     latest_audios: Option<Vec<PreparedBinaryPayload>>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum LatestUserPayloadIntent {
+    ChatRequest {
+        trigger_only: bool,
+        submitted_user_text: String,
+        include_task_board: bool,
+        include_todo_board: bool,
+        attachment_relative_paths: Vec<String>,
+    },
+    SummaryContext {
+        scene: SummaryContextScene,
+        user_alias: String,
+        current_user_profile: String,
+        include_todo_block: bool,
+    },
+    Explicit {
+        text: String,
+        meta_text: String,
+        extra_blocks: Vec<String>,
+    },
 }
 
 pub(crate) fn prompt_xml_block(block_name: &str, body: impl AsRef<str>) -> String {
@@ -36,7 +59,7 @@ fn build_prepared_prompt_for_mode(
     ui_language: &str,
     data_path: Option<&PathBuf>,
     _last_archive_summary: Option<&str>,
-    terminal_block: Option<String>,
+    terminal_block_override: Option<String>,
     chat_overrides: Option<ChatPromptOverrides>,
     state: Option<&AppState>,
     selected_api: Option<&ApiConfig>,
@@ -55,7 +78,7 @@ fn build_prepared_prompt_for_mode(
         ui_language,
         data_path,
         _last_archive_summary,
-        terminal_block,
+        terminal_block_override,
         chat_overrides,
         state,
         None,
@@ -77,7 +100,7 @@ fn build_prepared_prompt_for_mode_with_stage_logger(
     ui_language: &str,
     data_path: Option<&PathBuf>,
     _last_archive_summary: Option<&str>,
-    terminal_block: Option<String>,
+    terminal_block_override: Option<String>,
     chat_overrides: Option<ChatPromptOverrides>,
     state: Option<&AppState>,
     stage_logger: Option<&dyn Fn(&str)>,
@@ -85,169 +108,26 @@ fn build_prepared_prompt_for_mode_with_stage_logger(
     resolved_api: Option<&ResolvedApiConfig>,
     enable_pdf_images: Option<bool>,
 ) -> PreparedPrompt {
-    match mode {
-        PromptBuildMode::Chat => {
-            let mut prepared = build_prompt_with_stage_logger(
-                conversation,
-                agent,
-                agents,
-                departments,
-                user_name,
-                user_intro,
-                response_style_id,
-                ui_language,
-                data_path,
-                state,
-                stage_logger,
-                resolved_api,
-                enable_pdf_images.unwrap_or(false),
-            );
-            let overrides = chat_overrides.unwrap_or_default();
-            prepared.preamble = finalize_system_prompt_with_manager(
-                state,
-                "chat",
-                conversation,
-                agent,
-                departments,
-                selected_api,
-                Some((user_name, user_intro)),
-                response_style_id,
-                ui_language,
-                &prepared.preamble,
-                None,
-                terminal_block.as_deref(),
-                &overrides.system_preamble_blocks,
-                stage_logger,
-            );
-            if let Some(log_stage) = stage_logger {
-                log_stage("prepare_context.prompt_system_finalize_ready");
-            }
-            let latest_user_text = overrides
-                .latest_user_text
-                .unwrap_or_else(|| prepared.latest_user_text.clone());
-            let latest_user_meta_text = overrides
-                .latest_user_meta_text
-                .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
-            apply_chat_latest_user_payload(
-                &mut prepared,
-                latest_user_text,
-                latest_user_meta_text,
-                &overrides.latest_user_extra_blocks,
-                overrides.latest_images,
-                overrides.latest_audios,
-            );
-            prepared
-        }
-        PromptBuildMode::Delegate => {
-            let mut prepared = build_delegate_prompt_with_stage_logger(
-                conversation,
-                agent,
-                agents,
-                departments,
-                response_style_id,
-                ui_language,
-                data_path,
-                state,
-                stage_logger,
-                resolved_api,
-                enable_pdf_images.unwrap_or(false),
-            );
-            let overrides = chat_overrides.unwrap_or_default();
-            prepared.preamble = finalize_system_prompt_with_manager(
-                state,
-                "delegate",
-                conversation,
-                agent,
-                departments,
-                selected_api,
-                None,
-                response_style_id,
-                ui_language,
-                &prepared.preamble,
-                None,
-                terminal_block.as_deref(),
-                &overrides.system_preamble_blocks,
-                stage_logger,
-            );
-            if let Some(log_stage) = stage_logger {
-                log_stage("prepare_context.prompt_system_finalize_ready");
-            }
-            let latest_user_text = overrides
-                .latest_user_text
-                .unwrap_or_else(|| prepared.latest_user_text.clone());
-            let latest_user_meta_text = overrides
-                .latest_user_meta_text
-                .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
-            apply_chat_latest_user_payload(
-                &mut prepared,
-                latest_user_text,
-                latest_user_meta_text,
-                &overrides.latest_user_extra_blocks,
-                overrides.latest_images,
-                overrides.latest_audios,
-            );
-            prepared
-        }
-        PromptBuildMode::SummaryContext => {
-            let prepared = build_prompt_with_stage_logger(
-                conversation,
-                agent,
-                agents,
-                departments,
-                user_name,
-                user_intro,
-                response_style_id,
-                ui_language,
-                data_path,
-                state,
-                stage_logger,
-                resolved_api,
-                enable_pdf_images.unwrap_or(false),
-            );
-            let mut prepared = prepared;
-            for message in &mut prepared.history_messages {
-                message.images.clear();
-                message.audios.clear();
-            }
-            prepared.latest_images.clear();
-            prepared.latest_audios.clear();
-            let overrides = chat_overrides.unwrap_or_default();
-            prepared.preamble = finalize_system_prompt_with_manager(
-                state,
-                "summary_context",
-                conversation,
-                agent,
-                departments,
-                selected_api,
-                Some((user_name, user_intro)),
-                response_style_id,
-                ui_language,
-                &prepared.preamble,
-                None,
-                terminal_block.as_deref(),
-                &overrides.system_preamble_blocks,
-                stage_logger,
-            );
-            if let Some(log_stage) = stage_logger {
-                log_stage("prepare_context.prompt_system_finalize_ready");
-            }
-            let latest_user_text = overrides
-                .latest_user_text
-                .unwrap_or_else(|| prepared.latest_user_text.clone());
-            let latest_user_meta_text = overrides
-                .latest_user_meta_text
-                .unwrap_or_else(|| prepared.latest_user_meta_text.clone());
-            apply_chat_latest_user_payload(
-                &mut prepared,
-                latest_user_text,
-                latest_user_meta_text,
-                &overrides.latest_user_extra_blocks,
-                overrides.latest_images,
-                overrides.latest_audios,
-            );
-            prepared
-        }
-    }
+    conversation_prompt_service().build_prepared_prompt_for_mode(
+        mode,
+        conversation,
+        agent,
+        agents,
+        departments,
+        user_name,
+        user_intro,
+        response_style_id,
+        ui_language,
+        data_path,
+        _last_archive_summary,
+        terminal_block_override,
+        chat_overrides,
+        state,
+        stage_logger,
+        selected_api,
+        resolved_api,
+        enable_pdf_images,
+    )
 }
 
 fn render_user_profile_memory_block(

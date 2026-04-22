@@ -669,19 +669,12 @@ async fn summarize_archived_conversation_with_model_v2(
         None,
         None,
         Some(ChatPromptOverrides {
-            latest_user_text: Some(build_summary_context_requirement_block(scene)),
-            latest_user_meta_text: Some(build_summary_context_memory_block(
-                agent,
-                user_alias,
-                &current_user_profile,
-            )),
-            latest_user_extra_blocks: {
-                let mut blocks = vec![build_summary_context_json_contract_block(scene)];
-                if let Some(todo_block) = build_summary_context_todo_block(source_conversation) {
-                    blocks.push(todo_block);
-                }
-                blocks
-            },
+            latest_user_intent: Some(LatestUserPayloadIntent::SummaryContext {
+                scene,
+                user_alias: user_alias.to_string(),
+                current_user_profile: current_user_profile.clone(),
+                include_todo_block: build_summary_context_todo_block(source_conversation).is_some(),
+            }),
             latest_images: Some(Vec::new()),
             latest_audios: Some(Vec::new()),
             ..ChatPromptOverrides::default()

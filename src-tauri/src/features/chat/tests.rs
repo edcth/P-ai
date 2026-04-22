@@ -2788,10 +2788,14 @@
             .map(|message| message.created_at.clone());
         let conversation = test_active_conversation_with_messages(messages, last_user_at);
         let overrides = ChatPromptOverrides {
-            latest_user_extra_blocks: vec![
-                "这是一个额外的任务板块。".to_string(),
-                "这是一个额外的前台工具提示块。".to_string(),
-            ],
+            latest_user_intent: Some(LatestUserPayloadIntent::Explicit {
+                text: String::new(),
+                meta_text: String::new(),
+                extra_blocks: vec![
+                    "这是一个额外的任务板块。".to_string(),
+                    "这是一个额外的前台工具提示块。".to_string(),
+                ],
+            }),
             ..Default::default()
         };
 

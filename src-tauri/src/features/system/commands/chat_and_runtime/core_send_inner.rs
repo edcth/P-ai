@@ -2069,63 +2069,30 @@ async fn send_chat_message_inner(
         let current_department = department_for_agent_id(&app_config, &snapshot.current_agent.id);
         let todo_enabled =
             tool_enabled(&selected_api, &snapshot.current_agent, current_department, "todo");
-        let mut chat_overrides = ChatPromptOverrides::default();
-        chat_overrides
-            .system_preamble_blocks
-            .push(build_hidden_skill_snapshot_block_for_department(&state, current_department));
-        log_run_stage("prepare_context.skill_snapshot_ready");
-        if let Some(workspace_agents_block) = build_workspace_agents_md_block(&conversation, &state) {
-            chat_overrides
-                .system_preamble_blocks
-                .push(workspace_agents_block);
-        }
-        log_run_stage("prepare_context.workspace_agents_ready");
-        if todo_enabled {
-            chat_overrides
-                .system_preamble_blocks
-                .push(build_todo_guide_block());
-        }
-        log_run_stage("prepare_context.todo_guide_ready");
-        if let Some(runtime_block) = build_remote_im_activation_runtime_block(
-            &remote_im_activation_sources,
-            &app_config.ui_language,
-        ) {
-            chat_overrides.system_preamble_blocks.push(runtime_block);
-        }
-        log_run_stage("prepare_context.im_runtime_ready");
-        if !trigger_only {
-            chat_overrides.latest_user_text = Some(latest_user_text.clone());
-            if !is_delegate_conversation {
-                if let Some(task_board) = build_hidden_task_board_block(&state) {
-                    chat_overrides.latest_user_extra_blocks.push(task_board);
-                }
-            }
-            log_run_stage("prepare_context.task_board_ready");
-            if todo_enabled {
-                if let Some(todo_board) = build_conversation_todo_board_block(&conversation) {
-                    chat_overrides.latest_user_extra_blocks.push(todo_board);
-                }
-            }
-            log_run_stage("prepare_context.todo_board_ready");
-            let attachment_meta = normalize_payload_attachments(input.payload.attachments.as_ref());
-            for item in attachment_meta {
-                let relative_path = item
-                    .get("relativePath")
+        let attachment_relative_paths = normalize_payload_attachments(input.payload.attachments.as_ref())
+            .into_iter()
+            .filter_map(|item| {
+                item.get("relativePath")
                     .and_then(Value::as_str)
                     .map(str::trim)
-                    .unwrap_or("");
-                if relative_path.is_empty() {
-                    continue;
-                }
-                chat_overrides.latest_user_extra_blocks.push(format!(
-                    "用户上传了附件，文件位于你工作区的 downloads 目录（路径：{}）。\n你可以先用 shell 工具定位或查看基础文件信息；具体解析方式应按文件类型选择合适 skill 或在线检索正确方法。\n仅当用户明确要求处理该附件时再处理；若用户未明确要求，请先询问用户想如何处理。",
-                    relative_path
-                ));
-            }
-            log_run_stage("prepare_context.attachment_hints_ready");
-            chat_overrides.latest_images = Some(effective_images.clone());
-            chat_overrides.latest_audios = Some(effective_audios.clone());
-        }
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Vec<_>>();
+        let chat_overrides = ChatPromptOverrides {
+            latest_user_intent: Some(LatestUserPayloadIntent::ChatRequest {
+                trigger_only,
+                submitted_user_text: latest_user_text.clone(),
+                include_task_board: !trigger_only && !is_delegate_conversation,
+                include_todo_board: !trigger_only && todo_enabled,
+                attachment_relative_paths,
+            }),
+            todo_tool_enabled: todo_enabled,
+            remote_im_activation_sources: remote_im_activation_sources.clone(),
+            latest_images: (!trigger_only).then_some(effective_images.clone()),
+            latest_audios: (!trigger_only).then_some(effective_audios.clone()),
+            ..Default::default()
+        };
         log_run_stage("prepare_context.overrides_built");
         let prompt_mode = if is_delegate_conversation {
             PromptBuildMode::Delegate
@@ -2133,8 +2100,6 @@ async fn send_chat_message_inner(
             PromptBuildMode::Chat
         };
         let chat_overrides = Some(chat_overrides);
-        let terminal_block = terminal_prompt_trusted_roots_block(&state, &selected_api, Some(&conversation));
-        log_run_stage("prepare_context.terminal_block_ready");
         log_run_stage("prepare_context.prompt_build_begin");
         let mut prepared_prompt = build_prepared_prompt_for_mode_with_stage_logger(
             prompt_mode,
@@ -2148,7 +2113,7 @@ async fn send_chat_message_inner(
             &app_config.ui_language,
             Some(&state.data_path),
             snapshot.last_archive_summary.as_deref(),
-            terminal_block.clone(),
+            None,
             chat_overrides.clone(),
             Some(&state),
             Some(&log_run_stage),
@@ -2189,7 +2154,6 @@ async fn send_chat_message_inner(
                 response_style_id: snapshot.response_style_id.clone(),
                 ui_language: app_config.ui_language.clone(),
                 last_archive_summary: snapshot.last_archive_summary.clone(),
-                terminal_block,
                 chat_overrides: chat_overrides.clone(),
                 enable_pdf_images: snapshot.enable_pdf_images,
             })

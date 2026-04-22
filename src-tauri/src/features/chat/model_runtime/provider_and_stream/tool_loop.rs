@@ -90,7 +90,6 @@ struct ToolLoopAutoCompactionContext {
     response_style_id: String,
     ui_language: String,
     last_archive_summary: Option<String>,
-    terminal_block: Option<String>,
     chat_overrides: Option<ChatPromptOverrides>,
     enable_pdf_images: bool,
 }
@@ -192,7 +191,7 @@ fn build_tool_loop_prepared_for_continuation(
         &context.ui_language,
         Some(&state.data_path),
         context.last_archive_summary.as_deref(),
-        context.terminal_block.clone(),
+        None,
         context.chat_overrides.clone(),
         Some(state),
         Some(selected_api),

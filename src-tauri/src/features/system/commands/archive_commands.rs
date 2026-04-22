@@ -154,14 +154,8 @@ async fn get_prompt_preview(
         .rev()
         .find(|c| !conversation_is_delegate(c) && !c.summary.trim().is_empty())
         .map(|c| c.summary.clone());
-    let current_department = department_for_agent_id(&app_config, &agent.id);
     let mut prepared = match preview_mode {
         PromptPreviewMode::Chat => {
-            let mut system_preamble_blocks =
-                vec![build_hidden_skill_snapshot_block_for_department(&state, current_department)];
-            if let Some(workspace_agents_block) = build_workspace_agents_md_block(&conversation, &state) {
-                system_preamble_blocks.push(workspace_agents_block);
-            }
             build_prepared_prompt_for_mode(
                 PromptBuildMode::Chat,
                 &conversation,
@@ -174,11 +168,8 @@ async fn get_prompt_preview(
                 &app_config.ui_language,
                 Some(&state.data_path),
                 last_archive_summary.as_deref(),
-                terminal_prompt_trusted_roots_block(&state, &api_config, Some(&conversation)),
-                Some(ChatPromptOverrides {
-                    system_preamble_blocks,
-                    ..Default::default()
-                }),
+                None,
+                Some(ChatPromptOverrides::default()),
                 Some(&*state),
                 Some(&api_config),
                 Some(&resolved_api),
@@ -207,32 +198,21 @@ async fn get_prompt_preview(
                 last_archive_summary.as_deref(),
                 None,
                 Some(ChatPromptOverrides {
-                    latest_user_text: Some(build_summary_context_requirement_block(
-                        if preview_mode == PromptPreviewMode::Compaction {
+                    latest_user_intent: Some(LatestUserPayloadIntent::SummaryContext {
+                        scene: if preview_mode == PromptPreviewMode::Compaction {
                             SummaryContextScene::Compaction
                         } else {
                             SummaryContextScene::Archive
                         },
-                    )),
-                    latest_user_meta_text: Some(build_summary_context_memory_block(
-                        &host_agent,
-                        &user_name,
-                        &build_user_profile_memory_board(&state.data_path, &host_agent)?
-                            .unwrap_or_else(|| "（无）".to_string()),
-                    )),
-                    latest_user_extra_blocks: {
-                        let mut blocks = vec![build_summary_context_json_contract_block(
-                            if preview_mode == PromptPreviewMode::Compaction {
-                                SummaryContextScene::Compaction
-                            } else {
-                                SummaryContextScene::Archive
-                            },
-                        )];
-                        if let Some(todo_block) = build_summary_context_todo_block(&conversation) {
-                            blocks.push(todo_block);
-                        }
-                        blocks
-                    },
+                        user_alias: user_name.clone(),
+                        current_user_profile: build_user_profile_memory_board(
+                            &state.data_path,
+                            &host_agent,
+                        )?
+                        .unwrap_or_else(|| "（无）".to_string()),
+                        include_todo_block: build_summary_context_todo_block(&conversation)
+                            .is_some(),
+                    }),
                     latest_images: Some(Vec::new()),
                     latest_audios: Some(Vec::new()),
                     ..Default::default()

@@ -522,16 +522,8 @@ async fn run_tool_smart_review(
     }
     let resolved_api = resolve_api_config(&app_config, Some(review_api_config_id))?;
     let language = terminal_smart_review_language(&app_config.ui_language);
-    let prepared = PreparedPrompt {
-        preamble: tool_safety_review_system_prompt(language),
-        history_messages: Vec::new(),
-        latest_user_text: build_tool_safety_review_user_prompt(tool_name, &context),
-        latest_user_meta_text: String::new(),
-        latest_user_extra_text: String::new(),
-        latest_user_extra_blocks: Vec::new(),
-        latest_images: Vec::new(),
-        latest_audios: Vec::new(),
-    };
+    let prepared = conversation_prompt_service()
+        .build_tool_safety_review_prepared_prompt(language, tool_name, &context);
     let review_execution = invoke_model_with_policy(
         &resolved_api,
         &selected_api.model,

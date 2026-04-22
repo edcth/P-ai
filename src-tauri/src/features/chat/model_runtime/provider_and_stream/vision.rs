@@ -4,25 +4,7 @@ async fn describe_image_with_vision_api(
     vision_api: &ApiConfig,
     image: &BinaryPart,
 ) -> Result<String, String> {
-    let mime = image.mime.trim();
-    let prepared = PreparedPrompt {
-        preamble: "[SYSTEM PROMPT]\n你是图像理解助手。请读取图片中的关键信息并输出简洁中文描述，保留有价值的文本、数字、UI元素与上下文。".to_string(),
-        history_messages: Vec::new(),
-        latest_user_text: "请识别这张图片并给出可用于后续对话的文本描述。".to_string(),
-        latest_user_meta_text: String::new(),
-        latest_user_extra_text: String::new(),
-        latest_user_extra_blocks: Vec::new(),
-        latest_images: vec![PreparedBinaryPayload {
-            mime: if mime.is_empty() {
-                "image/png".to_string()
-            } else {
-                mime.to_string()
-            },
-            content: image.bytes_base64.clone(),
-            saved_path: image.saved_path.clone(),
-        }],
-        latest_audios: Vec::new(),
-    };
+    let prepared = conversation_prompt_service().build_vision_description_prepared_prompt(image);
 
     let supports_non_stream_fallback =
         request_format_supports_non_stream_fallback(vision_resolved.request_format);

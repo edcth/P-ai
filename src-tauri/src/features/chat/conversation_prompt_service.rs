@@ -355,9 +355,200 @@ impl ConversationPromptService {
         }
     }
 
+    fn resolve_terminal_block(
+        &self,
+        state: Option<&AppState>,
+        conversation: &Conversation,
+        selected_api: Option<&ApiConfig>,
+        terminal_block_override: Option<&str>,
+        stage_logger: Option<&dyn Fn(&str)>,
+    ) -> Option<String> {
+        if let Some(block) = terminal_block_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(block.to_string());
+        }
+        let block = match (state, selected_api) {
+            (Some(state), Some(selected_api)) => {
+                terminal_prompt_trusted_roots_block(state, selected_api, Some(conversation))
+            }
+            _ => None,
+        };
+        if block.is_some() {
+            if let Some(log_stage) = stage_logger {
+                log_stage("prepare_context.terminal_block_ready");
+            }
+        }
+        block
+    }
+
+    fn build_internal_system_preamble_blocks(
+        &self,
+        mode: PromptBuildMode,
+        state: Option<&AppState>,
+        conversation: &Conversation,
+        agent: &AgentProfile,
+        departments: &[DepartmentConfig],
+        ui_language: &str,
+        overrides: &ChatPromptOverrides,
+        stage_logger: Option<&dyn Fn(&str)>,
+    ) -> Vec<String> {
+        let mut blocks = Vec::<String>::new();
+        if let Some(state) = state {
+            let department_config = departments_only_config(departments);
+            let current_department = department_for_agent_id(&department_config, &agent.id);
+            blocks.push(build_hidden_skill_snapshot_block_for_department(
+                state,
+                current_department,
+            ));
+            if let Some(log_stage) = stage_logger {
+                log_stage("prepare_context.skill_snapshot_ready");
+            }
+            if let Some(workspace_agents_block) =
+                build_workspace_agents_md_block(conversation, state)
+            {
+                blocks.push(workspace_agents_block);
+            }
+            if let Some(log_stage) = stage_logger {
+                log_stage("prepare_context.workspace_agents_ready");
+            }
+            if mode != PromptBuildMode::SummaryContext && overrides.todo_tool_enabled {
+                blocks.push(build_todo_guide_block());
+            }
+            if let Some(log_stage) = stage_logger {
+                log_stage("prepare_context.todo_guide_ready");
+            }
+            if mode != PromptBuildMode::SummaryContext {
+                if let Some(runtime_block) = build_remote_im_activation_runtime_block(
+                    &overrides.remote_im_activation_sources,
+                    ui_language,
+                ) {
+                    blocks.push(runtime_block);
+                }
+            }
+            if let Some(log_stage) = stage_logger {
+                log_stage("prepare_context.im_runtime_ready");
+            }
+        }
+        blocks
+    }
+
+    fn build_latest_user_payload(
+        &self,
+        _mode: PromptBuildMode,
+        state: Option<&AppState>,
+        conversation: &Conversation,
+        agent: &AgentProfile,
+        overrides: &ChatPromptOverrides,
+        prepared: &PreparedPrompt,
+        stage_logger: Option<&dyn Fn(&str)>,
+    ) -> (String, String, Vec<String>) {
+        let Some(intent) = overrides.latest_user_intent.as_ref() else {
+            return (
+                prepared.latest_user_text.clone(),
+                prepared.latest_user_meta_text.clone(),
+                prepared.latest_user_extra_blocks.clone(),
+            );
+        };
+        match intent {
+            LatestUserPayloadIntent::ChatRequest {
+                trigger_only,
+                submitted_user_text,
+                include_task_board,
+                include_todo_board,
+                attachment_relative_paths,
+            } => {
+                let latest_user_text = if *trigger_only {
+                    conversation
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|message| {
+                            prompt_role_for_message(message, &agent.id).as_deref()
+                                == Some("user")
+                        })
+                        .map(render_message_content_for_model)
+                        .unwrap_or_default()
+                } else {
+                    submitted_user_text.clone()
+                };
+                let mut extra_blocks = Vec::<String>::new();
+                if *include_task_board {
+                    if let Some(state) = state {
+                        if let Some(task_board) = build_hidden_task_board_block(state) {
+                            extra_blocks.push(task_board);
+                        }
+                    }
+                }
+                if let Some(log_stage) = stage_logger {
+                    log_stage("prepare_context.task_board_ready");
+                }
+                if *include_todo_board {
+                    if let Some(todo_board) = build_conversation_todo_board_block(conversation) {
+                        extra_blocks.push(todo_board);
+                    }
+                }
+                if let Some(log_stage) = stage_logger {
+                    log_stage("prepare_context.todo_board_ready");
+                }
+                for relative_path in attachment_relative_paths {
+                    let trimmed = relative_path.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    extra_blocks.push(format!(
+                        "用户上传了附件，文件位于你工作区的 downloads 目录（路径：{}）。\n你可以先用 shell 工具定位或查看基础文件信息；具体解析方式应按文件类型选择合适 skill 或在线检索正确方法。\n仅当用户明确要求处理该附件时再处理；若用户未明确要求，请先询问用户想如何处理。",
+                        trimmed
+                    ));
+                }
+                if let Some(log_stage) = stage_logger {
+                    log_stage("prepare_context.attachment_hints_ready");
+                }
+                (
+                    latest_user_text,
+                    prepared.latest_user_meta_text.clone(),
+                    extra_blocks,
+                )
+            }
+            LatestUserPayloadIntent::SummaryContext {
+                scene,
+                user_alias,
+                current_user_profile,
+                include_todo_block,
+            } => {
+                let mut extra_blocks = vec![build_summary_context_json_contract_block(*scene)];
+                if *include_todo_block {
+                    if let Some(todo_block) = build_summary_context_todo_block(conversation) {
+                        extra_blocks.push(todo_block);
+                    }
+                }
+                (
+                    build_summary_context_requirement_block(*scene),
+                    build_summary_context_memory_block(
+                        agent,
+                        user_alias,
+                        current_user_profile,
+                    ),
+                    extra_blocks,
+                )
+            }
+            LatestUserPayloadIntent::Explicit {
+                text,
+                meta_text,
+                extra_blocks,
+            } => (
+                text.clone(),
+                meta_text.clone(),
+                extra_blocks.clone(),
+            ),
+        }
+    }
+
     fn finalize_system_prompt(
         &self,
         state: Option<&AppState>,
+        mode: PromptBuildMode,
         mode_label: &str,
         conversation: &Conversation,
         agent: &AgentProfile,
@@ -366,8 +557,8 @@ impl ConversationPromptService {
         ui_language: &str,
         fixed_system_prompt_text: &str,
         user_profile_memory_block: Option<&str>,
-        terminal_block: Option<&str>,
-        system_preamble_blocks: &[String],
+        terminal_block_override: Option<&str>,
+        overrides: &ChatPromptOverrides,
         stage_logger: Option<&dyn Fn(&str)>,
     ) -> String {
         let final_cache_key = format!(
@@ -397,6 +588,23 @@ impl ConversationPromptService {
             department_id,
             rebuild_reason
         ));
+        let terminal_block = self.resolve_terminal_block(
+            state,
+            conversation,
+            selected_api,
+            terminal_block_override,
+            stage_logger,
+        );
+        let system_preamble_blocks = self.build_internal_system_preamble_blocks(
+            mode,
+            state,
+            conversation,
+            agent,
+            departments,
+            ui_language,
+            overrides,
+            stage_logger,
+        );
         let snapshot = self.build_prompt_snapshot(
             state,
             mode_label,
@@ -407,8 +615,8 @@ impl ConversationPromptService {
             selected_api,
             fixed_system_prompt_text,
             user_profile_memory_block,
-            terminal_block,
-            system_preamble_blocks,
+            terminal_block.as_deref(),
+            &system_preamble_blocks,
         );
         let prompt_text = flatten_system_prompt_blocks(&vec![
             snapshot.department_prompt.clone(),
@@ -461,5 +669,261 @@ impl ConversationPromptService {
             ui_language,
             latest_user_index,
         )
+    }
+
+    fn build_prepared_prompt_for_mode(
+        &self,
+        mode: PromptBuildMode,
+        conversation: &Conversation,
+        agent: &AgentProfile,
+        agents: &[AgentProfile],
+        departments: &[DepartmentConfig],
+        user_name: &str,
+        user_intro: &str,
+        response_style_id: &str,
+        ui_language: &str,
+        data_path: Option<&PathBuf>,
+        _last_archive_summary: Option<&str>,
+        terminal_block_override: Option<String>,
+        chat_overrides: Option<ChatPromptOverrides>,
+        state: Option<&AppState>,
+        stage_logger: Option<&dyn Fn(&str)>,
+        selected_api: Option<&ApiConfig>,
+        resolved_api: Option<&ResolvedApiConfig>,
+        enable_pdf_images: Option<bool>,
+    ) -> PreparedPrompt {
+        match mode {
+            PromptBuildMode::Chat => {
+                let mut prepared = build_prompt_with_stage_logger(
+                    conversation,
+                    agent,
+                    agents,
+                    departments,
+                    user_name,
+                    user_intro,
+                    response_style_id,
+                    ui_language,
+                    data_path,
+                    state,
+                    stage_logger,
+                    resolved_api,
+                    enable_pdf_images.unwrap_or(false),
+                );
+                let overrides = chat_overrides.unwrap_or_default();
+                prepared.preamble = self.finalize_system_prompt(
+                    state,
+                    PromptBuildMode::Chat,
+                    "chat",
+                    conversation,
+                    agent,
+                    departments,
+                    selected_api,
+                    ui_language,
+                    &prepared.preamble,
+                    None,
+                    terminal_block_override.as_deref(),
+                    &overrides,
+                    stage_logger,
+                );
+                if let Some(log_stage) = stage_logger {
+                    log_stage("prepare_context.prompt_system_finalize_ready");
+                }
+                let (latest_user_text, latest_user_meta_text, latest_user_extra_blocks) =
+                    self.build_latest_user_payload(
+                        PromptBuildMode::Chat,
+                        state,
+                        conversation,
+                        agent,
+                        &overrides,
+                        &prepared,
+                        stage_logger,
+                    );
+                apply_chat_latest_user_payload(
+                    &mut prepared,
+                    latest_user_text,
+                    latest_user_meta_text,
+                    &latest_user_extra_blocks,
+                    overrides.latest_images,
+                    overrides.latest_audios,
+                );
+                prepared
+            }
+            PromptBuildMode::Delegate => {
+                let mut prepared = build_delegate_prompt_with_stage_logger(
+                    conversation,
+                    agent,
+                    agents,
+                    departments,
+                    response_style_id,
+                    ui_language,
+                    data_path,
+                    state,
+                    stage_logger,
+                    resolved_api,
+                    enable_pdf_images.unwrap_or(false),
+                );
+                let overrides = chat_overrides.unwrap_or_default();
+                prepared.preamble = self.finalize_system_prompt(
+                    state,
+                    PromptBuildMode::Delegate,
+                    "delegate",
+                    conversation,
+                    agent,
+                    departments,
+                    selected_api,
+                    ui_language,
+                    &prepared.preamble,
+                    None,
+                    terminal_block_override.as_deref(),
+                    &overrides,
+                    stage_logger,
+                );
+                if let Some(log_stage) = stage_logger {
+                    log_stage("prepare_context.prompt_system_finalize_ready");
+                }
+                let (latest_user_text, latest_user_meta_text, latest_user_extra_blocks) =
+                    self.build_latest_user_payload(
+                        PromptBuildMode::Delegate,
+                        state,
+                        conversation,
+                        agent,
+                        &overrides,
+                        &prepared,
+                        stage_logger,
+                    );
+                apply_chat_latest_user_payload(
+                    &mut prepared,
+                    latest_user_text,
+                    latest_user_meta_text,
+                    &latest_user_extra_blocks,
+                    overrides.latest_images,
+                    overrides.latest_audios,
+                );
+                prepared
+            }
+            PromptBuildMode::SummaryContext => {
+                let mut prepared = build_prompt_with_stage_logger(
+                    conversation,
+                    agent,
+                    agents,
+                    departments,
+                    user_name,
+                    user_intro,
+                    response_style_id,
+                    ui_language,
+                    data_path,
+                    state,
+                    stage_logger,
+                    resolved_api,
+                    enable_pdf_images.unwrap_or(false),
+                );
+                for message in &mut prepared.history_messages {
+                    message.images.clear();
+                    message.audios.clear();
+                }
+                prepared.latest_images.clear();
+                prepared.latest_audios.clear();
+                let overrides = chat_overrides.unwrap_or_default();
+                prepared.preamble = self.finalize_system_prompt(
+                    state,
+                    PromptBuildMode::SummaryContext,
+                    "summary_context",
+                    conversation,
+                    agent,
+                    departments,
+                    selected_api,
+                    ui_language,
+                    &prepared.preamble,
+                    None,
+                    terminal_block_override.as_deref(),
+                    &overrides,
+                    stage_logger,
+                );
+                if let Some(log_stage) = stage_logger {
+                    log_stage("prepare_context.prompt_system_finalize_ready");
+                }
+                let (latest_user_text, latest_user_meta_text, latest_user_extra_blocks) =
+                    self.build_latest_user_payload(
+                        PromptBuildMode::SummaryContext,
+                        state,
+                        conversation,
+                        agent,
+                        &overrides,
+                        &prepared,
+                        stage_logger,
+                    );
+                apply_chat_latest_user_payload(
+                    &mut prepared,
+                    latest_user_text,
+                    latest_user_meta_text,
+                    &latest_user_extra_blocks,
+                    overrides.latest_images,
+                    overrides.latest_audios,
+                );
+                prepared
+            }
+        }
+    }
+
+    fn build_tool_safety_review_prepared_prompt(
+        &self,
+        language: &str,
+        tool_name: &str,
+        context: &Value,
+    ) -> PreparedPrompt {
+        PreparedPrompt {
+            preamble: tool_safety_review_system_prompt(language),
+            history_messages: Vec::new(),
+            latest_user_text: build_tool_safety_review_user_prompt(tool_name, context),
+            latest_user_meta_text: String::new(),
+            latest_user_extra_text: String::new(),
+            latest_user_extra_blocks: Vec::new(),
+            latest_images: Vec::new(),
+            latest_audios: Vec::new(),
+        }
+    }
+
+    fn build_tool_review_submission_prepared_prompt(
+        &self,
+        ui_language: &str,
+        batch: &ToolReviewCollectedBatch,
+        recent_context: &str,
+        plan_text: &str,
+    ) -> PreparedPrompt {
+        PreparedPrompt {
+            preamble: tool_review_report_system_prompt(ui_language),
+            history_messages: Vec::new(),
+            latest_user_text: tool_review_submission_user_prompt(batch, recent_context, plan_text),
+            latest_user_meta_text: String::new(),
+            latest_user_extra_text: String::new(),
+            latest_user_extra_blocks: Vec::new(),
+            latest_images: Vec::new(),
+            latest_audios: Vec::new(),
+        }
+    }
+
+    fn build_vision_description_prepared_prompt(
+        &self,
+        image: &BinaryPart,
+    ) -> PreparedPrompt {
+        let mime = image.mime.trim();
+        PreparedPrompt {
+            preamble: "[SYSTEM PROMPT]\n你是图像理解助手。请读取图片中的关键信息并输出简洁中文描述，保留有价值的文本、数字、UI元素与上下文。".to_string(),
+            history_messages: Vec::new(),
+            latest_user_text: "请识别这张图片并给出可用于后续对话的文本描述。".to_string(),
+            latest_user_meta_text: String::new(),
+            latest_user_extra_text: String::new(),
+            latest_user_extra_blocks: Vec::new(),
+            latest_images: vec![PreparedBinaryPayload {
+                mime: if mime.is_empty() {
+                    "image/png".to_string()
+                } else {
+                    mime.to_string()
+                },
+                content: image.bytes_base64.clone(),
+                saved_path: image.saved_path.clone(),
+            }],
+            latest_audios: Vec::new(),
+        }
     }
 }
