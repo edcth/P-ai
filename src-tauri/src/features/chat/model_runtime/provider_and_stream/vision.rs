@@ -54,7 +54,8 @@ async fn describe_image_with_vision_api(
                         reply
                     }
                     Err(err)
-                        if supports_non_stream_fallback && is_streaming_format_error(&err) =>
+                        if supports_non_stream_fallback
+                            && is_streaming_request_payload_format_error(&err) =>
                     {
                         if let Err(mark_err) =
                             provider_mark_streaming_disabled(

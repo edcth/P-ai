@@ -508,7 +508,7 @@ async fn call_model_openai_style(
                 Err(err)
                     if supports_non_stream_fallback
                         && !is_image_unsupported_error(&err)
-                        && is_streaming_format_error(&err) =>
+                        && is_streaming_request_payload_format_error(&err) =>
                 {
                     if let Err(mark_err) =
                         provider_mark_streaming_disabled(

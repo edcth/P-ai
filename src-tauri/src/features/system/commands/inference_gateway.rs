@@ -196,15 +196,20 @@ fn move_system_preamble_to_user_prompt(prepared: &mut PreparedPrompt) -> bool {
     true
 }
 
-fn is_streaming_format_error(err: &str) -> bool {
+fn is_streaming_request_payload_format_error(err: &str) -> bool {
     let normalized = err.to_ascii_lowercase();
-    normalized.contains("failed to parse json")
-        || normalized.contains("missing field `role`")
-        || normalized.contains("message_start")
-        || normalized.contains("message_delta")
-        || normalized.contains("eventsource")
-        || normalized.contains("invalid sse")
-        || normalized.contains("stream event")
+    (normalized.contains("request body")
+        || normalized.contains("invalid request body")
+        || normalized.contains("failed to deserialize the json body")
+        || normalized.contains("body validation error")
+        || normalized.contains("invalid type")
+        || normalized.contains("expected a string")
+        || normalized.contains("expected a map")
+        || normalized.contains("expected a sequence")
+        || normalized.contains("missing required parameter"))
+        && !normalized.contains("timed out")
+        && !normalized.contains("gateway timeout")
+        && !normalized.contains("status code '5")
 }
 
 fn request_format_supports_non_stream_fallback(format: RequestFormat) -> bool {
@@ -320,15 +325,15 @@ async fn invoke_model_with_policy(
     }
     let headers = masked_auth_headers(&resolved_api.api_key);
     if policy.json_only {
-        // json_only is enforced by prompt contract + caller-side JSON parse.
+        // json_only only constrains output contract + caller-side JSON parse.
+        // It must not implicitly force non-stream because some upstreams require stream=true.
     }
-    let prefer_non_stream = policy.json_only
-        || provider_streaming_disabled(
-            app_state,
-            resolved_api.request_format,
-            &resolved_api.base_url,
-            model_name,
-        );
+    let prefer_non_stream = provider_streaming_disabled(
+        app_state,
+        resolved_api.request_format,
+        &resolved_api.base_url,
+        model_name,
+    );
     let first_result = if prefer_non_stream {
         if let Some(timeout_secs) = policy.timeout_secs {
             invoke_model_non_stream_by_format_with_timeout(
@@ -398,7 +403,7 @@ async fn invoke_model_with_policy(
         Err(err)
             if !prefer_non_stream
                 && request_format_supports_non_stream_fallback(resolved_api.request_format)
-                && is_streaming_format_error(&err) =>
+                && is_streaming_request_payload_format_error(&err) =>
         {
             if let Err(mark_err) = provider_mark_streaming_disabled(
                 app_state,
@@ -505,16 +510,22 @@ mod inference_gateway_tests {
 
     #[test]
     fn streaming_error_detector_should_match_known_patterns() {
-        assert!(is_streaming_format_error(
+        assert!(is_streaming_request_payload_format_error(
+            "ProviderError: Invalid status code 400 Bad Request with message: {\"detail\":\"failed to deserialize the json body\"}"
+        ));
+        assert!(is_streaming_request_payload_format_error(
+            "ProviderError: Invalid status code 400 Bad Request with message: {\"detail\":\"Invalid request body: expected a string\"}"
+        ));
+        assert!(!is_streaming_request_payload_format_error(
             "streaming failed: ResponseError: Failed to parse JSON: missing field `role`"
         ));
-        assert!(is_streaming_format_error(
+        assert!(!is_streaming_request_payload_format_error(
             "streaming failed: message_start unexpected"
         ));
-        assert!(!is_streaming_format_error(
+        assert!(!is_streaming_request_payload_format_error(
             "Request failed with status code '504 Gateway Timeout'"
         ));
-        assert!(!is_streaming_format_error("request timed out"));
+        assert!(!is_streaming_request_payload_format_error("request timed out"));
     }
 
     #[test]
