@@ -1,6 +1,7 @@
 # 变更日志
 
 ## 进行中
+- 优化（chat-foreground-snapshot-and-tool-review-fast-read-path）：前台轻量快照与工具审查批次读取这两条高频读链继续切到只读快路径，命中 `conversationId` 时统一直接借用缓存中的目标会话引用，不再经由整份 `AppData` clone 后再切片，进一步把切换会话与工具审查面板首读压到近乎瞬时
 - 优化（chat-history-page-fast-read-path）：会话补历史/补后续消息这条高频读取链路新增只读快路径；当已明确传入 `conversationId` 时，不再 clone 整份 `AppData` 再切局部消息页，而是直接借用缓存中的会话引用，只克隆目标分页消息并继续做最小 media materialize，显著压低补消息热路径的锁持有与读取耗时
 - 修复（archive-list-title-source-correction）：归档消息列表标题改为优先使用会话自身 `title`，仅在标题为空时才回退到首条用户消息预览，避免归档窗口左侧列表把正文预览误当标题展示
 - 优化（chat-rewind-lightweight-preview-and-agent-check-removal）：撤回消息链路移除与当前历史回滚无关的 agent 存活检查、private org 合并与 overview 全量刷新依赖，未归档会话预览读取改为纯读且瘦身重字段；撤回成功后前端仅在本地已握有足够最近正式消息时才局部推送当前会话预览，否则不做额外读取或刷新，显著压低撤回耗时

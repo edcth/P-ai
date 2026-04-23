@@ -854,7 +854,7 @@ fn with_tool_review_conversation<T>(
     if normalized_conversation_id.is_empty() {
         return Err("conversationId 不能为空。".to_string());
     }
-    conversation_service().with_unarchived_conversation_by_id(
+    conversation_service().with_unarchived_conversation_by_id_fast(
         state,
         normalized_conversation_id,
         reader,
