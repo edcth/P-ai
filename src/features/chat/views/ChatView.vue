@@ -414,6 +414,8 @@ type ChatRenderItem =
   | { kind: "message"; id: string; renderId: string; block: ChatMessageBlock; blockIndex: number }
   | { kind: "group"; id: string; groupId: string; items: Array<{ renderId: string; block: ChatMessageBlock; blockIndex: number }> };
 
+const MAX_GROUP_ITEM_COUNT = 2;
+
 const props = defineProps<{
   userAlias: string;
   personaName: string;
@@ -490,6 +492,9 @@ const props = defineProps<{
 }>();
 
 const markdownIsDark = computed(() => isDarkAppTheme(props.currentTheme));
+const ephemeralBlockRenderIdMap = new WeakMap<ChatMessageBlock, string>();
+let ephemeralBlockRenderIdSeq = 0;
+
 function isOrganizeContextToolCall(call: { name: string; argsText: string; status?: "doing" | "done" }): boolean {
   const name = String(call.name || "").trim().toLowerCase();
   if (name === "organize_context" || name === "archive") return true;
@@ -600,7 +605,7 @@ const chatRenderItems = computed<ChatRenderItem[]>(() => {
   };
 
   props.messageBlocks.forEach((block, blockIndex) => {
-    const renderId = blockRenderId(block, blockIndex);
+    const renderId = blockRenderId(block);
     if (isCompactionBlock(block)) {
       flushGroup();
       items.push({ kind: "compaction", id: `compaction-${renderId}`, renderId, block, blockIndex });
@@ -608,7 +613,7 @@ const chatRenderItems = computed<ChatRenderItem[]>(() => {
     }
     if (isRightAlignedMessage(block)) {
       flushGroup();
-      const groupId = blockGroupRenderId(block, blockIndex);
+      const groupId = blockGroupRenderId(block);
       currentGroup = {
         kind: "group",
         id: `group-${groupId}`,
@@ -618,6 +623,11 @@ const chatRenderItems = computed<ChatRenderItem[]>(() => {
       return;
     }
     if (currentGroup) {
+      if (currentGroup.items.length >= MAX_GROUP_ITEM_COUNT) {
+        flushGroup();
+        items.push({ kind: "message", id: `message-${renderId}`, renderId, block, blockIndex });
+        return;
+      }
       currentGroup.items.push({ renderId, block, blockIndex });
       return;
     }
@@ -713,7 +723,13 @@ const linkOpenErrorText = ref("");
 const composerPanelRef = ref<{ focusInput: (options?: FocusOptions) => void } | null>(null);
 const messageSelectionModeEnabled = ref(false);
 const selectedMessageRenderIds = ref<string[]>([]);
-const pendingOlderHistoryRestore = ref<null | { scrollHeight: number; scrollTop: number; messageCount: number }>(null);
+const pendingOlderHistoryRestore = ref<null | {
+  anchorItemId: string;
+  anchorTop: number | null;
+  scrollHeight: number;
+  scrollTop: number;
+  messageCount: number;
+}>(null);
 const olderHistoryRequestPending = ref(false);
 const LOAD_OLDER_HISTORY_THRESHOLD_PX = 96;
 
@@ -754,6 +770,8 @@ const {
   listContainer: virtualListContainer,
   renderEntries: virtualRenderEntries,
   bottomSpacerHeight: virtualBottomSpacerHeight,
+  getFirstVisibleItemId,
+  getItemViewportTop,
   bindItemElement: bindVirtualRenderItemElement,
   handleScroll: handleVirtualScroll,
   pinToBottomOnNextLayout,
@@ -786,7 +804,10 @@ function maybeRequestOlderHistory() {
   if (!scrollEl) return;
   if (!props.hasMoreHistory || props.loadingOlderHistory || olderHistoryRequestPending.value) return;
   if (scrollEl.scrollTop > LOAD_OLDER_HISTORY_THRESHOLD_PX) return;
+  const anchorItemId = getFirstVisibleItemId();
   pendingOlderHistoryRestore.value = {
+    anchorItemId,
+    anchorTop: anchorItemId ? getItemViewportTop(anchorItemId) : null,
     scrollHeight: scrollEl.scrollHeight,
     scrollTop: scrollEl.scrollTop,
     messageCount: props.messageBlocks.length,
@@ -845,6 +866,14 @@ watch(
     if (!scrollEl) return;
     await nextTick();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (restore.anchorItemId) {
+      const nextAnchorTop = getItemViewportTop(restore.anchorItemId);
+      if (nextAnchorTop !== null && restore.anchorTop !== null) {
+        scrollEl.scrollTop += nextAnchorTop - restore.anchorTop;
+        syncViewportMetrics();
+        return;
+      }
+    }
     const deltaHeight = scrollEl.scrollHeight - restore.scrollHeight;
     scrollEl.scrollTop = Math.max(0, restore.scrollTop + deltaHeight);
     syncViewportMetrics();
@@ -944,18 +973,47 @@ function isRightAlignedMessage(block: ChatMessageBlock): boolean {
   return id === "user-persona";
 }
 
-function blockRenderId(block: ChatMessageBlock, blockIndex: number): string {
-  const rawId = String(block.id || "").trim();
-  return rawId || `block-${blockIndex}`;
+function getEphemeralBlockRenderId(block: ChatMessageBlock): string {
+  const cached = ephemeralBlockRenderIdMap.get(block);
+  if (cached) return cached;
+  ephemeralBlockRenderIdSeq += 1;
+  const nextId = `block-ephemeral-${ephemeralBlockRenderIdSeq}`;
+  ephemeralBlockRenderIdMap.set(block, nextId);
+  return nextId;
 }
 
-function blockGroupRenderId(block: ChatMessageBlock, blockIndex: number): string {
+function blockRenderId(block: ChatMessageBlock): string {
+  const rawId = String(block.id || "").trim();
+  if (rawId) return rawId;
+  const sourceMessageId = String(block.sourceMessageId || "").trim();
+  if (sourceMessageId) {
+    return block.isExtraTextBlock ? `${sourceMessageId}::extra` : sourceMessageId;
+  }
+  const createdAt = String(block.createdAt || "").trim();
+  const speakerAgentId = String(block.speakerAgentId || "").trim();
+  const role = String(block.role || "").trim();
+  const textPreview = String(block.text || "").trim().slice(0, 64);
+  if (createdAt || speakerAgentId || role || textPreview) {
+    return [
+      "block-stable",
+      role || "no-role",
+      speakerAgentId || "no-speaker",
+      createdAt || "no-time",
+      block.isExtraTextBlock ? "extra" : "base",
+      textPreview || "no-text",
+    ].join(":");
+  }
+  return getEphemeralBlockRenderId(block);
+}
+
+function blockGroupRenderId(block: ChatMessageBlock) {
   const createdAt = String(block.createdAt || "").trim();
   const textPreview = String(block.text || "").trim().slice(0, 48);
+  const renderId = blockRenderId(block);
   if (createdAt || textPreview) {
-    return `${createdAt || "no-time"}:${textPreview || "no-text"}`;
+    return `${renderId}:${createdAt || "no-time"}:${textPreview || "no-text"}`;
   }
-  return `slot-${blockIndex}`;
+  return `group-${renderId}`;
 }
 
 function messageMemoKey(block: ChatMessageBlock, renderId: string, blockIndex: number) {

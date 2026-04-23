@@ -41,9 +41,11 @@ export function useChatVirtualList<T extends VirtualListItem>(options: UseChatVi
   const itemHeightCache = ref<Record<string, number>>({});
 
   const observedElements = new Map<string, HTMLElement>();
+  const pendingViewportScrollAdjustments = new Map<string, { previousHeight: number; normalizedHeight: number }>();
   let itemResizeObserver: ResizeObserver | null = null;
   let viewportResizeObserver: ResizeObserver | null = null;
   let pinToBottomPending = false;
+  let pendingViewportScrollAdjustmentFrame = 0;
 
   const overscanPx = Math.max(0, Math.round(options.overscanPx ?? DEFAULT_OVERSCAN_PX));
   const keepAlivePadding = Math.max(0, Math.round(options.keepAlivePadding ?? DEFAULT_KEEP_ALIVE_PADDING));
@@ -108,6 +110,25 @@ export function useChatVirtualList<T extends VirtualListItem>(options: UseChatVi
     return Math.min(Math.max(0, index), layoutItems.value.length - 1);
   }
 
+  function flushPendingViewportScrollAdjustments() {
+    pendingViewportScrollAdjustmentFrame = 0;
+    const scrollEl = options.scrollContainer.value;
+    if (!scrollEl || pendingViewportScrollAdjustments.size <= 0) {
+      pendingViewportScrollAdjustments.clear();
+      updateViewportMetrics();
+      return;
+    }
+    let totalDelta = 0;
+    for (const { previousHeight, normalizedHeight } of pendingViewportScrollAdjustments.values()) {
+      totalDelta += normalizedHeight - previousHeight;
+    }
+    pendingViewportScrollAdjustments.clear();
+    if (totalDelta !== 0) {
+      scrollEl.scrollTop += totalDelta;
+    }
+    updateViewportMetrics();
+  }
+
   function findRangeBoundary(targetPx: number): number {
     const items = layoutItems.value;
     if (items.length <= 0) return 0;
@@ -119,6 +140,13 @@ export function useChatVirtualList<T extends VirtualListItem>(options: UseChatVi
       else high = mid;
     }
     return low;
+  }
+
+  function getFirstVisibleItemId(): string {
+    const items = layoutItems.value;
+    if (items.length <= 0) return "";
+    const index = clampIndex(findRangeBoundary(Math.max(0, relativeScrollTop.value)));
+    return String(items[index]?.id || "").trim();
   }
 
   const primaryRange = computed(() => {
@@ -213,10 +241,28 @@ export function useChatVirtualList<T extends VirtualListItem>(options: UseChatVi
     const sourceItem = itemById.value.get(itemId);
     const previousHeight = itemHeightCache.value[itemId] ?? (sourceItem ? options.estimateHeight(sourceItem) : normalizedHeight);
     if (Math.abs(previousHeight - normalizedHeight) <= 1) return;
+    const itemIndex = layoutIndexById.value.get(itemId);
+    const itemTop = itemIndex === undefined ? 0 : layoutItems.value[itemIndex]?.top ?? 0;
+    const itemBottom = itemTop + previousHeight;
+    const scrollEl = options.scrollContainer.value;
+    const shouldPreserveViewport =
+      !!scrollEl
+      && itemBottom < relativeScrollTop.value - 1;
     itemHeightCache.value = {
       ...itemHeightCache.value,
       [itemId]: normalizedHeight,
     };
+    if (shouldPreserveViewport && scrollEl) {
+      pendingViewportScrollAdjustments.set(itemId, {
+        previousHeight: pendingViewportScrollAdjustments.get(itemId)?.previousHeight ?? previousHeight,
+        normalizedHeight,
+      });
+      if (!pendingViewportScrollAdjustmentFrame) {
+        pendingViewportScrollAdjustmentFrame = requestAnimationFrame(() => {
+          flushPendingViewportScrollAdjustments();
+        });
+      }
+    }
   }
 
   function measureElement(itemId: string, element: HTMLElement) {
@@ -244,6 +290,13 @@ export function useChatVirtualList<T extends VirtualListItem>(options: UseChatVi
       itemResizeObserver.observe(element);
     }
     measureElement(itemId, element);
+  }
+
+  function getItemViewportTop(itemId: string): number | null {
+    const element = observedElements.get(itemId);
+    const scrollEl = options.scrollContainer.value;
+    if (!element || !scrollEl) return null;
+    return element.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
   }
 
   function handleScroll() {
@@ -313,6 +366,11 @@ export function useChatVirtualList<T extends VirtualListItem>(options: UseChatVi
   });
 
   onBeforeUnmount(() => {
+    if (pendingViewportScrollAdjustmentFrame) {
+      cancelAnimationFrame(pendingViewportScrollAdjustmentFrame);
+      pendingViewportScrollAdjustmentFrame = 0;
+    }
+    pendingViewportScrollAdjustments.clear();
     if (itemResizeObserver) {
       itemResizeObserver.disconnect();
       itemResizeObserver = null;
@@ -329,6 +387,8 @@ export function useChatVirtualList<T extends VirtualListItem>(options: UseChatVi
     renderSegments,
     renderEntries,
     bottomSpacerHeight,
+    getFirstVisibleItemId,
+    getItemViewportTop,
     bindItemElement,
     handleScroll,
     pinToBottomOnNextLayout,

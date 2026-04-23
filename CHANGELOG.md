@@ -2,6 +2,7 @@
 
 ## 进行中
 
+- 优化（chat-virtual-list-scroll-stability-and-render-keys）：聊天虚拟滚动收口为稳定 item key 渲染，去掉基于渲染区间的整段 subtree 重建；无 id 消息补稳定前端 renderId，向上滚动时仅对完全位于视口上方的高度修正做滚动补偿，并为加载更早历史补充锚点恢复，减少长会话中的闪烁、跳动与滚动抢夺
 - 功能（provider-serial-request-gate）：供应商设置新增“允许并发请求”开关，默认关闭；后端按 `providerId` 维护全局异步串行门，默认将同一供应商下全部模型请求串行化，并把该约束下沉到真实模型调用层，覆盖主聊天、工具循环、视觉链路、tool review 与归档摘要等请求入口；配置变更仅影响后续请求，不追溯影响当前已开始的请求
 - 重构（conversation-service-boundary-and-writeback-foundation）：建立 `ConversationService` 目录化模块边界，收口会话快照、分页、单条消息、tool review、remote IM、归档与高频写路径读取语义；会话持久化补齐 write-back 基础设施与锁顺序修正，工具审查、前台轻量快照、会话分页等热路径进一步统一走服务和内存缓存，并补全文档中的 persistence worker、`write_mode`、并发冲突与异常回归清单
 - 优化（chat-foreground-windowing-and-review-refresh）：聊天前台切换改为直接从底部最新窗口进入，首屏轻量快照收敛为最近 10 条、向上滚动分页每次补 10 条，并引入动态高度虚拟滚动以降低超长会话渲染卡顿；同时收紧会话/工具审查读取热路径，优先走内存缓存快照，工具审查改为按 messageId 精确刷新单条消息，避免把 review 误当成“补后续消息”
