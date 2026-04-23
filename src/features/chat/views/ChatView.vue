@@ -700,6 +700,7 @@ const emit = defineEmits<{
   (e: "openConversationSummary", conversationId: string): void;
   (e: "loadOlderHistory"): void;
   (e: "reachedBottom"): void;
+  (e: "jumpToConversationBottom"): void;
   (e: "refreshToolReviewMessage", payload: { conversationId: string; messageId: string }): void;
   (e: "selectionActionCopy", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
   (e: "selectionActionCopyError", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[]; error: string }): void;
@@ -727,7 +728,6 @@ const {
   jumpToBottomStyle,
   showSideConversationList,
   onScroll,
-  jumpToBottom,
 } = useChatScrollLayout({
   activeConversationId: toRef(props, "activeConversationId"),
   chatting: toRef(props, "chatting"),
@@ -775,8 +775,7 @@ function onConversationScroll() {
 }
 
 function handleJumpToBottom() {
-  pinToBottomOnNextLayout();
-  jumpToBottom();
+  emit("jumpToConversationBottom");
 }
 
 function handleVirtualRenderItemRef(itemId: string, element: unknown) {

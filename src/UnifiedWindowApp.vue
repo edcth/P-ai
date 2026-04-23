@@ -236,6 +236,7 @@
       :stop-recording="() => stopRecording(false)"
       :send-chat="chatFlow.sendChat"
       :stop-chat="chatFlow.stopChat"
+      :on-jump-to-conversation-bottom="ensureLatestForegroundTailThenScrollToBottom"
       :open-supervision-task-dialog="openSupervisionTaskDialog"
       :close-supervision-task-dialog="closeSupervisionTaskDialog"
       :save-supervision-task="saveSupervisionTask"
@@ -1255,8 +1256,11 @@ const CONVERSATION_COLORS = [
 const conversationScrollToBottomRequest = ref(0);
 const toolReviewRefreshTick = ref(0);
 const currentChatTodos = ref<ChatTodoItem[]>([]);
+const foregroundTailLatestReady = ref(true);
 let pendingConversationScrollToBottomConversationId = "";
 let pendingConversationScrollToBottomTimer = 0;
+let pendingManualScrollToBottomConversationId = "";
+let pendingManualScrollToBottomRequestId = "";
 
 type SwitchConversationSnapshot = {
   conversationId: string;
@@ -1285,6 +1289,11 @@ function clearPendingConversationScrollToBottomFallback() {
     window.clearTimeout(pendingConversationScrollToBottomTimer);
     pendingConversationScrollToBottomTimer = 0;
   }
+}
+
+function clearPendingManualScrollToBottom() {
+  pendingManualScrollToBottomConversationId = "";
+  pendingManualScrollToBottomRequestId = "";
 }
 
 function triggerConversationScrollToBottom(conversationId: string, reason: string) {
@@ -1593,7 +1602,8 @@ function trimForegroundMessagesToRecentLimit() {
   if (chatting.value) return;
   if (allMessages.value.length <= FOREGROUND_MESSAGE_TRIM_THRESHOLD) return;
   allMessages.value = allMessages.value.slice(-FOREGROUND_RECENT_MESSAGE_LIMIT);
-  hasMoreBackendHistory.value = false;
+  hasMoreBackendHistory.value = true;
+  foregroundTailLatestReady.value = true;
   const currentConversationId = String(currentChatConversationId.value || "").trim();
   if (currentConversationId) {
     cacheConversationMessages(currentConversationId, allMessages.value);
@@ -2055,6 +2065,8 @@ function clearForegroundConversation(reason: string) {
   currentChatTodos.value = [];
   allMessages.value = [];
   hasMoreBackendHistory.value = false;
+  foregroundTailLatestReady.value = true;
+  clearPendingManualScrollToBottom();
   chatFlow.freezeForegroundRoundState();
   console.warn("[聊天追踪][前台会话] 已清空", {
     windowLabel: tauriWindowLabel.value,
@@ -2462,13 +2474,21 @@ function mergeConversationMessagesFromSyncPayload(
 
 async function applyConversationMessagesAfterSynced(payload: ConversationMessagesAfterSyncedPayload) {
   const conversationId = String(payload?.conversationId || "").trim();
+  const requestId = String(payload?.requestId || "").trim();
   if (!conversationId) return;
   if (payload?.error) {
     console.warn("[会话缓存] 异步补消息失败", {
       conversationId,
-      requestId: payload.requestId,
+      requestId,
       error: payload.error,
     });
+    if (
+      requestId
+      && requestId === pendingManualScrollToBottomRequestId
+      && conversationId === pendingManualScrollToBottomConversationId
+    ) {
+      clearPendingManualScrollToBottom();
+    }
     return;
   }
   const nextMessages = mergeConversationMessagesFromSyncPayload(
@@ -2481,8 +2501,18 @@ async function applyConversationMessagesAfterSynced(payload: ConversationMessage
     if (!areMessagesEquivalent(allMessages.value, nextMessages)) {
       allMessages.value = nextMessages;
     }
+    foregroundTailLatestReady.value = true;
     await nextTick();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (
+      requestId
+      && requestId === pendingManualScrollToBottomRequestId
+      && conversationId === pendingManualScrollToBottomConversationId
+    ) {
+      clearPendingManualScrollToBottom();
+      triggerConversationScrollToBottom(conversationId, "manual_after_synced");
+      return;
+    }
     if (pendingConversationScrollToBottomConversationId === conversationId) {
       triggerConversationScrollToBottom(conversationId, "after_synced");
     }
@@ -2511,9 +2541,9 @@ function applyConversationMessageAppended(payload?: ConversationMessageAppendedP
   const existing = allMessages.value.filter((item) => String(item?.id || "").trim() !== messageId);
   const stableMessage = reuseStableMessageReferences([message], allMessages.value)[0] || message;
   allMessages.value = [...existing, stableMessage];
+  foregroundTailLatestReady.value = true;
   clearConversationBadge(conversationId);
   updateForegroundConversationOverviewFromMessages(conversationId, message);
-  triggerConversationScrollToBottom(conversationId, "delegate_message_appended");
 }
 
 function applyConversationSnapshot(snapshot: SwitchConversationSnapshot) {
@@ -2540,6 +2570,7 @@ function applyConversationSnapshot(snapshot: SwitchConversationSnapshot) {
     : [];
   allMessages.value = nextMessages;
   hasMoreBackendHistory.value = !!snapshot.hasMoreHistory;
+  foregroundTailLatestReady.value = true;
   cacheConversationMessages(nextConversationId, nextMessages);
   clearConversationBadge(nextConversationId);
   if (Array.isArray(snapshot.unarchivedConversations)) {
@@ -2788,9 +2819,11 @@ async function switchUnarchivedConversation(conversationId: string) {
     chatFlow.freezeForegroundRoundState();
     currentChatConversationId.value = cid;
     currentChatTodos.value = [];
+    clearPendingManualScrollToBottom();
     const cachedDisplay = freezeConversationMessages(conversationMessageCache.value[cid] || []);
     allMessages.value = cachedDisplay;
     hasMoreBackendHistory.value = inferHasMoreHistoryFromSnapshot(cachedDisplay);
+    foregroundTailLatestReady.value = false;
     maybeResumeForegroundStreamingDraft(cid, "switch_cached_display");
     clearConversationBadge(cid);
     const trace = beginForegroundPaintTrace(cid);
@@ -2814,6 +2847,39 @@ async function switchUnarchivedConversation(conversationId: string) {
     setStatusError("status.loadMessagesFailed", error);
   } finally {
     conversationForegroundSyncing.value = false;
+  }
+}
+
+async function ensureLatestForegroundTailThenScrollToBottom() {
+  const conversationId = String(currentChatConversationId.value || "").trim();
+  if (!conversationId) return;
+  if (foregroundTailLatestReady.value) {
+    triggerConversationScrollToBottom(conversationId, "manual_ready");
+    return;
+  }
+  try {
+    const result = await invokeTauri<{ accepted: boolean; requestId: string }>("request_conversation_messages_after_async", {
+      input: {
+        conversationId,
+        afterMessageId: buildConversationMessagesAfterAnchor(conversationId),
+        fallbackLimit: BACKGROUND_CONVERSATION_CACHE_LIMIT,
+      },
+    });
+    if (!result?.accepted) {
+      triggerConversationScrollToBottom(conversationId, "manual_request_rejected");
+      return;
+    }
+    pendingManualScrollToBottomConversationId = conversationId;
+    pendingManualScrollToBottomRequestId = String(result.requestId || "").trim();
+    if (!pendingManualScrollToBottomRequestId) {
+      triggerConversationScrollToBottom(conversationId, "manual_request_missing_id");
+    }
+  } catch (error) {
+    console.warn("[会话切换] 手动滚到底前请求尾部增量失败", {
+      conversationId,
+      error,
+    });
+    triggerConversationScrollToBottom(conversationId, "manual_request_failed");
   }
 }
 
@@ -3751,6 +3817,7 @@ const chatFlow = useChatFlow({
 
       nextMessages = reuseStableMessageReferences(nextMessages, allMessages.value);
       allMessages.value = nextMessages;
+      foregroundTailLatestReady.value = true;
       const appendedSummary = uniqueIncoming.map((message) => {
         const meta = (message.providerMeta || {}) as Record<string, unknown>;
         const origin = meta.origin as Record<string, unknown> | undefined;

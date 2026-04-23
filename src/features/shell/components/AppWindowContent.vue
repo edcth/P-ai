@@ -180,6 +180,7 @@
         @stop-chat="stopChat"
         @load-older-history="onLoadOlderChatHistory"
         @reached-bottom="onReachedChatBottom"
+        @jump-to-conversation-bottom="onJumpToConversationBottom"
         @recall-turn="onRecallTurn"
         @regenerate-turn="onRegenerateTurn"
         @confirm-plan="confirmPlan"
@@ -557,6 +558,7 @@ const props = defineProps<{
   stopChat: () => void;
   onLoadOlderChatHistory: () => void;
   onReachedChatBottom: () => void;
+  onJumpToConversationBottom: () => void;
   onRecallTurn: (payload: { turnId: string }) => void;
   onRegenerateTurn: (payload: { turnId: string }) => void;
   confirmPlan: (payload: { messageId: string }) => void;
