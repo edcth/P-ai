@@ -70,6 +70,11 @@ pub(crate) fn ensure_workspace_skills_layout_at_root(workspace_root: &Path) -> R
     )?;
     sync_workspace_preset_skill(
         &skills_root,
+        "agents-md-setup",
+        include_str!("../../../resources/preset-skills/agents-md-setup/SKILL.md"),
+    )?;
+    sync_workspace_preset_skill(
+        &skills_root,
         "assistant-interaction-guide",
         include_str!("../../../resources/preset-skills/assistant-interaction-guide/SKILL.md"),
     )?;
