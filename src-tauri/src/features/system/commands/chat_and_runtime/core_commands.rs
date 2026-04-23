@@ -166,6 +166,122 @@ fn build_user_mention_context_snapshot_with_agents(
     lines.join("\n")
 }
 
+fn build_user_mention_dispatch_plans(
+    app_config: &AppConfig,
+    data: &AppData,
+    conversation_id: &str,
+    source_department_id: &str,
+    source_agent_id: &str,
+    latest_user_text: &str,
+    mentions: Option<&Vec<UserMentionTargetInput>>,
+) -> Result<(Vec<UserMentionPlan>, Vec<UserMentionFailurePlan>), String> {
+    let Some(items) = mentions.filter(|items| !items.is_empty()) else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let conversation = data
+        .conversations
+        .iter()
+        .find(|item| item.id == conversation_id && item.summary.trim().is_empty())
+        .ok_or_else(|| format!("未找到目标会话，conversationId={conversation_id}"))?;
+    let agents = &data.agents;
+    let mention_background =
+        build_user_mention_context_snapshot_with_agents(conversation, agents, latest_user_text);
+    let mut mention_plans = Vec::<UserMentionPlan>::new();
+    let mut mention_failures = Vec::<UserMentionFailurePlan>::new();
+    let mut seen_mention_agents = std::collections::HashSet::<String>::new();
+    for mention in items.iter().take(3) {
+        let target_agent_id = mention.agent_id.trim().to_string();
+        let target_department_id = mention.department_id.trim().to_string();
+        let target_agent_name = mention
+            .agent_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                agents
+                    .iter()
+                    .find(|agent| agent.id == target_agent_id)
+                    .map(|agent| agent.name.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or_else(|| target_agent_id.clone());
+        if target_agent_id.is_empty()
+            || target_department_id.is_empty()
+            || !seen_mention_agents.insert(target_agent_id.clone())
+        {
+            continue;
+        }
+        if target_agent_id == source_agent_id {
+            continue;
+        }
+        let Some(target_department) = department_by_id(app_config, &target_department_id) else {
+            mention_failures.push(UserMentionFailurePlan {
+                root_conversation_id: conversation_id.to_string(),
+                source_agent_id: source_agent_id.to_string(),
+                target_department_id: target_department_id.clone(),
+                target_agent_id: target_agent_id.clone(),
+                target_agent_name: target_agent_name.clone(),
+                reason: format!("目标部门不存在，departmentId={target_department_id}"),
+            });
+            continue;
+        };
+        if !target_department
+            .agent_ids
+            .iter()
+            .any(|item| item.trim() == target_agent_id)
+        {
+            mention_failures.push(UserMentionFailurePlan {
+                root_conversation_id: conversation_id.to_string(),
+                source_agent_id: source_agent_id.to_string(),
+                target_department_id: target_department_id.clone(),
+                target_agent_id: target_agent_id.clone(),
+                target_agent_name: target_agent_name.clone(),
+                reason: "目标人格已不再属于该部门".to_string(),
+            });
+            continue;
+        }
+        if !agents
+            .iter()
+            .any(|agent| agent.id == target_agent_id && !agent.is_built_in_user)
+        {
+            mention_failures.push(UserMentionFailurePlan {
+                root_conversation_id: conversation_id.to_string(),
+                source_agent_id: source_agent_id.to_string(),
+                target_department_id: target_department_id.clone(),
+                target_agent_id: target_agent_id.clone(),
+                target_agent_name: target_agent_name.clone(),
+                reason: format!("目标人格不存在，agentId={target_agent_id}"),
+            });
+            continue;
+        }
+        let target_api_config_ids = delegate_target_chat_api_config_ids(app_config, target_department);
+        if target_api_config_ids.is_empty() {
+            mention_failures.push(UserMentionFailurePlan {
+                root_conversation_id: conversation_id.to_string(),
+                source_agent_id: source_agent_id.to_string(),
+                target_department_id: target_department_id.clone(),
+                target_agent_id: target_agent_id.clone(),
+                target_agent_name: target_agent_name.clone(),
+                reason: format!("目标部门未配置可用模型，departmentId={target_department_id}"),
+            });
+            continue;
+        }
+        mention_plans.push(UserMentionPlan {
+            root_conversation_id: conversation_id.to_string(),
+            source_department_id: source_department_id.to_string(),
+            source_agent_id: source_agent_id.to_string(),
+            target_department_id,
+            target_agent_id,
+            target_agent_name,
+            instruction: latest_user_text.to_string(),
+            background: mention_background.clone(),
+            target_api_config_ids,
+        });
+    }
+    Ok((mention_plans, mention_failures))
+}
+
 fn first_available_department_agent_id(
     department: &DepartmentConfig,
     data: &AppData,
@@ -598,7 +714,7 @@ async fn send_chat_message(
         let app_config = state_read_config_cached(&state)?;
         let config_elapsed_ms = config_started_at.elapsed().as_millis();
         let app_data_started_at = std::time::Instant::now();
-        let data = state_read_app_data_cached(&state)?;
+        let mut data = state_read_app_data_cached(&state)?;
         let app_data_elapsed_ms = app_data_started_at.elapsed().as_millis();
         let department_started_at = std::time::Instant::now();
         let (department, agent_id) = resolve_session_binding_for_send(
@@ -614,13 +730,20 @@ async fn send_chat_message(
         }
 
         let conversation_started_at = std::time::Instant::now();
-        let resolved_conversation = conversation_service().resolve_send_target_conversation(
-            &state,
-            session.conversation_id.as_deref(),
-            &api_config_id,
-            &department.id,
-            &agent_id,
-        )?;
+        let resolved_conversation = {
+            let _guard = lock_conversation_with_metrics(
+                &state,
+                "conversation_service_resolve_send_target_conversation",
+            )?;
+            conversation_service().resolve_send_target_conversation_in_data(
+                &mut data,
+                &state.data_path,
+                session.conversation_id.as_deref(),
+                &api_config_id,
+                &department.id,
+                &agent_id,
+            )?
+        };
         let conversation_elapsed_ms = conversation_started_at.elapsed().as_millis();
         if let Some(reject_reason) = resolved_conversation.requested_reject_reason.as_deref() {
             if let Some(requested_cid) = session
@@ -640,118 +763,18 @@ async fn send_chat_message(
             }
         }
         let conversation_id = resolved_conversation.conversation_id.clone();
-        let conversation_snapshot = resolved_conversation.conversation_snapshot.clone();
-        let mention_background = build_user_mention_context_snapshot_with_agents(
-            &conversation_snapshot,
-            &resolved_conversation.agents,
+        let (mention_plans, mention_failures) = build_user_mention_dispatch_plans(
+            &app_config,
+            &data,
+            &conversation_id,
+            &department.id,
+            &agent_id,
             &display_text,
-        );
-        let mut mention_plans = Vec::<UserMentionPlan>::new();
-        let mut mention_failures = Vec::<UserMentionFailurePlan>::new();
-        let mut seen_mention_agents = std::collections::HashSet::<String>::new();
-        for mention in input
-            .payload
-            .mentions
-            .as_ref()
-            .map(|items| items.iter().take(3))
-            .into_iter()
-            .flatten()
-        {
-            let target_agent_id = mention.agent_id.trim().to_string();
-            let target_department_id = mention.department_id.trim().to_string();
-            let target_agent_name = mention
-                .agent_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    resolved_conversation
-                        .agents
-                        .iter()
-                        .find(|agent| agent.id == target_agent_id)
-                        .map(|agent| agent.name.trim().to_string())
-                        .filter(|value| !value.is_empty())
-                })
-                .unwrap_or_else(|| target_agent_id.clone());
-            if target_agent_id.is_empty()
-                || target_department_id.is_empty()
-                || !seen_mention_agents.insert(target_agent_id.clone())
-            {
-                continue;
-            }
-            if target_agent_id == agent_id {
-                continue;
-            }
-            let Some(target_department) = department_by_id(&app_config, &target_department_id) else {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: format!("目标部门不存在，departmentId={target_department_id}"),
-                });
-                continue;
-            };
-            if !target_department
-                .agent_ids
-                .iter()
-                .any(|item| item.trim() == target_agent_id)
-            {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: "目标人格已不再属于该部门".to_string(),
-                });
-                continue;
-            }
-            if !resolved_conversation
-                .agents
-                .iter()
-                .any(|agent| agent.id == target_agent_id && !agent.is_built_in_user)
-            {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: format!("目标人格不存在，agentId={target_agent_id}"),
-                });
-                continue;
-            }
-            let target_api_config_ids =
-                delegate_target_chat_api_config_ids(&app_config, target_department);
-            if target_api_config_ids.is_empty() {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: format!("目标部门未配置可用模型，departmentId={target_department_id}"),
-                });
-                continue;
-            }
-            mention_plans.push(UserMentionPlan {
-                root_conversation_id: conversation_id.clone(),
-                source_department_id: department.id.clone(),
-                source_agent_id: agent_id.clone(),
-                target_department_id,
-                target_agent_id,
-                target_agent_name,
-                instruction: display_text.clone(),
-                background: mention_background.clone(),
-                target_api_config_ids,
-            });
-        }
+            input.payload.mentions.as_ref(),
+        )?;
 
         eprintln!(
-            "[聊天发送] 发送前准备耗时：总计={}ms，读取配置={}ms，读取应用数据={}ms，解析部门={}ms，会话解析+持久化={}ms，conversation_id={}，department_id={}，agent_id={}",
+            "[聊天发送] 发送前准备耗时：总计={}ms，读取配置={}ms，读取应用数据={}ms，解析部门={}ms，会话解析={}ms，conversation_id={}，department_id={}，agent_id={}",
             prepare_started_at.elapsed().as_millis(),
             config_elapsed_ms,
             app_data_elapsed_ms,
@@ -825,7 +848,12 @@ async fn send_chat_message(
     };
 
     // 根据 ingress 结果执行：直写或排队；排队仅在事件仍滞留时才通知前端。
-    process_chat_event_after_ingress(state.inner(), ingress).await;
+    trigger_chat_event_after_ingress(state.inner(), ingress);
+
+    let send_result = result_rx
+        .await
+        .map_err(|_| "聊天请求已取消或调度结果丢失".to_string())?;
+    let send_result = send_result?;
 
     for failure in mention_failures {
         spawn_user_mention_failure_message(state.inner().clone(), failure);
@@ -834,9 +862,7 @@ async fn send_chat_message(
         spawn_user_mention_delegate(state.inner().clone(), plan);
     }
 
-    result_rx
-        .await
-        .map_err(|_| "聊天请求已取消或调度结果丢失".to_string())?
+    Ok(send_result)
 }
 
 async fn send_user_mention_message_inner(
@@ -931,7 +957,7 @@ async fn send_user_mention_message_inner(
         let app_config = state_read_config_cached(state)?;
         let config_elapsed_ms = config_started_at.elapsed().as_millis();
         let app_data_started_at = std::time::Instant::now();
-        let data = state_read_app_data_cached(state)?;
+        let mut data = state_read_app_data_cached(state)?;
         let app_data_elapsed_ms = app_data_started_at.elapsed().as_millis();
         let department_started_at = std::time::Instant::now();
         let (department, agent_id) = resolve_session_binding_for_send(
@@ -947,127 +973,34 @@ async fn send_user_mention_message_inner(
         }
 
         let conversation_started_at = std::time::Instant::now();
-        let resolved_conversation = conversation_service().resolve_send_target_conversation(
-            &state,
-            session.conversation_id.as_deref(),
-            &api_config_id,
-            &department.id,
-            &agent_id,
-        )?;
+        let resolved_conversation = {
+            let _guard = lock_conversation_with_metrics(
+                state,
+                "conversation_service_resolve_send_target_conversation",
+            )?;
+            conversation_service().resolve_send_target_conversation_in_data(
+                &mut data,
+                &state.data_path,
+                session.conversation_id.as_deref(),
+                &api_config_id,
+                &department.id,
+                &agent_id,
+            )?
+        };
         let conversation_elapsed_ms = conversation_started_at.elapsed().as_millis();
         let conversation_id = resolved_conversation.conversation_id.clone();
-        let conversation_snapshot = resolved_conversation.conversation_snapshot.clone();
-        let mention_background = build_user_mention_context_snapshot_with_agents(
-            &conversation_snapshot,
-            &resolved_conversation.agents,
+        let (mention_plans, mention_failures) = build_user_mention_dispatch_plans(
+            &app_config,
+            &data,
+            &conversation_id,
+            &department.id,
+            &agent_id,
             &display_text,
-        );
-        let mut mention_plans = Vec::<UserMentionPlan>::new();
-        let mut mention_failures = Vec::<UserMentionFailurePlan>::new();
-        let mut seen_mention_agents = std::collections::HashSet::<String>::new();
-        for mention in input
-            .payload
-            .mentions
-            .as_ref()
-            .map(|items| items.iter().take(3))
-            .into_iter()
-            .flatten()
-        {
-            let target_agent_id = mention.agent_id.trim().to_string();
-            let target_department_id = mention.department_id.trim().to_string();
-            let target_agent_name = mention
-                .agent_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    resolved_conversation
-                        .agents
-                        .iter()
-                        .find(|agent| agent.id == target_agent_id)
-                        .map(|agent| agent.name.trim().to_string())
-                        .filter(|value| !value.is_empty())
-                })
-                .unwrap_or_else(|| target_agent_id.clone());
-            if target_agent_id.is_empty()
-                || target_department_id.is_empty()
-                || !seen_mention_agents.insert(target_agent_id.clone())
-            {
-                continue;
-            }
-            if target_agent_id == agent_id {
-                continue;
-            }
-            let Some(target_department) = department_by_id(&app_config, &target_department_id) else {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: format!("目标部门不存在，departmentId={target_department_id}"),
-                });
-                continue;
-            };
-            if !target_department
-                .agent_ids
-                .iter()
-                .any(|item| item.trim() == target_agent_id)
-            {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: "目标人格已不再属于该部门".to_string(),
-                });
-                continue;
-            }
-            if !resolved_conversation
-                .agents
-                .iter()
-                .any(|agent| agent.id == target_agent_id && !agent.is_built_in_user)
-            {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: format!("目标人格不存在，agentId={target_agent_id}"),
-                });
-                continue;
-            }
-            let target_api_config_ids =
-                delegate_target_chat_api_config_ids(&app_config, target_department);
-            if target_api_config_ids.is_empty() {
-                mention_failures.push(UserMentionFailurePlan {
-                    root_conversation_id: conversation_id.clone(),
-                    source_agent_id: agent_id.clone(),
-                    target_department_id: target_department_id.clone(),
-                    target_agent_id: target_agent_id.clone(),
-                    target_agent_name: target_agent_name.clone(),
-                    reason: format!("目标部门未配置可用模型，departmentId={target_department_id}"),
-                });
-                continue;
-            }
-            mention_plans.push(UserMentionPlan {
-                root_conversation_id: conversation_id.clone(),
-                source_department_id: department.id.clone(),
-                source_agent_id: agent_id.clone(),
-                target_department_id,
-                target_agent_id,
-                target_agent_name,
-                instruction: display_text.clone(),
-                background: mention_background.clone(),
-                target_api_config_ids,
-            });
-        }
+            input.payload.mentions.as_ref(),
+        )?;
 
         eprintln!(
-            "[聊天发送] 用户@委托发送前准备耗时：总计={}ms，读取配置={}ms，读取应用数据={}ms，解析部门={}ms，会话解析+持久化={}ms，conversation_id={}，department_id={}，agent_id={}，mention_count={}",
+            "[聊天发送] 用户@委托发送前准备耗时：总计={}ms，读取配置={}ms，读取应用数据={}ms，解析部门={}ms，会话解析={}ms，conversation_id={}，department_id={}，agent_id={}，mention_count={}",
             prepare_started_at.elapsed().as_millis(),
             config_elapsed_ms,
             app_data_elapsed_ms,
@@ -1133,7 +1066,12 @@ async fn send_user_mention_message_inner(
         }
     };
 
-    process_chat_event_after_ingress(state, ingress).await;
+    trigger_chat_event_after_ingress(state, ingress);
+
+    let send_result = result_rx
+        .await
+        .map_err(|_| "聊天请求已取消或调度结果丢失".to_string())?;
+    let send_result = send_result?;
 
     for failure in mention_failures {
         spawn_user_mention_failure_message(state.clone(), failure);
@@ -1142,9 +1080,7 @@ async fn send_user_mention_message_inner(
         spawn_user_mention_delegate(state.clone(), plan);
     }
 
-    result_rx
-        .await
-        .map_err(|_| "聊天请求已取消或调度结果丢失".to_string())?
+    Ok(send_result)
 }
 
 #[tauri::command]

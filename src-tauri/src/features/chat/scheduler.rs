@@ -958,9 +958,9 @@ async fn process_conversation_batch(
     // 这里统一覆盖 created_at 为 history_flush_time，
     // 目的是把“正式进入历史的时间”作为消息的业务生效时间。
     // 入队时间只用于队列观察，不用于正式会话排序和轮次判断。
-    let (scheduler_agents, summary_seed_agent, should_seed_summary_context) = {
-        let data = state_read_app_data_cached(state)?;
-        let Some(conversation_idx) = data
+    let scheduler_data = state_read_app_data_cached(state)?;
+    let (summary_seed_agent_id, should_seed_summary_context) = {
+        let Some(conversation_idx) = scheduler_data
             .conversations
             .iter()
             .position(|c| c.id == conversation_id && c.summary.trim().is_empty())
@@ -972,7 +972,7 @@ async fn process_conversation_batch(
             )?;
             return Err(format!("目标会话不存在，conversationId={conversation_id}"));
         };
-        let conversation = data
+        let conversation = scheduler_data
             .conversations
             .get(conversation_idx)
             .ok_or_else(|| format!("目标会话不存在，conversationId={conversation_id}"))?;
@@ -982,19 +982,26 @@ async fn process_conversation_batch(
         let should_seed_summary_context = !has_summary_context
             && !conversation_is_delegate(conversation)
             && !conversation_is_remote_im_contact(conversation);
-        let summary_seed_agent = if should_seed_summary_context
+        let summary_seed_agent_id = if should_seed_summary_context
             && conversation.user_profile_snapshot.trim().is_empty()
         {
-            data.agents
+            scheduler_data
+                .agents
                 .iter()
                 .find(|item| item.id == conversation.agent_id)
-                .cloned()
+                .map(|item| item.id.clone())
         } else {
             None
         };
-        (data.agents.clone(), summary_seed_agent, should_seed_summary_context)
+        (summary_seed_agent_id, should_seed_summary_context)
     };
-    let seeded_profile_snapshot = if let Some(agent) = summary_seed_agent.as_ref() {
+    let seeded_profile_snapshot = if let Some(agent_id) = summary_seed_agent_id.as_deref() {
+        let Some(agent) = scheduler_data.agents.iter().find(|item| item.id == agent_id) else {
+            return Err(format!(
+                "未找到用户画像种子人格，conversation_id={}, agent_id={}",
+                conversation_id, agent_id
+            ));
+        };
         match with_memory_lock(state, "scheduler_profile_snapshot", || {
             build_user_profile_snapshot_block(&state.data_path, agent, 12)
         }) {
@@ -1023,7 +1030,7 @@ async fn process_conversation_batch(
                 with_memory_lock(state, "scheduler_user_message_recall", || {
                     collect_recall_payload_for_user_message(
                         &state.data_path,
-                        &scheduler_agents,
+                        &scheduler_data.agents,
                         &event.session_info.agent_id,
                         &persisted,
                     )

@@ -11,6 +11,11 @@
 - 重构（conversation-prompt-service-phase-1）：引入会话提示词服务第一阶段骨架，先收口提示词 owner 与只读 snapshot，不替换 `Conversation.messages` 作为持久化真源；系统提示词最终合成与对话消息投影入口开始统一经过服务层，并新增缓存命中稳定性与 `prompt_revision` 边界测试，确保 `todo/task` 与 `memory_recall` 不会误触发系统提示词 revision
 - 重构（conversation-prompt-service-phase-2）：继续收口提示词服务 owner，系统侧块生成统一改为由服务内部发起，并把主聊天、`SummaryContext`、工具安全审查、工具审查提交、vision 描述这几条高频真实业务入口的 latest user / prepared prompt 生成动作收进服务内部；外部主链只再传原始条件与场景意图，不再手搓系统块或 latest user 文本
 
+## 发布：v0.9.36
+
+- 修复（chat-send-ingress-and-dispatch-stack-overflow）：发送链路从收到前端 `send_chat_message` 到调度结束这段，去掉了目标会话解析阶段的前置快速持久化与整份 `Conversation/agents` 按值返回；发送入口与用户@委托发送改为先完成 ingress 再触发后台调度，mention 计划直接基于当前 `AppData` 借用构造，不再额外背整份会话快照；调度层同步移除 `agents.clone()` 与 flush 后整会话 `clone()`，降低发送前准备与调度边界上的主线程/运行态栈压力，修复 release 新会话首发即闪退的问题
+- 发布（release-0.9.36）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.36`，纳入本轮已完成的“发送前准备链与调度链爆栈修复、release 诊断收口与版本发布”更新
+
 ## 发布：v0.9.35
 
 - 功能（parameterized-theme-generator-and-mode-presets）：主题系统新增“预设 / 自定义”双入口，支持以少量参数即时合成并预览自定义主题；自定义浅色与自定义深色各自独立缓存参数，切换明暗不会互相覆盖，并恢复与预设主题并存的切换能力；同时聊天消息、工具审查、标题栏与外观页样式联动改为跟随新的主题 token，补齐中英繁文案、运行时动态注入与相关前端测试

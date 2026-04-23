@@ -54,11 +54,10 @@ impl ConversationService {
             history_flush_time,
         )?;
         data.conversations[conversation_idx].updated_at = history_flush_time.to_string();
-        let persisted_conversation = data.conversations[conversation_idx].clone();
         persist_after_flush(
             self,
             state,
-            &persisted_conversation,
+            conversation_id,
             &data,
             remote_im_runtime_before,
         )?;
@@ -194,7 +193,7 @@ fn handle_remote_im_activations(
 fn persist_after_flush(
     service: &ConversationService,
     state: &AppState,
-    persisted_conversation: &Conversation,
+    conversation_id: &str,
     data: &AppData,
     remote_im_runtime_before: Option<Vec<u8>>,
 ) -> Result<(), String> {
@@ -204,6 +203,13 @@ fn persist_after_flush(
             data.remote_im_contact_checkpoints.clone(),
         ))
         .ok();
+    let persisted_conversation = data
+        .conversations
+        .iter()
+        .find(|conversation| {
+            conversation.id == conversation_id && conversation.summary.trim().is_empty()
+        })
+        .ok_or_else(|| format!("目标会话不存在，conversationId={conversation_id}"))?;
     service.persist_conversation_with_chat_index(state, persisted_conversation)?;
     if remote_im_runtime_changed {
         state_write_runtime_state_cached(state, &build_runtime_state_file(data))?;

@@ -38,8 +38,6 @@ struct ToggleUnarchivedConversationPinMutationResult {
 
 struct SendTargetConversationResolution {
     conversation_id: String,
-    conversation_snapshot: Conversation,
-    agents: Vec<AgentProfile>,
     requested_reject_reason: Option<String>,
 }
 

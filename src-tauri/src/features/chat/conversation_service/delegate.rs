@@ -1,4 +1,76 @@
 impl ConversationService {
+    fn resolve_send_target_conversation_in_data(
+        &self,
+        data: &mut AppData,
+        data_path: &PathBuf,
+        requested_conversation_id: Option<&str>,
+        api_config_id: &str,
+        department_id: &str,
+        agent_id: &str,
+    ) -> Result<SendTargetConversationResolution, String> {
+        let normalized_requested = requested_conversation_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let (conversation_id, requested_reject_reason) =
+            if let Some(conversation_id) = normalized_requested {
+                if data.conversations.iter().any(|conversation| {
+                    conversation.id == conversation_id && conversation.summary.trim().is_empty()
+                }) {
+                    (conversation_id.to_string(), None)
+                } else {
+                    let idx = ensure_active_foreground_conversation_index_atomic(
+                        data,
+                        data_path,
+                        api_config_id,
+                        agent_id,
+                    );
+                    let fallback_id = data
+                        .conversations
+                        .get(idx)
+                        .map(|item| item.id.clone())
+                        .ok_or_else(|| "活动会话索引超出范围".to_string())?;
+                    let reject_reason = data
+                        .conversations
+                        .iter()
+                        .find(|conversation| conversation.id == conversation_id)
+                        .map(|conversation| {
+                            if !conversation.summary.trim().is_empty() {
+                                "summary_present".to_string()
+                            } else {
+                                "unknown".to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "not_found".to_string());
+                    (fallback_id, Some(reject_reason))
+                }
+            } else {
+                let idx = ensure_active_foreground_conversation_index_atomic(
+                    data,
+                    data_path,
+                    api_config_id,
+                    agent_id,
+                );
+                let conversation_id = data
+                    .conversations
+                    .get(idx)
+                    .map(|item| item.id.clone())
+                    .ok_or_else(|| "活动会话索引超出范围".to_string())?;
+                (conversation_id, None)
+            };
+
+        let conversation = data
+            .conversations
+            .iter_mut()
+            .find(|item| item.id == conversation_id && item.summary.trim().is_empty())
+            .ok_or_else(|| format!("未找到目标会话，conversationId={conversation_id}"))?;
+        conversation.department_id = department_id.to_string();
+        conversation.agent_id = agent_id.to_string();
+        Ok(SendTargetConversationResolution {
+            conversation_id,
+            requested_reject_reason,
+        })
+    }
+
     fn resolve_delegate_result_target_conversation(
         &self,
         state: &AppState,
@@ -126,90 +198,6 @@ impl ConversationService {
         })
     }
 
-
-    fn resolve_send_target_conversation(
-        &self,
-        state: &AppState,
-        requested_conversation_id: Option<&str>,
-        api_config_id: &str,
-        department_id: &str,
-        agent_id: &str,
-    ) -> Result<SendTargetConversationResolution, String> {
-        let guard = lock_conversation_with_metrics(
-            state,
-            "conversation_service_resolve_send_target_conversation",
-        )?;
-        let mut data = state_read_app_data_cached(state)?;
-        let normalized_requested = requested_conversation_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let (conversation_id, requested_reject_reason) = if let Some(conversation_id) = normalized_requested
-        {
-            if data.conversations.iter().any(|conversation| {
-                conversation.id == conversation_id && conversation.summary.trim().is_empty()
-            }) {
-                (conversation_id.to_string(), None)
-            } else {
-                let idx = ensure_active_foreground_conversation_index_atomic(
-                    &mut data,
-                    &state.data_path,
-                    api_config_id,
-                    agent_id,
-                );
-                let fallback_id = data
-                    .conversations
-                    .get(idx)
-                    .map(|item| item.id.clone())
-                    .ok_or_else(|| "活动会话索引超出范围".to_string())?;
-                let reject_reason = data
-                    .conversations
-                    .iter()
-                    .find(|conversation| conversation.id == conversation_id)
-                    .map(|conversation| {
-                        if !conversation.summary.trim().is_empty() {
-                            "summary_present".to_string()
-                        } else {
-                            "unknown".to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| "not_found".to_string());
-                (fallback_id, Some(reject_reason))
-            }
-        } else {
-            let idx = ensure_active_foreground_conversation_index_atomic(
-                &mut data,
-                &state.data_path,
-                api_config_id,
-                agent_id,
-            );
-            let conversation_id = data
-                .conversations
-                .get(idx)
-                .map(|item| item.id.clone())
-                .ok_or_else(|| "活动会话索引超出范围".to_string())?;
-            (conversation_id, None)
-        };
-
-        let conversation_snapshot = {
-            let conversation = data
-                .conversations
-                .iter_mut()
-                .find(|item| item.id == conversation_id && item.summary.trim().is_empty())
-                .ok_or_else(|| format!("未找到目标会话，conversationId={conversation_id}"))?;
-            conversation.department_id = department_id.to_string();
-            conversation.agent_id = agent_id.to_string();
-            conversation.clone()
-        };
-        let agents = data.agents.clone();
-        persist_single_conversation_runtime_fast(state, &data, &conversation_id)?;
-        drop(guard);
-        Ok(SendTargetConversationResolution {
-            conversation_id,
-            conversation_snapshot,
-            agents,
-            requested_reject_reason,
-        })
-    }
 
     fn resolve_prompt_prepare_conversation_from_data(
         &self,

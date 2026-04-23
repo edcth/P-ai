@@ -1,6 +1,6 @@
 [package]
 name = "easy-call-ai"
-version = "0.9.35"
+version = "0.9.36"
 edition = "2021"
 description = "P-ai desktop app"
 default-run = "p-ai"
@@ -70,8 +70,8 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
 opt-level = "z"
-lto = true
-codegen-units = 1
+lto = false
+codegen-units = 16
 strip = true
 debug = false
 

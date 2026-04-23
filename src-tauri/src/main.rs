@@ -26,8 +26,6 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime, UtcOffset};
 use uuid::Uuid;
 
-const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
-
 macro_rules! eprintln {
     ($($arg:tt)*) => {{
         runtime_log_info(format!($($arg)*));
@@ -92,7 +90,6 @@ fn should_enable_devtools() -> bool {
 fn install_tauri_async_runtime() -> Result<tokio::runtime::Runtime, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
         .build()
         .map_err(|err| format!("创建 Tauri 异步运行时失败: {err}"))?;
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
