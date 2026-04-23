@@ -140,9 +140,7 @@ fn lock_conversation_runtime_slots(
     match state.conversation_runtime_slots.lock() {
         Ok(guard) => Ok(guard),
         Err(poisoned) => {
-            eprintln!(
-                "[聊天调度] 警告: conversation_runtime_slots 锁已 poison，正在继续恢复使用"
-            );
+            eprintln!("[聊天调度] 警告: conversation_runtime_slots 锁已 poison，正在继续恢复使用");
             Ok(poisoned.into_inner())
         }
     }
@@ -197,7 +195,10 @@ pub(crate) fn get_queue_snapshot(state: &AppState) -> Result<Vec<ChatQueueEventS
                 })
                 .unwrap_or_default();
             let preview = if message_preview.chars().count() > 50 {
-                format!("{}...", message_preview.chars().take(50).collect::<String>())
+                format!(
+                    "{}...",
+                    message_preview.chars().take(50).collect::<String>()
+                )
             } else {
                 message_preview
             };
@@ -236,7 +237,10 @@ pub(crate) fn emit_chat_queue_snapshot(state: &AppState) {
 }
 
 /// 从队列中移除指定事件
-pub(crate) fn remove_from_queue(state: &AppState, event_id: &str) -> Result<Option<ChatPendingEvent>, String> {
+pub(crate) fn remove_from_queue(
+    state: &AppState,
+    event_id: &str,
+) -> Result<Option<ChatPendingEvent>, String> {
     // 队列修改统一走 dequeue_lock -> queue_lock，保证进出队原子顺序一致。
     let _dequeue_guard = state
         .dequeue_lock
@@ -296,8 +300,7 @@ pub(crate) fn clear_conversation_queue(
     if removed_count > 0 {
         eprintln!(
             "[聊天调度] 清空会话队列: conversation_id={}, removed_count={}",
-            trimmed_conversation_id,
-            removed_count
+            trimmed_conversation_id, removed_count
         );
         emit_chat_queue_snapshot(state);
         complete_pending_chat_events_with_error(state, &removed_event_ids, error_message)?;
@@ -477,7 +480,8 @@ fn dispatch_assistant_delta_to_active_view(
         return;
     }
 
-    let targets = collect_active_chat_view_delta_channels(state, conversation_id).unwrap_or_default();
+    let targets =
+        collect_active_chat_view_delta_channels(state, conversation_id).unwrap_or_default();
     if targets.is_empty() {
         return;
     }
@@ -521,8 +525,14 @@ fn emit_stream_rebind_required_event(
     runtime_log_info(format!(
         "[聊天流式重绑] 发送普通事件 conversation_id={} request_id={} phase_id={} reason={}",
         conversation_id.trim(),
-        request_id.map(str::trim).filter(|value| !value.is_empty()).unwrap_or(""),
-        phase_id.map(str::trim).filter(|value| !value.is_empty()).unwrap_or(""),
+        request_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(""),
+        phase_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(""),
         reason.trim(),
     ));
     match app_handle.emit(CHAT_STREAM_REBIND_REQUIRED_EVENT, payload) {
@@ -586,10 +596,7 @@ pub(crate) async fn process_chat_queue_for_event(state: &AppState, event_id: &st
     }
 }
 
-pub(crate) async fn process_chat_event_after_ingress(
-    state: &AppState,
-    ingress: ChatEventIngress,
-) {
+pub(crate) async fn process_chat_event_after_ingress(state: &AppState, ingress: ChatEventIngress) {
     match ingress {
         ChatEventIngress::Direct(event) => {
             let conversation_id = event.conversation_id.clone();
@@ -860,10 +867,7 @@ pub(crate) async fn process_chat_queue(state: &AppState) -> Result<(), String> {
             if let Err(err) =
                 process_claimed_conversation_batch(&state_clone, &conversation_id, events).await
             {
-                eprintln!(
-                    "[聊天调度] 处理会话失败 {}: {}",
-                    conversation_id, err
-                );
+                eprintln!("[聊天调度] 处理会话失败 {}: {}", conversation_id, err);
             }
         });
     }
@@ -883,7 +887,10 @@ async fn process_conversation_batch(
     conversation_id: &str,
     events: Vec<ChatPendingEvent>,
 ) -> Result<(), String> {
-    let event_ids = events.iter().map(|event| event.id.clone()).collect::<Vec<_>>();
+    let event_ids = events
+        .iter()
+        .map(|event| event.id.clone())
+        .collect::<Vec<_>>();
     let latest_user_text = latest_user_text_from_events(&events);
     let history_flush_time = now_iso();
     let oldest_queue_created_at = events
@@ -908,8 +915,9 @@ async fn process_conversation_batch(
                     name,
                     compressed,
                 } => {
-                    let next_ref = externalize_stored_binary_base64(data_path, &mime, &bytes_base64)
-                        .unwrap_or(bytes_base64.clone());
+                    let next_ref =
+                        externalize_stored_binary_base64(data_path, &mime, &bytes_base64)
+                            .unwrap_or(bytes_base64.clone());
                     if next_ref != bytes_base64 {
                         deferred_image_count += 1;
                         deferred_base64_chars += bytes_base64.len();
@@ -971,9 +979,10 @@ async fn process_conversation_batch(
             .conversations
             .get(conversation_idx)
             .ok_or_else(|| format!("目标会话不存在，conversationId={conversation_id}"))?;
-        let has_summary_context = conversation.messages.iter().any(|message| {
-            is_context_compaction_message(message, message.role.trim())
-        });
+        let has_summary_context = conversation
+            .messages
+            .iter()
+            .any(|message| is_context_compaction_message(message, message.role.trim()));
         let should_seed_summary_context = !has_summary_context
             && !conversation_is_delegate(conversation)
             && !conversation_is_remote_im_contact(conversation);
@@ -1024,7 +1033,8 @@ async fn process_conversation_batch(
     };
     let mut prepared_batches = Vec::<Vec<(ChatMessage, Vec<String>)>>::with_capacity(events.len());
     for event in &events {
-        let mut prepared_messages = Vec::<(ChatMessage, Vec<String>)>::with_capacity(event.messages.len());
+        let mut prepared_messages =
+            Vec::<(ChatMessage, Vec<String>)>::with_capacity(event.messages.len());
         for message in &event.messages {
             let mut persisted = message.clone();
             externalize_message_parts_to_media_refs(&mut persisted.parts, &state.data_path)?;
@@ -1055,7 +1065,7 @@ async fn process_conversation_batch(
         state,
         conversation_id,
         &events,
-        &prepared_batches,
+        prepared_batches,
         &history_flush_time,
         should_seed_summary_context,
         seeded_profile_snapshot.as_deref(),
@@ -1086,7 +1096,8 @@ async fn process_conversation_batch(
     if activations.is_empty() {
         activations = collect_active_chat_view_activations(state, conversation_id)?;
     }
-    let mut history_flushed_messages = Vec::<ChatMessage>::with_capacity(persisted_batch_messages.len());
+    let mut history_flushed_messages =
+        Vec::<ChatMessage>::with_capacity(persisted_batch_messages.len());
     for message in &persisted_batch_messages {
         let (deferred_message, _, _) =
             defer_image_parts_for_history_flushed(message, &state.data_path);
@@ -1115,7 +1126,9 @@ async fn process_conversation_batch(
                 activating_runtime_context.clone(),
                 activated_remote_im_sources.clone(),
                 oldest_queue_created_at,
-            ).await {
+            )
+            .await
+            {
                 Ok(result) => {
                     let mut follow_up_sources = match remote_im_finalize_round_completion(
                         state,
@@ -1172,7 +1185,11 @@ async fn process_conversation_batch(
                                         Vec::new()
                                     }
                                 };
-                                emit_round_completed_event(state, conversation_id, &follow_up_result);
+                                emit_round_completed_event(
+                                    state,
+                                    conversation_id,
+                                    &follow_up_result,
+                                );
                             }
                             Err(err) => {
                                 emit_round_failed_event(state, conversation_id, &err);
@@ -1282,11 +1299,7 @@ async fn activate_main_assistant(
     }
 
     // 设置状态为 AssistantStreaming
-    set_conversation_runtime_state(
-        state,
-        conversation_id,
-        MainSessionState::AssistantStreaming,
-    )?;
+    set_conversation_runtime_state(state, conversation_id, MainSessionState::AssistantStreaming)?;
     set_conversation_remote_im_activation_sources(
         state,
         conversation_id,
@@ -1331,7 +1344,7 @@ async fn activate_main_assistant(
 
     // 构造 trigger_only 请求
     let request = SendChatRequest {
-        trigger_only: true,  // 不写入新消息，只触发助理回复
+        trigger_only: true, // 不写入新消息，只触发助理回复
         session: Some(SessionSelector {
             api_config_id: None,
             department_id: Some(session_info.department_id.clone()),
@@ -1359,11 +1372,10 @@ async fn activate_main_assistant(
     // 使用 emit 作为远程激活轮次的流式主通道，避免前端窗口重绑定造成 channel 失联。
     let state_for_delta = state.clone();
     let conversation_id_for_emit = conversation_id.to_string();
-    let stream_start_rebind_emitted =
-        std::sync::Arc::new(std::sync::Mutex::new(false));
+    let stream_start_rebind_emitted = std::sync::Arc::new(std::sync::Mutex::new(false));
     let stream_start_rebind_emitted_for_channel = stream_start_rebind_emitted.clone();
-    let active_channel: tauri::ipc::Channel<AssistantDeltaEvent> =
-        tauri::ipc::Channel::new(move |body| {
+    let active_channel: tauri::ipc::Channel<AssistantDeltaEvent> = tauri::ipc::Channel::new(
+        move |body| {
             let parsed_event = match body {
                 tauri::ipc::InvokeResponseBody::Json(json) => {
                     serde_json::from_str::<AssistantDeltaEvent>(&json).ok()
@@ -1379,7 +1391,10 @@ async fn activate_main_assistant(
                     if let Some(flag) = stream_start_rebind_guard.as_mut() {
                         **flag = false;
                     }
-                } else if stream_start_rebind_guard.as_ref().map(|flag| !**flag).unwrap_or(true)
+                } else if stream_start_rebind_guard
+                    .as_ref()
+                    .map(|flag| !**flag)
+                    .unwrap_or(true)
                     && is_visible_stream_progress_event(&event)
                 {
                     runtime_log_info(format!(
@@ -1430,7 +1445,8 @@ async fn activate_main_assistant(
                 }
             }
             Ok(())
-        });
+        },
+    );
 
     // 调用 send_chat_message_inner
     let result = send_chat_message_inner(request, state, &active_channel).await;
@@ -1440,7 +1456,9 @@ async fn activate_main_assistant(
         weixin_oc_manager().stop_typing(ch_id, contact_id).await;
     }
 
-    if let Err(err) = set_conversation_remote_im_activation_sources(state, conversation_id, Vec::new()) {
+    if let Err(err) =
+        set_conversation_remote_im_activation_sources(state, conversation_id, Vec::new())
+    {
         eprintln!(
             "[聊天调度] 清理远程IM激活来源失败: conversation_id={}, error={}",
             conversation_id, err
@@ -1501,11 +1519,7 @@ fn emit_history_flushed_event(
     }
 }
 
-fn emit_round_completed_event(
-    state: &AppState,
-    conversation_id: &str,
-    result: &SendChatResult,
-) {
+fn emit_round_completed_event(state: &AppState, conversation_id: &str, result: &SendChatResult) {
     let app_handle = match state.app_handle.lock() {
         Ok(guard) => guard.as_ref().cloned(),
         Err(_) => None,
@@ -1534,11 +1548,7 @@ fn emit_round_completed_event(
     }
 }
 
-fn emit_round_failed_event(
-    state: &AppState,
-    conversation_id: &str,
-    error_text: &str,
-) {
+fn emit_round_failed_event(state: &AppState, conversation_id: &str, error_text: &str) {
     let app_handle = match state.app_handle.lock() {
         Ok(guard) => guard.as_ref().cloned(),
         Err(_) => None,

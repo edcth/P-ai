@@ -1,37 +1,37 @@
 impl ConversationService {
     fn list_archives(&self, state: &AppState) -> Result<Vec<ArchiveSummary>, String> {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err))?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err)
+        })?;
 
-        let data = state_read_app_data_cached(state)?;
         let app_config = read_config(&state.config_path)?;
-        let mut summaries = data
-            .conversations
-            .iter()
-            .filter(|conversation| !conversation.summary.trim().is_empty())
-            .map(|archive| {
-                let api_config_id = department_for_agent_id(&app_config, &archive.agent_id)
-                    .map(department_primary_api_config_id)
-                    .unwrap_or_default();
-                ArchiveSummary {
-                    archive_id: archive.id.clone(),
-                    archived_at: archive
-                        .archived_at
-                        .clone()
-                        .unwrap_or_else(|| archive.updated_at.clone()),
-                    title: if archive.title.trim().is_empty() {
-                        archive_first_user_preview(archive, &app_config.ui_language)
-                    } else {
-                        archive.title.trim().to_string()
-                    },
-                    message_count: archive.messages.len(),
-                    api_config_id,
-                    agent_id: archive.agent_id.clone(),
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut summaries = with_app_data_cached_ref(state, |data, _detail| {
+            Ok(data
+                .conversations
+                .iter()
+                .filter(|conversation| !conversation.summary.trim().is_empty())
+                .map(|archive| {
+                    let api_config_id = department_for_agent_id(&app_config, &archive.agent_id)
+                        .map(department_primary_api_config_id)
+                        .unwrap_or_default();
+                    ArchiveSummary {
+                        archive_id: archive.id.clone(),
+                        archived_at: archive
+                            .archived_at
+                            .clone()
+                            .unwrap_or_else(|| archive.updated_at.clone()),
+                        title: if archive.title.trim().is_empty() {
+                            archive_first_user_preview(archive, &app_config.ui_language)
+                        } else {
+                            archive.title.trim().to_string()
+                        },
+                        message_count: archive.messages.len(),
+                        api_config_id,
+                        agent_id: archive.agent_id.clone(),
+                    }
+                })
+                .collect::<Vec<_>>())
+        })?;
         summaries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
         drop(guard);
         Ok(summaries)
@@ -46,19 +46,19 @@ impl ConversationService {
         if normalized_archive_id.is_empty() {
             return Err("archiveId is required".to_string());
         }
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err))?;
-        let data = state_read_app_data_cached(state)?;
-        let mut messages = data
-            .conversations
-            .iter()
-            .find(|conversation| {
-                conversation.id == normalized_archive_id && !conversation.summary.trim().is_empty()
-            })
-            .map(|conversation| conversation.messages.clone())
-            .ok_or_else(|| "Archive not found".to_string())?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err)
+        })?;
+        let mut messages = with_app_data_cached_ref(state, |data, _detail| {
+            data.conversations
+                .iter()
+                .find(|conversation| {
+                    conversation.id == normalized_archive_id
+                        && !conversation.summary.trim().is_empty()
+                })
+                .map(|conversation| conversation.messages.clone())
+                .ok_or_else(|| "Archive not found".to_string())
+        })?;
         drop(guard);
         materialize_chat_message_parts_from_media_refs(&mut messages, &state.data_path);
         Ok(messages)
@@ -69,19 +69,19 @@ impl ConversationService {
         if normalized_archive_id.is_empty() {
             return Err("archiveId is required".to_string());
         }
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err))?;
-        let data = state_read_app_data_cached(state)?;
-        let summary = data
-            .conversations
-            .iter()
-            .find(|conversation| {
-                conversation.id == normalized_archive_id && !conversation.summary.trim().is_empty()
-            })
-            .map(|conversation| conversation.summary.clone())
-            .ok_or_else(|| "Archive not found".to_string())?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err)
+        })?;
+        let summary = with_app_data_cached_ref(state, |data, _detail| {
+            data.conversations
+                .iter()
+                .find(|conversation| {
+                    conversation.id == normalized_archive_id
+                        && !conversation.summary.trim().is_empty()
+                })
+                .map(|conversation| conversation.summary.clone())
+                .ok_or_else(|| "Archive not found".to_string())
+        })?;
         drop(guard);
         Ok(summary)
     }
@@ -91,10 +91,14 @@ impl ConversationService {
         state: &AppState,
         input: &SessionSelector,
     ) -> Result<(ApiConfig, ResolvedApiConfig, Conversation, String), String> {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            format!(
+                "Failed to lock state mutex at {}:{} {}: {err}",
+                file!(),
+                line!(),
+                module_path!()
+            )
+        })?;
         let mut app_config = read_config(&state.config_path)?;
         let mut data = state_read_app_data_cached(state)?;
         merge_private_organization_into_runtime_data(&state.data_path, &mut app_config, &mut data)?;
@@ -102,25 +106,24 @@ impl ConversationService {
             .ok_or_else(|| "No API config configured. Please add one.".to_string())?;
         let resolved_api = resolve_api_config(&app_config, Some(selected_api.id.as_str()))?;
         let requested_agent_id = input.agent_id.trim();
-        let effective_agent_id = if data
-            .agents
-            .iter()
-            .any(|agent| agent.id == requested_agent_id && !agent.is_built_in_user)
-        {
-            requested_agent_id.to_string()
-        } else if data
-            .agents
-            .iter()
-            .any(|agent| agent.id == data.assistant_department_agent_id && !agent.is_built_in_user)
-        {
-            data.assistant_department_agent_id.clone()
-        } else {
-            data.agents
+        let effective_agent_id =
+            if data
+                .agents
                 .iter()
-                .find(|agent| !agent.is_built_in_user)
-                .map(|agent| agent.id.clone())
-                .ok_or_else(|| "Selected agent not found.".to_string())?
-        };
+                .any(|agent| agent.id == requested_agent_id && !agent.is_built_in_user)
+            {
+                requested_agent_id.to_string()
+            } else if data.agents.iter().any(|agent| {
+                agent.id == data.assistant_department_agent_id && !agent.is_built_in_user
+            }) {
+                data.assistant_department_agent_id.clone()
+            } else {
+                data.agents
+                    .iter()
+                    .find(|agent| !agent.is_built_in_user)
+                    .map(|agent| agent.id.clone())
+                    .ok_or_else(|| "Selected agent not found.".to_string())?
+            };
         let requested_conversation_id = input
             .conversation_id
             .as_deref()
@@ -150,10 +153,9 @@ impl ConversationService {
         if normalized_archive_id.is_empty() {
             return Err("archiveId is required".to_string());
         }
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err))?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            named_lock_error("conversation_lock", file!(), line!(), module_path!(), &err)
+        })?;
 
         let mut data = state_read_app_data_cached(state)?;
         let before = data.conversations.len();
@@ -175,44 +177,44 @@ impl ConversationService {
         Ok(())
     }
 
-
     fn prepare_background_archive_active_conversation(
         &self,
         state: &AppState,
         selected_api: &ApiConfig,
         source: &Conversation,
     ) -> Result<String, String> {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            format!(
+                "Failed to lock state mutex at {}:{} {}: {err}",
+                file!(),
+                line!(),
+                module_path!()
+            )
+        })?;
         let mut data = state_read_app_data_cached(state)?;
         let _ = normalize_single_active_main_conversation(&mut data);
 
         ensure_archive_source_available(&data, &source.id)?;
-        let active_conversation_id =
-            if let Some(conversation_id) = find_archive_restore_target_conversation_id(&data, &source.id) {
-                conversation_id
-            } else {
-                let conversation = build_archive_replacement_conversation(
-                    state,
-                    &data,
-                    selected_api,
-                    source,
-                )?;
-                let conversation_id = conversation.id.clone();
-                data.conversations.push(conversation);
-                if data
-                    .main_conversation_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .is_none()
-                {
-                    data.main_conversation_id = Some(conversation_id.clone());
-                }
-                conversation_id
-            };
+        let active_conversation_id = if let Some(conversation_id) =
+            find_archive_restore_target_conversation_id(&data, &source.id)
+        {
+            conversation_id
+        } else {
+            let conversation =
+                build_archive_replacement_conversation(state, &data, selected_api, source)?;
+            let conversation_id = conversation.id.clone();
+            data.conversations.push(conversation);
+            if data
+                .main_conversation_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            {
+                data.main_conversation_id = Some(conversation_id.clone());
+            }
+            conversation_id
+        };
 
         let app_config = state_read_config_cached(state)?;
         let overview_payload =
@@ -228,16 +230,19 @@ impl ConversationService {
         Ok(active_conversation_id)
     }
 
-
     fn import_archives(
         &self,
         state: &AppState,
         incoming_archives: &mut Vec<ConversationArchive>,
     ) -> Result<ImportArchivesMutationResult, String> {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            format!(
+                "Failed to lock state mutex at {}:{} {}: {err}",
+                file!(),
+                line!(),
+                module_path!()
+            )
+        })?;
         let mut data = state_read_app_data_cached(state)?;
         let data_before = data.clone();
 
@@ -290,7 +295,6 @@ impl ConversationService {
         })
     }
 
-
     fn persist_compaction_message(
         &self,
         state: &AppState,
@@ -298,10 +302,14 @@ impl ConversationService {
         compression_message: &ChatMessage,
         user_profile_snapshot: Option<String>,
     ) -> Result<CompactionMessagePersistResult, String> {
-        let guard = state
-            .conversation_lock
-            .lock()
-            .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+        let guard = state.conversation_lock.lock().map_err(|err| {
+            format!(
+                "Failed to lock state mutex at {}:{} {}: {err}",
+                file!(),
+                line!(),
+                module_path!()
+            )
+        })?;
         let mut data = state_read_app_data_cached(state)?;
 
         let conversation_idx = data
@@ -330,10 +338,14 @@ impl ConversationService {
         drop(guard);
 
         {
-            let verify_guard = state
-                .conversation_lock
-                .lock()
-                .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+            let verify_guard = state.conversation_lock.lock().map_err(|err| {
+                format!(
+                    "Failed to lock state mutex at {}:{} {}: {err}",
+                    file!(),
+                    line!(),
+                    module_path!()
+                )
+            })?;
             let verify_data = state_read_app_data_cached(state)?;
             let persisted = verify_data
                 .conversations
@@ -348,7 +360,9 @@ impl ConversationService {
                 .unwrap_or(false);
             drop(verify_guard);
             if !persisted {
-                return Err("上下文整理消息写入校验失败：已执行整理但未找到落盘消息，请重试。".to_string());
+                return Err(
+                    "上下文整理消息写入校验失败：已执行整理但未找到落盘消息，请重试。".to_string(),
+                );
             }
         }
 
@@ -357,7 +371,6 @@ impl ConversationService {
             compression_message_id,
         })
     }
-
 }
 
 fn ensure_archive_source_available(data: &AppData, source_id: &str) -> Result<(), String> {

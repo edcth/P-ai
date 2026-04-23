@@ -4,7 +4,7 @@ impl ConversationService {
         state: &AppState,
         conversation_id: &str,
         events: &[ChatPendingEvent],
-        prepared_batches: &[Vec<(ChatMessage, Vec<String>)>],
+        prepared_batches: Vec<Vec<(ChatMessage, Vec<String>)>>,
         history_flush_time: &str,
         should_seed_summary_context: bool,
         seeded_profile_snapshot: Option<&str>,
@@ -16,14 +16,13 @@ impl ConversationService {
             data.remote_im_contact_checkpoints.clone(),
         ))
         .ok();
-        let Some(conversation_idx) = data
-            .conversations
-            .iter()
-            .position(|conversation| {
-                conversation.id == conversation_id && conversation.summary.trim().is_empty()
-            })
-        else {
-            let event_ids = events.iter().map(|event| event.id.clone()).collect::<Vec<_>>();
+        let Some(conversation_idx) = data.conversations.iter().position(|conversation| {
+            conversation.id == conversation_id && conversation.summary.trim().is_empty()
+        }) else {
+            let event_ids = events
+                .iter()
+                .map(|event| event.id.clone())
+                .collect::<Vec<_>>();
             complete_pending_chat_events_with_error(
                 state,
                 &event_ids,
@@ -66,7 +65,6 @@ impl ConversationService {
             event_activate_flags,
         })
     }
-
 }
 
 fn scheduler_last_archive_summary(data: &AppData) -> Option<String> {
@@ -83,7 +81,7 @@ fn write_persisted_message_batch(
     conversation: &mut Conversation,
     conversation_id: &str,
     events: &[ChatPendingEvent],
-    prepared_batches: &[Vec<(ChatMessage, Vec<String>)>],
+    prepared_batches: Vec<Vec<(ChatMessage, Vec<String>)>>,
     history_flush_time: &str,
     should_seed_summary_context: bool,
     seeded_profile_snapshot: Option<&str>,
@@ -113,7 +111,7 @@ fn write_persisted_message_batch(
         conversation.messages.insert(0, summary_message);
     }
 
-    for (event, prepared_messages) in events.iter().zip(prepared_batches.iter()) {
+    for (event, prepared_messages) in events.iter().zip(prepared_batches.into_iter()) {
         append_prepared_messages_to_conversation(
             conversation,
             conversation_id,
@@ -130,13 +128,13 @@ fn append_prepared_messages_to_conversation(
     conversation: &mut Conversation,
     conversation_id: &str,
     event: &ChatPendingEvent,
-    prepared_messages: &[(ChatMessage, Vec<String>)],
+    prepared_messages: Vec<(ChatMessage, Vec<String>)>,
     history_flush_time: &str,
     persisted_batch_messages: &mut Vec<ChatMessage>,
 ) {
     for (persisted, recall_ids) in prepared_messages {
         if persisted.role.trim() == "user" && !recall_ids.is_empty() {
-            for memory_id in recall_ids {
+            for memory_id in &recall_ids {
                 conversation.memory_recall_table.push(memory_id.clone());
             }
             eprintln!(
@@ -153,13 +151,14 @@ fn append_prepared_messages_to_conversation(
                     .unwrap_or_default()
             );
         }
-        persisted_batch_messages.push(persisted.clone());
-        conversation.messages.push(persisted.clone());
+        let persisted_for_event = persisted.clone();
         match persisted.role.trim() {
             "user" => conversation.last_user_at = Some(history_flush_time.to_string()),
             "assistant" => conversation.last_assistant_at = Some(history_flush_time.to_string()),
             _ => {}
         }
+        conversation.messages.push(persisted);
+        persisted_batch_messages.push(persisted_for_event);
     }
 }
 
