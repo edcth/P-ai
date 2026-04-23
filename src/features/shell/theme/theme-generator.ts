@@ -369,7 +369,7 @@ export function generateGeneratedThemeTokens(controlsInput: GeneratedThemeContro
   const brightnessFactor = controls.brightness / 100;
   const tintFactor = controls.tint / 100;
 
-  const [base100, base200, base300] = buildBaseColors(
+  const [rawBase100, base200, rawBase300] = buildBaseColors(
     controls.mode,
     controls.themeHue,
     toneFactor,
@@ -377,6 +377,8 @@ export function generateGeneratedThemeTokens(controlsInput: GeneratedThemeContro
     brightnessFactor,
     tintFactor,
   );
+  const [base100, base300] =
+    controls.mode === "dark" ? [rawBase300, rawBase100] : [rawBase100, rawBase300];
   const baseContent = bestReadableContent(base100);
   const secondaryHue = resolveSecondaryHue(controls.themeHue, [
     32,
