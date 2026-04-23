@@ -28,7 +28,7 @@
         <span class="text-[10px] leading-none">✓</span>
       </button>
     </div>
-    <div class="chat-image self-start ecall-chat-avatar-col">
+    <div class="chat-image self-start ecall-chat-avatar-col" data-message-avatar-anchor="true">
       <div class="flex w-7 flex-col items-center gap-2">
         <div class="avatar">
           <div class="w-7 rounded-full">

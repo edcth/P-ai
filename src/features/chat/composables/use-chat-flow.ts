@@ -1627,14 +1627,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     if (currentConversationId && payloadConversationId && currentConversationId !== payloadConversationId) {
       return;
     }
-    console.info("[聊天流式重绑][前端] 处理助手增量普通事件", {
-      currentConversationId,
-      payloadConversationId,
-      kind: parsed.kind || "delta",
-      toolName: parsed.toolName || "",
-      toolStatus: parsed.toolStatus || "",
-      deltaLength: String(parsed.delta || "").length,
-    });
     const shouldProjectFromAppEvent =
       parsed.kind === "tool_status"
       || round.phase !== "streaming"

@@ -16,6 +16,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
   const composerContainer = ref<HTMLElement | null>(null);
   const toolbarContainer = ref<HTMLElement | null>(null);
   const chatLayoutRoot = ref<HTMLElement | null>(null);
+  const latestOwnElasticMinHeight = ref(0);
   const jumpToBottomOffset = ref(96);
   const showSideConversationList = ref(false);
   const lastBottomState = ref(false);
@@ -36,10 +37,11 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
   function scrollToBottom(behavior: ScrollBehavior = "smooth") {
     const el = scrollContainer.value;
     if (!el) return;
-    const distance = Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop);
+    const targetTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    const distance = Math.abs(targetTop - el.scrollTop);
     const finalBehavior: ScrollBehavior =
       behavior === "smooth" && distance > el.clientHeight * 3 ? "auto" : behavior;
-    el.scrollTo({ top: el.scrollHeight, behavior: finalBehavior });
+    el.scrollTo({ top: targetTop, behavior: finalBehavior });
   }
 
   function jumpToBottom() {
@@ -58,6 +60,21 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
   function updateJumpToBottomOffset() {
     const composerHeight = composerContainer.value?.offsetHeight ?? 0;
     jumpToBottomOffset.value = Math.max(16, composerHeight + 12);
+  }
+
+  function updateLatestOwnElasticMinHeight() {
+    const scrollEl = scrollContainer.value;
+    if (!scrollEl) {
+      latestOwnElasticMinHeight.value = 0;
+      return;
+    }
+    const scrollStyles = window.getComputedStyle(scrollEl);
+    const scrollViewportHeight =
+      scrollEl.clientHeight
+      - parseFloat(scrollStyles.paddingTop || "0")
+      - parseFloat(scrollStyles.paddingBottom || "0");
+    const toolbarHeight = toolbarContainer.value?.offsetHeight ?? 0;
+    latestOwnElasticMinHeight.value = Math.max(0, scrollViewportHeight - toolbarHeight);
   }
 
   function isNearBottom(el: HTMLElement): boolean {
@@ -85,16 +102,19 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
     nextTick(() => {
       syncConversationLayoutMode();
       updateJumpToBottomOffset();
+      updateLatestOwnElasticMinHeight();
       if (composerContainer.value && typeof ResizeObserver !== "undefined") {
         composerResizeObserver = new ResizeObserver(() => {
           if (typeof window === "undefined") {
             updateJumpToBottomOffset();
+            updateLatestOwnElasticMinHeight();
             return;
           }
           if (pendingComposerResizeFrame) return;
           pendingComposerResizeFrame = window.requestAnimationFrame(() => {
             pendingComposerResizeFrame = 0;
             updateJumpToBottomOffset();
+            updateLatestOwnElasticMinHeight();
           });
         });
         composerResizeObserver.observe(composerContainer.value);
@@ -104,6 +124,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
           if (typeof window === "undefined") {
             syncConversationLayoutMode();
             updateJumpToBottomOffset();
+            updateLatestOwnElasticMinHeight();
             return;
           }
           if (pendingChatLayoutResizeFrame) return;
@@ -111,6 +132,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
             pendingChatLayoutResizeFrame = 0;
             syncConversationLayoutMode();
             updateJumpToBottomOffset();
+            updateLatestOwnElasticMinHeight();
           });
         });
         chatLayoutResizeObserver.observe(chatLayoutRoot.value);
@@ -157,6 +179,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
     () => {
       nextTick(() => {
         updateJumpToBottomOffset();
+        updateLatestOwnElasticMinHeight();
         const el = scrollContainer.value;
         if (el) {
           lastBottomState.value = isNearBottom(el);
@@ -171,6 +194,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
   watch(showSideConversationList, () => {
     nextTick(() => {
       updateJumpToBottomOffset();
+      updateLatestOwnElasticMinHeight();
     });
   });
 
@@ -212,6 +236,7 @@ export function useChatScrollLayout(options: UseChatScrollLayoutOptions) {
     composerContainer,
     toolbarContainer,
     chatLayoutRoot,
+    latestOwnElasticMinHeight,
     showJumpToBottom,
     jumpToBottomStyle,
     showSideConversationList,

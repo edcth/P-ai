@@ -413,6 +413,7 @@ import type {
 import responseStylesJson from "./constants/response-styles.json";
 import { normalizeLocale } from "./i18n";
 import { searchConfigTabs, type ConfigSearchResult, type ConfigSearchTab } from "./features/config/search/config-search";
+import { ensureConversationMessageIds } from "./features/chat/utils/message-id";
 
 const props = withDefaults(defineProps<{ fixedViewMode?: "chat" | "archives" | "config" }>(), {
   fixedViewMode: undefined,
@@ -420,7 +421,7 @@ const props = withDefaults(defineProps<{ fixedViewMode?: "chat" | "archives" | "
 
 const DRAFT_ASSISTANT_ID_PREFIX = "__draft_assistant__:";
 const BACKGROUND_CONVERSATION_CACHE_LIMIT = 10;
-const FOREGROUND_SNAPSHOT_RECENT_LIMIT = 2;
+const FOREGROUND_SNAPSHOT_RECENT_LIMIT = 4;
 const OLDER_HISTORY_PAGE_SIZE = 2;
 type BackgroundConversationBadgeState = "completed" | "failed";
 type ForegroundPaintTrace = {
@@ -1302,11 +1303,6 @@ function triggerConversationScrollToBottom(conversationId: string, reason: strin
   conversationScrollToBottomRequest.value += 1;
   pendingConversationScrollToBottomConversationId = "";
   clearPendingConversationScrollToBottomFallback();
-  console.info("[会话切换] 触发滚到底", {
-    conversationId: cid,
-    reason,
-    request: conversationScrollToBottomRequest.value,
-  });
 }
 
 function scheduleConversationScrollToBottomFallback(conversationId: string) {
@@ -2086,11 +2082,12 @@ function matchesForegroundConversation(conversationId?: string | null): boolean 
 }
 
 function formalizeConversationMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.filter((item) => !String(item?.id || "").trim().startsWith(DRAFT_ASSISTANT_ID_PREFIX));
+  return ensureConversationMessageIds(messages)
+    .filter((item) => !String(item?.id || "").trim().startsWith(DRAFT_ASSISTANT_ID_PREFIX));
 }
 
 function freezeConversationMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map((message) => {
+  return ensureConversationMessageIds(messages).map((message) => {
     const messageId = String(message?.id || "").trim();
     if (!messageId.startsWith(DRAFT_ASSISTANT_ID_PREFIX)) {
       return message;

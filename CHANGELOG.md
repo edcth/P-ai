@@ -1,6 +1,7 @@
 # 变更日志
 
 ## 进行中
+- 优化（chat-virtual-scroll-compensation-and-own-message-alignment）：聊天虚拟滚动继续收口动态高度与补历史补偿语义，首屏快照与历史分页保持前端可控条数，消息统一补稳定 id，向上补历史改为以 `scrollHeight` 差值做主补偿、消息头像锚点做兜底，向上滚动时旧项测量优先吃缓存避免二次顶动；同时恢复“用户消息正式落库后再平滑顶到上缘”的行为，保留群组渲染与工具栏同层布局，修复长消息历史补位、用户消息对齐与滚动稳定性问题
 - 优化（chat-dynamic-scroller-migration）：聊天虚拟滚动底座切换到 `vue-virtual-scroller` 默认 `DynamicScroller / DynamicScrollerItem` 方案，移除自研虚拟列表 composable 与 TanStack 虚拟滚动依赖，统一由库接管动态高度测量、item 池化与滚动区渲染
 - 功能（provider-serial-request-gate）：供应商设置新增“允许并发请求”开关，默认关闭；后端按 `providerId` 维护全局异步串行门，默认将同一供应商下全部模型请求串行化，并把该约束下沉到真实模型调用层，覆盖主聊天、工具循环、视觉链路、tool review 与归档摘要等请求入口；配置变更仅影响后续请求，不追溯影响当前已开始的请求
 - 重构（conversation-service-boundary-and-writeback-foundation）：建立 `ConversationService` 目录化模块边界，收口会话快照、分页、单条消息、tool review、remote IM、归档与高频写路径读取语义；会话持久化补齐 write-back 基础设施与锁顺序修正，工具审查、前台轻量快照、会话分页等热路径进一步统一走服务和内存缓存，并补全文档中的 persistence worker、`write_mode`、并发冲突与异常回归清单

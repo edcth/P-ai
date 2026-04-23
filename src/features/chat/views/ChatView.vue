@@ -125,42 +125,53 @@
                   <div class="h-px flex-1 bg-base-300/80"></div>
                 </div>
 
-                <ChatMessageItem
+                <div
                   v-else-if="entry.item.kind === 'message'"
                   v-memo="messageMemoKey(entry.item.block, entry.item.renderId, entry.item.blockIndex)"
-                  :block="entry.item.block"
-                  :selection-key="entry.item.renderId"
-                  :selection-mode-enabled="messageSelectionModeEnabled"
-                  :selected="selectedMessageRenderIdSet.has(entry.item.renderId)"
-                  :chatting="chatting"
-                  :busy="conversationBusy"
-                  :frozen="frozen"
-                  :user-alias="userAlias"
-                  :user-avatar-url="userAvatarUrl"
-                  :persona-name-map="personaNameMap"
-                  :persona-avatar-url-map="personaAvatarUrlMap"
-                  :stream-tool-calls="visibleStreamToolCalls"
-                  :markdown-is-dark="markdownIsDark"
-                  :playing-audio-id="playingAudioId"
-                  :active-turn-user="false"
-                  :can-regenerate="canRegenerateBlock(entry.item.block, entry.item.blockIndex)"
-                  :can-confirm-plan="canConfirmPlan(entry.item.block)"
-                  @recall-turn="$emit('recallTurn', $event)"
-                  @regenerate-turn="$emit('regenerateTurn', $event)"
-                  @confirm-plan="$emit('confirmPlan', $event)"
-                  @enter-selection-mode="enterMessageSelectionMode"
-                  @toggle-message-selected="toggleMessageSelected"
-                  @copy-message="copyMessage"
-                  @open-image-preview="openImagePreview"
-                  @toggle-audio-playback="toggleAudioPlayback($event.id, $event.audio)"
-                  @assistant-link-click="handleAssistantLinkClick"
-                />
+                >
+                  <div
+                    class="ecall-elastic-item-shell"
+                    :style="entry.item.id === latestOwnElasticItemId ? { minHeight: `${latestOwnElasticMinHeight}px` } : undefined"
+                  >
+                    <ChatMessageItem
+                      :block="entry.item.block"
+                      :selection-key="entry.item.renderId"
+                      :selection-mode-enabled="messageSelectionModeEnabled"
+                      :selected="selectedMessageRenderIdSet.has(entry.item.renderId)"
+                      :chatting="chatting"
+                      :busy="conversationBusy"
+                      :frozen="frozen"
+                      :user-alias="userAlias"
+                      :user-avatar-url="userAvatarUrl"
+                      :persona-name-map="personaNameMap"
+                      :persona-avatar-url-map="personaAvatarUrlMap"
+                      :stream-tool-calls="visibleStreamToolCalls"
+                      :markdown-is-dark="markdownIsDark"
+                      :playing-audio-id="playingAudioId"
+                      :active-turn-user="false"
+                      :can-regenerate="canRegenerateBlock(entry.item.block, entry.item.blockIndex)"
+                      :can-confirm-plan="canConfirmPlan(entry.item.block)"
+                      @recall-turn="$emit('recallTurn', $event)"
+                      @regenerate-turn="$emit('regenerateTurn', $event)"
+                      @confirm-plan="$emit('confirmPlan', $event)"
+                      @enter-selection-mode="enterMessageSelectionMode"
+                      @toggle-message-selected="toggleMessageSelected"
+                      @copy-message="copyMessage"
+                      @open-image-preview="openImagePreview"
+                      @toggle-audio-playback="toggleAudioPlayback($event.id, $event.audio)"
+                      @assistant-link-click="handleAssistantLinkClick"
+                    />
+                  </div>
+                </div>
 
                 <div
                   v-else
                   class="ecall-turn-group"
                 >
-                  <div class="ecall-turn-stack">
+                  <div
+                    class="ecall-turn-stack"
+                    :style="entry.item.id === latestOwnElasticItemId ? { minHeight: `${latestOwnElasticMinHeight}px` } : undefined"
+                  >
                     <template v-for="groupItem in entry.item.items" :key="groupItem.renderId">
                       <ChatMessageItem
                         v-memo="messageMemoKey(groupItem.block, groupItem.renderId, groupItem.blockIndex)"
@@ -197,7 +208,7 @@
               </div>
             </div>
 
-            <div ref="toolbarContainer" class="pt-1 pb-2">
+            <div ref="toolbarContainer" class="ecall-chat-toolbar-shell pt-1 pb-2">
               <ChatWorkspaceToolbar
                 :chatting="chatting"
                 :frozen="frozen"
@@ -698,27 +709,23 @@ const linkOpenErrorText = ref("");
 const composerPanelRef = ref<{ focusInput: (options?: FocusOptions) => void } | null>(null);
 const messageSelectionModeEnabled = ref(false);
 const selectedMessageRenderIds = ref<string[]>([]);
-const pendingOlderHistoryRestore = ref<null | {
-  anchorItemId: string;
-  anchorTop: number | null;
-  scrollHeight: number;
-  scrollTop: number;
-  messageCount: number;
-}>(null);
 const olderHistoryRequestPending = ref(false);
 const LOAD_OLDER_HISTORY_THRESHOLD_PX = 96;
-const LOAD_OLDER_HISTORY_REARM_THRESHOLD_PX = 180;
 const observedVirtualItemElements = new Map<string, HTMLElement>();
+const measuredVirtualItemHeights = new Map<string, number>();
 let pendingMeasureFrame = 0;
 let pendingPinToBottomFrame = 0;
 let lastConversationScrollTop = 0;
-const olderHistoryTriggerArmed = ref(true);
+const olderHistoryTriggerReady = ref(true);
+const pendingOlderHistoryAnchor = ref<{ messageId: string; edge: "top" | "bottom"; offset: number } | null>(null);
+const pendingOlderHistoryScrollRestore = ref<{ scrollTop: number; scrollHeight: number } | null>(null);
 
 const {
   scrollContainer,
   composerContainer,
   toolbarContainer,
   chatLayoutRoot,
+  latestOwnElasticMinHeight,
   showJumpToBottom,
   jumpToBottomStyle,
   showSideConversationList,
@@ -735,27 +742,94 @@ const {
 });
 
 function refreshObservedVirtualItemElements() {
-  const validIds = new Set(chatRenderItems.value.map((item) => item.id));
+  const validIds = new Set(virtualRenderItems.value.map((item) => item.id));
   for (const [itemId] of observedVirtualItemElements.entries()) {
     if (!validIds.has(itemId)) observedVirtualItemElements.delete(itemId);
   }
 }
 
+const virtualRenderItems = computed<ChatRenderItem[]>(() => [...chatRenderItems.value]);
+
 const virtualizer = useVirtualizer(
   computed(() => ({
-    count: chatRenderItems.value.length,
+    count: virtualRenderItems.value.length,
     getScrollElement: () => scrollContainer.value,
-    getItemKey: (index: number) => chatRenderItems.value[index]?.id ?? `row-${index}`,
-    estimateSize: (index: number) => estimateChatRenderItemHeight(chatRenderItems.value[index]),
+    getItemKey: (index: number) => virtualRenderItems.value[index]?.id ?? `row-${index}`,
+    estimateSize: (index: number) => estimateChatRenderItemHeight(virtualRenderItems.value[index]),
+    measureElement: (element: Element, _entry: unknown, instance: any) => {
+      const measuredHeight = (element as HTMLElement).scrollHeight;
+      if (instance?.scrollDirection !== "backward") return measuredHeight;
+      const indexAttr = Number((element as HTMLElement).getAttribute("data-index"));
+      const cachedHeight = Number.isFinite(indexAttr) ? instance?.itemSizeCache?.get(indexAttr) : undefined;
+      return typeof cachedHeight === "number" ? cachedHeight : measuredHeight;
+    },
     overscan: 4,
   })),
 );
+
+function blockBelongsToMessageId(block: ChatMessageBlock, messageId: string): boolean {
+  const normalizedMessageId = String(messageId || "").trim();
+  if (!normalizedMessageId) return false;
+  const sourceMessageId = String(block.sourceMessageId || "").trim();
+  const blockId = String(block.id || "").trim();
+  return sourceMessageId === normalizedMessageId || blockId === normalizedMessageId;
+}
+
+function isDraftUserMessageId(messageId: string): boolean {
+  return String(messageId || "").trim().startsWith("__draft_user__:");
+}
+
+const latestOwnMessageId = computed(() => {
+  for (let idx = props.messageBlocks.length - 1; idx >= 0; idx -= 1) {
+    const block = props.messageBlocks[idx];
+    if (block.isExtraTextBlock) continue;
+    if (!isOwnMessage(block)) continue;
+    const messageId = String(block.sourceMessageId || block.id || "").trim();
+    if (messageId) return messageId;
+  }
+  return "";
+});
+
+const latestOwnElasticItemId = computed(() => {
+  const targetMessageId = latestOwnMessageId.value;
+  if (!targetMessageId) return "";
+  for (let idx = chatRenderItems.value.length - 1; idx >= 0; idx -= 1) {
+    const item = chatRenderItems.value[idx];
+    if (item.kind === "message") {
+      if (blockBelongsToMessageId(item.block, targetMessageId)) return item.id;
+      continue;
+    }
+    if (item.kind === "group") {
+      if (item.items.some((groupItem) => blockBelongsToMessageId(groupItem.block, targetMessageId))) {
+        return item.id;
+      }
+    }
+  }
+  return "";
+});
+
+const renderItemChronologicalIndexMap = computed(() => {
+  const map = new Map<string, number>();
+  chatRenderItems.value.forEach((item, index) => {
+    map.set(item.id, index);
+  });
+  return map;
+});
+const blockChronologicalIndexMap = computed(() => {
+  const map = new Map<string, number>();
+  props.messageBlocks.forEach((block, index) => {
+    const blockId = String(block.id || "").trim();
+    if (!blockId || map.has(blockId)) return;
+    map.set(blockId, index);
+  });
+  return map;
+});
 
 const virtualRows = computed(() => virtualizer.value.getVirtualItems());
 const virtualEntries = computed(() => {
   return virtualRows.value
     .map((row) => {
-      const item = chatRenderItems.value[row.index];
+      const item = virtualRenderItems.value[row.index];
       return item ? { row, item } : null;
     })
     .filter((entry): entry is { row: typeof virtualRows.value[number]; item: ChatRenderItem } => Boolean(entry));
@@ -777,22 +851,30 @@ function scheduleVirtualMeasure() {
 function measureVirtualRow(itemId: string, element: Element | ComponentPublicInstance | null) {
   const normalizedItemId = String(itemId || "").trim();
   if (!element) {
-    if (normalizedItemId) observedVirtualItemElements.delete(normalizedItemId);
+    if (normalizedItemId) {
+      observedVirtualItemElements.delete(normalizedItemId);
+      measuredVirtualItemHeights.delete(normalizedItemId);
+    }
     return;
   }
   const target = element instanceof Element ? element : ((element.$el as Element | undefined) ?? null);
   if (!target) {
-    if (normalizedItemId) observedVirtualItemElements.delete(normalizedItemId);
+    if (normalizedItemId) {
+      observedVirtualItemElements.delete(normalizedItemId);
+      measuredVirtualItemHeights.delete(normalizedItemId);
+    }
     return;
   }
   virtualizer.value.measureElement(target);
   const resolvedItemId = normalizedItemId || String(target.getAttribute("data-render-item-id") || "").trim();
   if (resolvedItemId && target instanceof HTMLElement) {
+    const nextHeight = Math.round(target.getBoundingClientRect().height);
+    measuredVirtualItemHeights.set(resolvedItemId, nextHeight);
     observedVirtualItemElements.set(resolvedItemId, target);
   }
 }
 
-function pinToBottomOnNextLayout(smooth = false) {
+function pinToBottomOnNextLayout(smooth = false, reason = "unknown") {
   if (pendingPinToBottomFrame) {
     cancelAnimationFrame(pendingPinToBottomFrame);
     pendingPinToBottomFrame = 0;
@@ -814,44 +896,83 @@ function pinToBottomOnNextLayout(smooth = false) {
   });
 }
 
+function alignLatestOwnMessageToTop(behavior: ScrollBehavior = "smooth") {
+  const scrollEl = scrollContainer.value;
+  const itemId = String(latestOwnElasticItemId.value || "").trim();
+  if (!scrollEl || !itemId) return;
+  const wrapper = observedVirtualItemElements.get(itemId);
+  if (!wrapper || !wrapper.isConnected) return;
+  const containerRect = scrollEl.getBoundingClientRect();
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const scrollStyles = window.getComputedStyle(scrollEl);
+  const targetTop = parseFloat(scrollStyles.paddingTop || "0");
+  const nextTop = scrollEl.scrollTop + (wrapperRect.top - containerRect.top) - targetTop;
+  scrollEl.scrollTo({
+    top: Math.max(0, nextTop),
+    behavior,
+  });
+  onScroll();
+}
+
 function syncViewportMetrics() {
   scheduleVirtualMeasure();
 }
 
-function getItemViewportTop(itemId: string): number | null {
-  const element = observedVirtualItemElements.get(itemId);
+function findRenderedMessageElement(messageId: string): HTMLElement | null {
   const scrollEl = scrollContainer.value;
-  if (!element || !scrollEl) return null;
-  return element.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
+  const normalizedId = String(messageId || "").trim();
+  if (!scrollEl || !normalizedId) return null;
+  const escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(normalizedId)
+    : normalizedId.replace(/["\\]/g, "\\$&");
+  return scrollEl.querySelector(`[data-message-id="${escapedId}"]`) as HTMLElement | null;
 }
 
-function getFirstVisibleItemId(): string {
+function resolveMessageAnchorElement(messageElement: HTMLElement | null): HTMLElement | null {
+  if (!messageElement) return null;
+  return (messageElement.querySelector("[data-message-avatar-anchor='true']") as HTMLElement | null) || messageElement;
+}
+
+function captureVisibleAnchor(edge: "top" | "bottom"): { messageId: string; edge: "top" | "bottom"; offset: number } | null {
   const scrollEl = scrollContainer.value;
-  if (!scrollEl) return "";
-  const containerTop = scrollEl.getBoundingClientRect().top;
-  let candidateId = "";
-  let candidateTop = Number.POSITIVE_INFINITY;
+  if (!scrollEl) return null;
+  const containerRect = scrollEl.getBoundingClientRect();
+  let anchor: { messageId: string; offset: number; chronologicalIndex: number } | null = null;
   for (const entry of virtualEntries.value) {
-    const itemId = entry.item.id;
-    const element = observedVirtualItemElements.get(itemId);
-    if (!element || !element.isConnected) continue;
-    const rect = element.getBoundingClientRect();
-    if (rect.bottom <= containerTop + 1) continue;
-    if (rect.top < candidateTop) {
-      candidateTop = rect.top;
-      candidateId = itemId;
+    const itemId = String(entry.item.id || "").trim();
+    if (!itemId) continue;
+    const wrapper = observedVirtualItemElements.get(itemId);
+    if (!wrapper || !wrapper.isConnected) continue;
+    const messageElements = Array.from(wrapper.querySelectorAll("[data-message-id]")) as HTMLElement[];
+    for (const element of messageElements) {
+      const messageId = String(element.getAttribute("data-message-id") || "").trim();
+      if (!messageId) continue;
+      const anchorElement = resolveMessageAnchorElement(element);
+      if (!anchorElement) continue;
+      const rect = anchorElement.getBoundingClientRect();
+      if (rect.bottom <= containerRect.top + 1 || rect.top >= containerRect.bottom - 1) continue;
+      const chronologicalIndex = blockChronologicalIndexMap.value.get(messageId);
+      if (chronologicalIndex === undefined) continue;
+      const offset = edge === "bottom"
+        ? containerRect.bottom - rect.bottom
+        : rect.top - containerRect.top;
+      if (!anchor) {
+        anchor = { messageId, offset, chronologicalIndex };
+        continue;
+      }
+      const shouldReplace = edge === "bottom"
+        ? chronologicalIndex > anchor.chronologicalIndex
+        : chronologicalIndex < anchor.chronologicalIndex;
+      if (shouldReplace) {
+        anchor = { messageId, offset, chronologicalIndex };
+      }
     }
   }
-  return candidateId;
+  return anchor ? { messageId: anchor.messageId, edge, offset: anchor.offset } : null;
 }
 
 function onConversationScroll() {
   const scrollEl = scrollContainer.value;
-  if (scrollEl) {
-    if (scrollEl.scrollTop > LOAD_OLDER_HISTORY_REARM_THRESHOLD_PX) {
-      olderHistoryTriggerArmed.value = true;
-    }
-  }
   onScroll();
   maybeRequestOlderHistory();
   if (scrollEl) {
@@ -867,20 +988,17 @@ function maybeRequestOlderHistory() {
   const scrollEl = scrollContainer.value;
   if (!scrollEl) return;
   if (!props.hasMoreHistory || props.loadingOlderHistory || olderHistoryRequestPending.value) return;
-  if (!olderHistoryTriggerArmed.value) return;
+  if (!olderHistoryTriggerReady.value) return;
   if (scrollEl.scrollTop > LOAD_OLDER_HISTORY_THRESHOLD_PX) return;
   const isMovingUpward = scrollEl.scrollTop <= lastConversationScrollTop;
   if (!isMovingUpward) return;
-  const anchorItemId = getFirstVisibleItemId();
-  pendingOlderHistoryRestore.value = {
-    anchorItemId,
-    anchorTop: anchorItemId ? getItemViewportTop(anchorItemId) : null,
-    scrollHeight: scrollEl.scrollHeight,
+  pendingOlderHistoryScrollRestore.value = {
     scrollTop: scrollEl.scrollTop,
-    messageCount: props.messageBlocks.length,
+    scrollHeight: scrollEl.scrollHeight,
   };
+  pendingOlderHistoryAnchor.value = captureVisibleAnchor("bottom");
   olderHistoryRequestPending.value = true;
-  olderHistoryTriggerArmed.value = false;
+  olderHistoryTriggerReady.value = false;
   emit("loadOlderHistory");
 }
 
@@ -900,11 +1018,12 @@ watch(
   () => String(props.activeConversationId || "").trim(),
   () => {
     exitMessageSelectionMode();
-    pinToBottomOnNextLayout(false);
-    pendingOlderHistoryRestore.value = null;
+    pinToBottomOnNextLayout(false, "activeConversationChanged");
     olderHistoryRequestPending.value = false;
-    olderHistoryTriggerArmed.value = true;
     lastConversationScrollTop = 0;
+    olderHistoryTriggerReady.value = true;
+    pendingOlderHistoryAnchor.value = null;
+    pendingOlderHistoryScrollRestore.value = null;
   },
   { immediate: true },
 );
@@ -913,7 +1032,33 @@ watch(
   () => props.conversationScrollToBottomRequest,
   (nextValue, prevValue) => {
     if (!nextValue || nextValue === prevValue) return;
-    pinToBottomOnNextLayout(false);
+    pinToBottomOnNextLayout(false, "externalScrollRequest");
+  },
+);
+
+watch(
+  () => props.latestOwnMessageAlignRequest,
+  (nextValue, prevValue) => {
+    if (!nextValue || nextValue === prevValue) return;
+    if (isDraftUserMessageId(latestOwnMessageId.value)) return;
+    void nextTick(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      refreshObservedVirtualItemElements();
+      alignLatestOwnMessageToTop("smooth");
+    });
+  },
+);
+
+watch(
+  latestOwnMessageId,
+  (nextValue, prevValue) => {
+    if (!prevValue || !nextValue) return;
+    if (!isDraftUserMessageId(prevValue) || isDraftUserMessageId(nextValue)) return;
+    void nextTick(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      refreshObservedVirtualItemElements();
+      alignLatestOwnMessageToTop("smooth");
+    });
   },
 );
 
@@ -921,7 +1066,6 @@ watch(
   () => props.messageBlocks.length,
   () => {
     refreshObservedVirtualItemElements();
-    syncViewportMetrics();
   },
 );
 
@@ -930,33 +1074,39 @@ watch(
   async (loading, wasLoading) => {
     if (loading) return;
     if (!wasLoading) return;
-    olderHistoryRequestPending.value = false;
-    const restore = pendingOlderHistoryRestore.value;
-    pendingOlderHistoryRestore.value = null;
-    if (!restore) return;
     const scrollEl = scrollContainer.value;
     if (!scrollEl) return;
     await nextTick();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    if (restore.anchorItemId) {
-      const nextAnchorTop = getItemViewportTop(restore.anchorItemId);
-      if (nextAnchorTop !== null && restore.anchorTop !== null) {
-        scrollEl.scrollTop += nextAnchorTop - restore.anchorTop;
-        lastConversationScrollTop = scrollEl.scrollTop;
-        if (scrollEl.scrollTop > LOAD_OLDER_HISTORY_REARM_THRESHOLD_PX) {
-          olderHistoryTriggerArmed.value = true;
+    await nextTick();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    refreshObservedVirtualItemElements();
+    const scrollRestore = pendingOlderHistoryScrollRestore.value;
+    if (scrollRestore) {
+      const deltaHeight = scrollEl.scrollHeight - scrollRestore.scrollHeight;
+      scrollEl.scrollTop = Math.max(0, scrollRestore.scrollTop + deltaHeight);
+    }
+    const anchor = pendingOlderHistoryAnchor.value;
+    if (anchor) {
+      const anchorMessageElement = findRenderedMessageElement(anchor.messageId);
+      const anchorElement = resolveMessageAnchorElement(anchorMessageElement);
+      if (anchorElement && anchorElement.isConnected) {
+        const containerRect = scrollEl.getBoundingClientRect();
+        const rect = anchorElement.getBoundingClientRect();
+        if (anchor.edge === "bottom") {
+          const currentOffset = containerRect.bottom - rect.bottom;
+          scrollEl.scrollTop += anchor.offset - currentOffset;
+        } else {
+          const currentOffset = rect.top - containerRect.top;
+          scrollEl.scrollTop += currentOffset - anchor.offset;
         }
-        syncViewportMetrics();
-        return;
       }
     }
-    const deltaHeight = scrollEl.scrollHeight - restore.scrollHeight;
-    scrollEl.scrollTop = Math.max(0, restore.scrollTop + deltaHeight);
     lastConversationScrollTop = scrollEl.scrollTop;
-    if (scrollEl.scrollTop > LOAD_OLDER_HISTORY_REARM_THRESHOLD_PX) {
-      olderHistoryTriggerArmed.value = true;
-    }
-    syncViewportMetrics();
+    olderHistoryRequestPending.value = false;
+    olderHistoryTriggerReady.value = true;
+    pendingOlderHistoryAnchor.value = null;
+    pendingOlderHistoryScrollRestore.value = null;
   },
 );
 const {
@@ -1460,6 +1610,12 @@ onBeforeUnmount(() => {
   width: 100%;
   min-height: 0;
 }
+
+.ecall-elastic-item-shell {
+  width: 100%;
+  min-height: 0;
+}
+
 
 .ecall-chat-avatar-col {
   width: 1.75rem;

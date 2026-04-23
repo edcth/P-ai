@@ -1,8 +1,11 @@
 import type { Ref, ShallowRef } from "vue";
 import { invokeTauri } from "../../../services/tauri-api";
 import type { ChatMessage } from "../../../types/app";
+import { ensureConversationMessageIds } from "../utils/message-id";
 
 type TrFn = (key: string, params?: Record<string, unknown>) => string;
+
+const FOREGROUND_SNAPSHOT_RECENT_LIMIT = 4;
 
 type ForceArchiveResult = {
   archived: boolean;
@@ -182,9 +185,10 @@ export function useChatRuntime(options: UseChatRuntimeOptions) {
         input: {
           agentId: options.assistantDepartmentAgentId.value,
           conversationId: currentConversationIdOrNull(),
+          limit: FOREGROUND_SNAPSHOT_RECENT_LIMIT,
         },
       });
-      const msgs = Array.isArray(snapshot?.messages) ? snapshot.messages : [];
+      const msgs = ensureConversationMessageIds(Array.isArray(snapshot?.messages) ? snapshot.messages : []);
       if (options.perfDebug) console.log(`[PERF] loadAllMessages count=${msgs.length}`);
       const recent = Array.isArray(msgs) ? msgs.slice(-RECENT_MESSAGE_WINDOW) : [];
       options.allMessages.value = recent;
