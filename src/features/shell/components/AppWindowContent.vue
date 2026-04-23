@@ -164,6 +164,7 @@
         :create-conversation-department-options="createConversationDepartmentOptions"
         :default-create-conversation-department-id="defaultCreateConversationDepartmentId"
         :current-theme="currentTheme"
+        :detached-chat-window="detachedChatWindow"
         @update:chat-input="updateChatInput"
         @update:selected-instruction-prompts="updateSelectedInstructionPrompts"
         @add-mention="addChatMention"
@@ -192,6 +193,7 @@
         @selection-action-share="openSelectionShareDialog($event)"
         @lock-workspace="onLockChatWorkspace"
         @open-supervision-task="openSupervisionTaskDialog"
+        @detach-conversation="handleDetachConversation"
         @close-supervision-task="closeSupervisionTaskDialog"
         @save-supervision-task="saveSupervisionTask"
         @refresh-tool-review-message="onRefreshToolReviewMessage"
@@ -356,6 +358,7 @@ type SelectionSharePayload = {
 const props = defineProps<{
   t: (key: string, params?: Record<string, unknown>) => string;
   viewMode: "chat" | "archives" | "config";
+  detachedChatWindow?: boolean;
   config: AppConfig;
   configTab: "hotkey" | "api" | "tools" | "mcp" | "skill" | "persona" | "department" | "chatSettings" | "remoteIm" | "memory" | "task" | "logs" | "appearance" | "about";
   localeOptions: Array<{ value: "zh-CN" | "en-US" | "zh-TW"; label: string }>;
@@ -564,6 +567,7 @@ const props = defineProps<{
   confirmPlan: (payload: { messageId: string }) => void;
   onLockChatWorkspace: () => void;
   openSupervisionTaskDialog: () => void;
+  onDetachConversation: () => void;
   closeSupervisionTaskDialog: () => void;
   saveSupervisionTask: (payload: { durationHours: number; goal: string; why: string; todo: string }) => void;
   onRefreshToolReviewMessage: (payload: { conversationId: string; messageId: string }) => void;
@@ -601,6 +605,14 @@ const memoryDialogVNodeRef: VNodeRef = (el) => {
 const promptPreviewDialogVNodeRef: VNodeRef = (el) => {
   props.setPromptPreviewDialogRef((el as Element | null) ?? null);
 };
+
+function handleDetachConversation() {
+  console.info("[独立聊天窗口][前端链路] AppWindowContent 收到 detachConversation，调用顶层处理函数", {
+    viewMode: props.viewMode,
+    detachedChatWindow: !!props.detachedChatWindow,
+  });
+  props.onDetachConversation();
+}
 
 const selectionShareDialogOpen = ref(false);
 const selectionShareDialogLoading = ref(false);

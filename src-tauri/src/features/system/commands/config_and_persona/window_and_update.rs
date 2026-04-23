@@ -13,6 +13,137 @@ fn show_archives_window(app: AppHandle) -> Result<(), String> {
     show_window(&app, "archives")
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetachedChatWindowInput {
+    conversation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetachedChatWindowOutput {
+    conversation_id: String,
+    window_label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    main_conversation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetachedChatWindowInfo {
+    detached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_label: Option<String>,
+}
+
+#[tauri::command]
+fn detach_current_conversation_to_window(
+    input: DetachedChatWindowInput,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DetachedChatWindowOutput, String> {
+    let conversation_id = input.conversation_id.trim();
+    eprintln!(
+        "[独立聊天窗口] 收到独立窗口请求：conversation_id={}",
+        conversation_id
+    );
+    if conversation_id.is_empty() {
+        eprintln!("[独立聊天窗口] 拒绝：当前没有可独立出去的会话");
+        return Err("当前没有可独立出去的会话。".to_string());
+    }
+    if get_conversation_runtime_state(&state, conversation_id)? == MainSessionState::OrganizingContext {
+        eprintln!(
+            "[独立聊天窗口] 拒绝：会话正在整理上下文 conversation_id={}",
+            conversation_id
+        );
+        return Err("当前会话正在整理上下文，暂时不能独立出去。".to_string());
+    }
+    let data = state_read_app_data_cached(&state)?;
+    let main_conversation_id = data
+        .main_conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if main_conversation_id.as_deref() == Some(conversation_id) {
+        eprintln!(
+            "[独立聊天窗口] 拒绝：主会话不能独立打开 conversation_id={}",
+            conversation_id
+        );
+        return Err("主会话不能独立打开，请选择一个子会话。".to_string());
+    }
+
+    let conversation = state_read_conversation_cached(&state, conversation_id)?;
+    if !conversation.summary.trim().is_empty() || !conversation_visible_in_foreground_lists(&conversation) {
+        eprintln!(
+            "[独立聊天窗口] 拒绝：会话不在前台列表 conversation_id={}",
+            conversation_id
+        );
+        return Err("只能独立打开未归档的前台会话。".to_string());
+    }
+    let title = if conversation.title.trim().is_empty() {
+        conversation_preview_title(&conversation)
+    } else {
+        conversation.title.clone()
+    };
+    eprintln!(
+        "[独立聊天窗口] 准备创建窗口：conversation_id={}，title={}",
+        conversation_id,
+        title
+    );
+    let window_label = open_detached_chat_window(&app, conversation_id, Some(&title))?;
+    eprintln!(
+        "[独立聊天窗口] 窗口请求已登记：conversation_id={}，window_label={}",
+        conversation_id,
+        window_label
+    );
+    emit_unarchived_conversation_overview_updated_from_state(&state)?;
+    Ok(DetachedChatWindowOutput {
+        conversation_id: conversation_id.to_string(),
+        window_label,
+        main_conversation_id,
+    })
+}
+
+#[tauri::command]
+fn get_detached_chat_window_info(window: tauri::Window) -> Result<DetachedChatWindowInfo, String> {
+    let label = window.label().trim().to_string();
+    if !is_detached_chat_window_label(&label) {
+        return Ok(DetachedChatWindowInfo {
+            detached: false,
+            conversation_id: None,
+            window_label: Some(label),
+        });
+    }
+    Ok(DetachedChatWindowInfo {
+        detached: true,
+        conversation_id: detached_chat_conversation_for_window(&label),
+        window_label: Some(label),
+    })
+}
+
+#[tauri::command]
+fn focus_detached_chat_window_by_conversation(
+    input: DetachedChatWindowInput,
+    app: AppHandle,
+) -> Result<bool, String> {
+    let conversation_id = input.conversation_id.trim();
+    if conversation_id.is_empty() {
+        return Ok(false);
+    }
+    let Some(label) = detached_chat_window_for_conversation(conversation_id) else {
+        return Ok(false);
+    };
+    if app.get_webview_window(&label).is_none() {
+        let _ = unregister_detached_chat_window_by_label(&label);
+        return Ok(false);
+    }
+    focus_detached_chat_window(&app, &label)?;
+    Ok(true)
+}
+
 #[tauri::command]
 fn set_chat_window_active(active: bool) {
     static CHAT_WINDOW_INACTIVE_LOGGED_ONCE: std::sync::atomic::AtomicBool =

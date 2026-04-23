@@ -225,6 +225,107 @@ async fn remote_im_restart_channel(
     }
 }
 
+#[tauri::command]
+fn frontend_ready_start_remote_im_services(app: AppHandle) -> Result<bool, String> {
+    static REMOTE_IM_START_REQUESTED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if REMOTE_IM_START_REQUESTED
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        eprintln!("[启动] 前端就绪后启动远程 IM 服务：已请求过，跳过重复启动");
+        return Ok(false);
+    }
+
+    eprintln!("[启动] 前端已就绪，开始异步启动远程 IM 服务");
+    tauri::async_runtime::spawn(async move {
+        start_remote_im_services_after_frontend_ready(app).await;
+    });
+    Ok(true)
+}
+
+async fn start_remote_im_services_after_frontend_ready(app_handle: AppHandle) {
+    let config = match state_read_config_cached(&app_handle.state::<AppState>()) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("[启动] 前端就绪后读取远程 IM 配置失败，跳过启动: {:?}", err);
+            return;
+        }
+    };
+    let event_state = app_handle.state::<AppState>().inner().clone();
+
+    let napcat_channels: Vec<_> = config
+        .remote_im_channels
+        .iter()
+        .filter(|ch| ch.enabled && ch.platform == RemoteImPlatform::OnebotV11)
+        .cloned()
+        .collect();
+    for channel in &napcat_channels {
+        if let Err(err) = onebot_v11_ws_server_start(channel.clone(), app_handle.clone()) {
+            eprintln!(
+                "[启动] 前端就绪后启动 OneBot v11 WS 服务失败: channel_id={}, error={}",
+                channel.id,
+                err
+            );
+        }
+    }
+    for channel in napcat_channels {
+        let channel_id = channel.id.clone();
+        let state_clone = event_state.clone();
+        tauri::async_runtime::spawn(async move {
+            napcat_start_event_consumer(channel_id, state_clone).await;
+        });
+    }
+
+    let dingtalk_channels: Vec<_> = config
+        .remote_im_channels
+        .iter()
+        .filter(|ch| ch.enabled && ch.platform == RemoteImPlatform::Dingtalk)
+        .cloned()
+        .collect();
+    for channel in dingtalk_channels {
+        let state_clone = event_state.clone();
+        let manager = dingtalk_stream_manager();
+        tauri::async_runtime::spawn(async move {
+            let channel_id = channel.id.clone();
+            if let Err(err) = manager.start_channel(channel, state_clone).await {
+                eprintln!(
+                    "[启动] 前端就绪后启动钉钉 Stream 渠道失败: channel_id={}, error={}",
+                    channel_id,
+                    err
+                );
+            }
+        });
+    }
+
+    let weixin_channels: Vec<_> = config
+        .remote_im_channels
+        .iter()
+        .filter(|ch| ch.enabled && ch.platform == RemoteImPlatform::WeixinOc)
+        .cloned()
+        .collect();
+    for channel in weixin_channels {
+        let state_clone = event_state.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(err) = weixin_oc_manager()
+                .reconcile_channel_runtime(&channel, state_clone)
+                .await
+            {
+                eprintln!(
+                    "[启动] 前端就绪后启动个人微信渠道失败: channel_id={}, error={}",
+                    channel.id,
+                    err
+                );
+            }
+        });
+    }
+}
+
 fn main() {
     if std::env::args().any(|arg| arg == MCP_SCREENSHOT_SERVER_FLAG) {
         if let Err(err) = run_desktop_screenshot_mcp_server() {
@@ -405,79 +506,7 @@ fn main() {
                 }
             });
 
-            // 启动 OneBot v11 WebSocket 服务
-            {
-                let config = match state_read_config_cached(&app_handle.state::<AppState>()) {
-                    Ok(config) => config,
-                    Err(err) => {
-                        eprintln!("[启动] 读取应用状态配置失败，使用默认配置: {:?}", err);
-                        AppConfig::default()
-                    }
-                };
-                let napcat_channels: Vec<_> = config
-                    .remote_im_channels
-                    .iter()
-                    .filter(|ch| ch.enabled && ch.platform == RemoteImPlatform::OnebotV11)
-                    .collect();
-                for channel in &napcat_channels {
-                    if let Err(err) = onebot_v11_ws_server_start((*channel).clone(), app_handle.clone()) {
-                        eprintln!("[启动] 启动 OneBot v11 WS 服务失败，渠道 {}: {}", channel.id, err);
-                    }
-                }
-
-                // 启动事件消费循环
-                let event_state = app_handle.state::<AppState>().inner().clone();
-                for channel in &napcat_channels {
-                    let channel_id = channel.id.clone();
-                    let state_clone = event_state.clone();
-                    tauri::async_runtime::spawn(async move {
-                        napcat_start_event_consumer(channel_id, state_clone).await;
-                    });
-                }
-
-                let dingtalk_channels: Vec<_> = config
-                    .remote_im_channels
-                    .iter()
-                    .filter(|ch| ch.enabled && ch.platform == RemoteImPlatform::Dingtalk)
-                    .cloned()
-                    .collect();
-                for channel in dingtalk_channels {
-                    let state_clone = event_state.clone();
-                    let manager = dingtalk_stream_manager();
-                    tauri::async_runtime::spawn(async move {
-                        let channel_id = channel.id.clone();
-                        if let Err(err) = manager.start_channel(channel, state_clone).await {
-                            eprintln!(
-                                "[启动] 启动钉钉 Stream 渠道失败: channel_id={}, error={}",
-                                channel_id,
-                                err
-                            );
-                        }
-                    });
-                }
-
-                let weixin_channels: Vec<_> = config
-                    .remote_im_channels
-                    .iter()
-                    .filter(|ch| ch.platform == RemoteImPlatform::WeixinOc)
-                    .cloned()
-                    .collect();
-                for channel in weixin_channels {
-                    let state_clone = event_state.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(err) = weixin_oc_manager()
-                            .reconcile_channel_runtime(&channel, state_clone)
-                            .await
-                        {
-                            eprintln!(
-                                "[启动] 启动个人微信渠道失败: channel_id={}, error={}",
-                                channel.id,
-                                err
-                            );
-                        }
-                    });
-                }
-            }
+            eprintln!("[启动] 远程 IM 服务延后到前端 mounted ready 后启动");
 
             tauri::async_runtime::spawn(async move {
                 match mcp_redeploy_all_from_policy(&startup_state).await {
@@ -503,6 +532,9 @@ fn main() {
             show_main_window,
             show_chat_window,
             show_archives_window,
+            detach_current_conversation_to_window,
+            get_detached_chat_window_info,
+            focus_detached_chat_window_by_conversation,
             set_chat_window_active,
             check_github_update,
             start_github_update,
@@ -646,6 +678,7 @@ fn main() {
             remote_im_get_channel_status,
             remote_im_get_channel_logs,
             remote_im_restart_channel,
+            frontend_ready_start_remote_im_services,
             remote_im_weixin_oc_start_login,
             remote_im_weixin_oc_get_login_status,
             remote_im_weixin_oc_sync_contacts,

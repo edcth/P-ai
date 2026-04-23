@@ -238,7 +238,7 @@ function setRenameInputRef(element: Element | { $el?: Element | null } | null) {
 }
 
 function isConversationItemDisabled(item: ChatConversationOverviewItem): boolean {
-  return item.runtimeState === "organizing_context";
+  return item.runtimeState === "organizing_context" || !!item.detachedWindowOpen;
 }
 
 function isCurrentConversation(item: ChatConversationOverviewItem): boolean {
@@ -254,6 +254,9 @@ function isEditingTitle(item: ChatConversationOverviewItem): boolean {
 }
 
 function conversationItemTitle(item: ChatConversationOverviewItem): string {
+  if (item.detachedWindowOpen) {
+    return t("chat.detachedWindowOpen");
+  }
   if (item.runtimeState === "organizing_context") {
     return t("chat.organizingContextDisabled");
   }

@@ -249,7 +249,7 @@ function isCurrentConversation(item: ChatConversationOverviewItem): boolean {
 }
 
 function isConversationDisabled(item: ChatConversationOverviewItem): boolean {
-  return item.runtimeState === "organizing_context";
+  return item.runtimeState === "organizing_context" || !!item.detachedWindowOpen;
 }
 
 function canRenameConversation(item: ChatConversationOverviewItem): boolean {
@@ -266,6 +266,7 @@ function conversationDisplayTitle(item: ChatConversationOverviewItem): string {
 }
 
 function conversationItemTitle(item: ChatConversationOverviewItem): string {
+  if (item.detachedWindowOpen) return t("chat.detachedWindowOpen");
   if (isConversationDisabled(item)) return t("chat.organizingContextDisabled");
   return item.workspaceLabel || t("chat.defaultWorkspace");
 }

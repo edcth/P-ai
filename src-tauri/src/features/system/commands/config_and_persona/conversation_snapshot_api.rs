@@ -59,6 +59,10 @@ struct UnarchivedConversationSummary {
     current_todo: Option<String>,
     #[serde(default)]
     plan_mode_enabled: bool,
+    #[serde(default)]
+    detached_window_open: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detached_window_label: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     preview_messages: Vec<ConversationPreviewMessage>,
 }
@@ -286,6 +290,7 @@ fn build_unarchived_conversation_summary(
         .map(|department| department.name.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| department_id.clone());
+    let detached_window_label = detached_chat_window_for_conversation(conversation_id);
     UnarchivedConversationSummary {
         conversation_id: conversation.id.clone(),
         title: if conversation.title.trim().is_empty() {
@@ -326,6 +331,8 @@ fn build_unarchived_conversation_summary(
         runtime_state: None,
         current_todo: None,
         plan_mode_enabled: false,
+        detached_window_open: detached_window_label.is_some(),
+        detached_window_label,
         preview_messages: build_conversation_preview_messages(conversation, 2),
     }
 }
@@ -770,6 +777,8 @@ mod conversation_snapshot_api_tests {
             runtime_state: None,
             current_todo: None,
             plan_mode_enabled: false,
+            detached_window_open: false,
+            detached_window_label: None,
             preview_messages: Vec::new(),
         }
     }

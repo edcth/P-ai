@@ -1,36 +1,83 @@
 <template>
   <div class="rounded-box border border-base-300 bg-base-100/70 px-2 py-1.5 flex items-center justify-between gap-2 text-[11px]">
-    <div class="join min-w-0">
+    <div class="flex min-w-0 items-center gap-1.5">
+      <div
+        class="dropdown dropdown-start"
+        :class="menuPlacement === 'top' ? 'dropdown-top' : 'dropdown-bottom'"
+      >
+        <button
+          ref="menuButtonRef"
+          type="button"
+          tabindex="0"
+          class="btn btn-sm btn-ghost btn-circle shrink-0"
+          :disabled="busy"
+          :title="t('chat.conversationMenu.title')"
+          @mousedown="updateMenuPlacement"
+        >
+          <Grip class="h-4 w-4" />
+        </button>
+        <ul
+          tabindex="0"
+          class="dropdown-content menu z-50 w-64 rounded-box border border-base-300 bg-base-100 p-3 text-sm shadow-xl"
+          :class="menuPlacement === 'top' ? 'mb-3' : 'mt-3'"
+        >
+          <li>
+            <button type="button" class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left" :disabled="busy" @click="emit('openBranchSelection')">
+              <GitBranch class="h-4 w-4 shrink-0" />
+              <span class="leading-5">{{ t("chat.conversationMenu.branchFromSelection") }}</span>
+            </button>
+          </li>
+          <li>
+            <button type="button" class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left" :disabled="busy" @click="emit('openSupervisionTask')">
+              <Timer class="h-4 w-4 shrink-0" />
+              <span class="leading-5">{{ t("chat.conversationMenu.startSupervision") }}</span>
+            </button>
+          </li>
+          <li>
+            <button type="button" class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left" :disabled="busy" @click="emit('lockWorkspace')">
+              <Folder class="h-4 w-4 shrink-0" />
+              <span class="leading-5">{{ t("chat.conversationMenu.setWorkspace") }}</span>
+            </button>
+          </li>
+          <li v-if="showDetachButton">
+            <button
+              type="button"
+              class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left"
+              :disabled="busy || detachDisabled"
+              @mousedown="handleDetachConversationMouseDown"
+              @click="handleDetachConversationClick"
+            >
+              <ExternalLink class="h-4 w-4 shrink-0" />
+              <span class="leading-5">{{ t("chat.conversationMenu.openDetachedWindow") }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
       <button
-        class="btn btn-sm btn-ghost join-item gap-1.5"
-        :disabled="chatting || frozen"
+        class="btn btn-sm btn-ghost gap-1.5"
+        :disabled="busy"
         @click="emit('lockWorkspace')"
       >
-        <Folder class="h-3.5 w-3.5" />
+        <SquareTerminal class="h-3.5 w-3.5" />
         {{ workspaceButtonName || workspaceButtonLabel }}
-      </button>
-      <button
-        type="button"
-        class="btn btn-sm join-item gap-1.5"
-        :class="supervisionActive ? 'btn-primary' : 'btn-ghost'"
-        :disabled="frozen"
-        :title="supervisionTitle"
-        @click="emit('openSupervisionTask')"
-      >
-        <Timer class="h-3.5 w-3.5" />
-        {{ supervisionActive ? supervisionActiveLabel : supervisionLabel }}
       </button>
     </div>
     <div class="flex min-w-0 items-center justify-end gap-1.5">
       <button
         type="button"
-        class="btn btn-sm gap-1.5 shrink-0"
-        :class="reviewPanelOpen ? 'btn-primary' : 'btn-ghost'"
+        class="btn btn-sm btn-circle overflow-visible p-0 shrink-0 border relative"
+        :class="reviewPanelOpen ? 'border-primary/60 bg-primary/10 text-primary hover:border-primary hover:bg-primary/15' : 'border-base-300/70 bg-base-100/70 hover:border-base-300 hover:bg-base-200'"
         :disabled="!reviewButtonEnabled"
+        :title="reviewButtonLabel"
         @click="emit('toggleToolReview')"
       >
-        <Shield class="h-3.5 w-3.5" />
-        {{ reviewButtonLabel }}
+        <Glasses class="h-4 w-4" />
+        <span
+          v-if="normalizedReviewButtonCount > 0"
+          class="badge badge-primary badge-xs absolute -right-1.5 -top-1.5 min-w-4 px-1 text-[10px]"
+        >
+          {{ normalizedReviewButtonCount > 99 ? "99+" : normalizedReviewButtonCount }}
+        </span>
       </button>
       <button
         v-for="persona in personaPresenceChips"
@@ -86,12 +133,15 @@
 </template>
 
 <script setup lang="ts">
-import { Folder, Shield, Timer } from "lucide-vue-next";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { ExternalLink, Folder, GitBranch, Glasses, Grip, SquareTerminal, Timer } from "lucide-vue-next";
 import type { ChatPersonaPresenceChip } from "../../../types/app";
 
 const props = defineProps<{
   chatting: boolean;
   frozen: boolean;
+  conversationBusy?: boolean;
   workspaceButtonLabel: string;
   workspaceButtonName: string;
   personaPresenceChips: ChatPersonaPresenceChip[];
@@ -102,16 +152,53 @@ const props = defineProps<{
   supervisionActiveLabel: string;
   supervisionTitle: string;
   reviewButtonLabel: string;
+  reviewButtonCount?: number;
   reviewPanelOpen: boolean;
   reviewButtonEnabled: boolean;
+  showDetachButton?: boolean;
+  detachDisabled?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "lockWorkspace"): void;
   (e: "openSupervisionTask"): void;
+  (e: "openBranchSelection"): void;
+  (e: "detachConversation"): void;
   (e: "toggleToolReview"): void;
   (e: "mentionPersona", agentId: string): void;
 }>();
+
+const { t } = useI18n();
+const busy = computed(() => props.chatting || props.frozen || !!props.conversationBusy);
+const normalizedReviewButtonCount = computed(() =>
+  Math.max(0, Math.round(Number(props.reviewButtonCount || 0))),
+);
+const menuButtonRef = ref<HTMLButtonElement | null>(null);
+const menuPlacement = ref<"top" | "bottom">("top");
+
+function updateMenuPlacement() {
+  const rect = menuButtonRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  menuPlacement.value = rect.top >= window.innerHeight / 2 ? "top" : "bottom";
+}
+
+function handleDetachConversationMouseDown() {
+  updateMenuPlacement();
+  console.info("[独立聊天窗口][前端入口] 工具栏按钮 mousedown", {
+    chatting: props.chatting,
+    frozen: props.frozen,
+    detachDisabled: !!props.detachDisabled,
+  });
+}
+
+function handleDetachConversationClick() {
+  console.info("[独立聊天窗口][前端入口] 工具栏按钮已点击，准备向上派发 detachConversation", {
+    chatting: props.chatting,
+    frozen: props.frozen,
+    detachDisabled: !!props.detachDisabled,
+  });
+  emit("detachConversation");
+}
 
 function avatarInitial(name: string): string {
   const text = (name || "").trim();
@@ -134,4 +221,15 @@ function personaChipClass(persona: ChatPersonaPresenceChip): string {
 function frontSpeakingMuted(persona: ChatPersonaPresenceChip): boolean {
   return props.selectedMentionAgentIds.length > 0 && persona.isFrontSpeaking;
 }
+
+onMounted(() => {
+  updateMenuPlacement();
+  window.addEventListener("resize", updateMenuPlacement);
+  window.addEventListener("scroll", updateMenuPlacement, true);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", updateMenuPlacement);
+  window.removeEventListener("scroll", updateMenuPlacement, true);
+});
 </script>

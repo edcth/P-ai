@@ -3,6 +3,7 @@
   <div class="window-shell text-sm bg-base-200">
     <AppWindowHeader
       :view-mode="viewMode"
+      :detached-chat-window="detachedChatWindow"
       :current-theme="currentTheme"
       :title-text="titleText"
       :chat-usage-percent="chatUsagePercent"
@@ -43,12 +44,14 @@
       @toggle-pin-conversation="toggleConversationPin"
       @create-conversation="createUnarchivedConversation"
       @force-archive="openForceArchiveActionDialog"
-      @close-window="closeWindowAndClearForeground"
+      @start-drag="startDrag"
+      @close-window="handleCloseWindow"
     />
 
     <AppWindowContent
       :t="tr"
       :view-mode="viewMode"
+      :detached-chat-window="detachedChatWindow"
       :config="config"
       :config-tab="configTab"
       :locale-options="localeOptions"
@@ -234,10 +237,11 @@
       :pick-attachments="pickChatAttachments"
       :start-recording="startRecording"
       :stop-recording="() => stopRecording(false)"
-      :send-chat="chatFlow.sendChat"
+      :send-chat="sendChatFromCurrentWindow"
       :stop-chat="chatFlow.stopChat"
       :on-jump-to-conversation-bottom="ensureLatestForegroundTailThenScrollToBottom"
       :open-supervision-task-dialog="openSupervisionTaskDialog"
+      :on-detach-conversation="detachCurrentConversationToWindow"
       :close-supervision-task-dialog="closeSupervisionTaskDialog"
       :save-supervision-task="saveSupervisionTask"
       :on-reached-chat-bottom="() => undefined"
@@ -324,7 +328,7 @@
       @close-skill-placeholder-dialog="closeSkillPlaceholderDialog"
       @confirm-delete-conversation-from-archive-dialog="confirmDeleteConversationFromArchiveDialog"
       @confirm-force-compaction-action="confirmForceCompactionAction"
-      @confirm-force-archive-action="confirmForceArchiveAction()"
+      @confirm-force-archive-action="handleConfirmForceArchiveAction()"
       @close-force-archive-action-dialog="closeForceArchiveActionDialog"
     />
     <ChatWorkspacePickerDialog
@@ -442,6 +446,11 @@ type ConversationMessageAppendedPayload = {
   conversationId?: string;
   message?: ChatMessage | null;
 };
+type DetachedChatWindowInfo = {
+  detached: boolean;
+  conversationId?: string | null;
+  windowLabel?: string | null;
+};
 
 const viewMode = ref<"chat" | "archives" | "config">(props.fixedViewMode ?? "config");
 const { t, locale } = useI18n();
@@ -454,6 +463,7 @@ const {
   initWindow,
   syncWindowControlsState,
   closeWindow,
+  startDrag,
   toggleAlwaysOnTop,
   minimizeWindow,
   toggleMaximizeWindow,
@@ -498,6 +508,9 @@ const recordHotkeyProbeDown = ref(false);
 const chatWindowActiveSynced = ref<boolean | null>(null);
 const tauriWindowLabel = ref("unknown");
 const isChatTauriWindow = ref(false);
+const detachedChatWindow = ref(false);
+const detachedChatConversationId = ref("");
+const detachedTemporaryApiConfigId = ref("");
 const webviewZoomFactor = ref(1);
 const WEBVIEW_ZOOM_MIN = 0.8;
 const WEBVIEW_ZOOM_MAX = 2.0;
@@ -1005,7 +1018,7 @@ const {
     if (!config.sttAutoSend) return;
     if (chatting.value || forcingArchive.value) return;
     setTimeout(() => {
-      void chatFlow.sendChat();
+      sendChatFromCurrentWindow();
     }, 0);
   },
   setStatus: (text) => {
@@ -1025,13 +1038,17 @@ function isChatWindowActiveNow(): boolean {
   return viewMode.value === "chat" && document.visibilityState === "visible" && document.hasFocus();
 }
 
+function isPrimaryChatWindow(): boolean {
+  return tauriWindowLabel.value === "chat" && !detachedChatWindow.value;
+}
+
 function clearRecordHotkeyProbeState() {
   recordHotkeyProbeDown.value = false;
   recordHotkeyProbeLastSeq.value = 0;
 }
 
 function scheduleChatWindowActiveStateSync(reason: string, delayMs = 0) {
-  if (!isChatTauriWindow.value) return;
+  if (!isPrimaryChatWindow()) return;
   clearChatWindowActiveSyncTimer();
   if (delayMs <= 0) {
     syncChatWindowActiveState(reason);
@@ -1056,7 +1073,7 @@ function scheduleChatMicPrewarm(reason: string, delayMs = 0) {
 }
 
 function syncChatWindowActiveState(reason = "unknown") {
-  if (!isChatTauriWindow.value) return;
+  if (!isPrimaryChatWindow()) return;
   const active = isChatWindowActiveNow();
   if (chatWindowActiveSynced.value === active) return;
   chatWindowActiveSynced.value = active;
@@ -1180,9 +1197,16 @@ const currentForegroundAgentId = computed(
     || String(assistantDepartmentAgentId.value || "").trim(),
 );
 const currentForegroundApiConfigId = computed(
-  () =>
-    departmentPrimaryApiConfigId(currentForegroundDepartment.value)
-    || String(config.assistantDepartmentApiConfigId || "").trim(),
+  () => {
+    if (detachedChatWindow.value) {
+      const temporaryApiConfigId = String(detachedTemporaryApiConfigId.value || "").trim();
+      if (temporaryApiConfigId && config.apiConfigs.some((item) => item.id === temporaryApiConfigId && item.enableText)) {
+        return temporaryApiConfigId;
+      }
+    }
+    return departmentPrimaryApiConfigId(currentForegroundDepartment.value)
+      || String(config.assistantDepartmentApiConfigId || "").trim();
+  },
 );
 const currentForegroundApiConfig = computed(
   () => config.apiConfigs.find((a) => a.id === currentForegroundApiConfigId.value) ?? null,
@@ -1337,6 +1361,8 @@ const chatUnarchivedConversationItems = computed(() => {
       runtimeState: item.runtimeState,
       currentTodo: String(item.currentTodo || "").trim(),
       currentTodos: Array.isArray(item.currentTodos) ? item.currentTodos : [],
+      detachedWindowOpen: !!item.detachedWindowOpen,
+      detachedWindowLabel: String(item.detachedWindowLabel || "").trim() || undefined,
       updatedAt: item.lastMessageAt || item.updatedAt || "",
       lastMessageAt: item.lastMessageAt || item.updatedAt || "",
       previewMessages: Array.isArray(item.previewMessages) ? item.previewMessages : [],
@@ -1666,6 +1692,15 @@ async function updateForegroundDepartmentPrimaryApiConfig(value: string) {
 }
 
 function updateAssistantDepartmentApiConfigId(value: string) {
+  if (detachedChatWindow.value) {
+    const nextId = String(value || "").trim();
+    if (nextId && !config.apiConfigs.some((item) => item.id === nextId && item.enableText)) {
+      setStatus("当前模型不可用，请重新选择。");
+      return;
+    }
+    detachedTemporaryApiConfigId.value = nextId;
+    return;
+  }
   void updateForegroundDepartmentPrimaryApiConfig(value);
 }
 
@@ -1977,6 +2012,13 @@ async function deleteUnarchivedConversationFromArchives(conversationId: string) 
   if (!normalizedConversationId) return;
   const currentConversationId = String(currentChatConversationId.value || "").trim();
   const deletingCurrentConversation = currentConversationId === normalizedConversationId;
+  if (detachedChatWindow.value && deletingCurrentConversation) {
+    void deleteUnarchivedConversationFromArchivesRaw(normalizedConversationId).catch((error) => {
+      console.error("[独立聊天窗口] 后台删除会话失败", error);
+    });
+    await getCurrentWindow().close();
+    return;
+  }
   if (deletingCurrentConversation) {
     const optimisticNextConversationId = pickForegroundConversationId(
       unarchivedConversations.value.filter((item) => String(item.conversationId || "").trim() !== normalizedConversationId),
@@ -2000,6 +2042,35 @@ async function deleteUnarchivedConversationFromArchives(conversationId: string) 
   if (!deletingCurrentConversation) return;
   if (String(currentChatConversationId.value || "").trim()) return;
   await recoverForegroundConversationFromOverview("delete_unarchived_conversation", String(result?.activeConversationId || "").trim() || null);
+}
+
+async function handleConfirmForceArchiveAction() {
+  if (!detachedChatWindow.value) {
+    await confirmForceArchiveAction();
+    return;
+  }
+  const conversationId = String(currentChatConversationId.value || "").trim();
+  const apiConfigId = String(currentForegroundApiConfigId.value || "").trim();
+  const agentId = String(currentForegroundAgentId.value || "").trim();
+  if (!conversationId || !apiConfigId || !agentId) {
+    setStatus("当前没有可归档的会话。");
+    closeForceArchiveActionDialog();
+    return;
+  }
+  closeForceArchiveActionDialog();
+  void invokeTauri("force_archive_current", {
+      input: {
+        session: {
+          apiConfigId,
+          agentId,
+          conversationId,
+        },
+        targetConversationId: null,
+      },
+    }).catch((error) => {
+      console.error("[独立聊天窗口] 后台归档会话失败", error);
+    });
+  await getCurrentWindow().close();
 }
 
 async function refreshChatUnarchivedConversations() {
@@ -2049,6 +2120,110 @@ function clearForegroundConversation(reason: string) {
     reason,
     previousConversationId,
   });
+}
+
+async function initializeDetachedChatWindow() {
+  if (!detachedChatWindow.value) return;
+  try {
+    const info = await invokeTauri<DetachedChatWindowInfo>("get_detached_chat_window_info");
+    const conversationId = String(info?.conversationId || "").trim();
+    if (!info?.detached || !conversationId) {
+      setStatus("独立聊天窗口缺少绑定会话，窗口即将关闭。");
+      try {
+        await getCurrentWindow().close();
+      } catch (closeError) {
+        console.error("[独立聊天窗口] 缺少绑定会话时关闭窗口失败", closeError);
+        setStatusError("status.requestFailed", closeError);
+      }
+      return;
+    }
+    detachedChatConversationId.value = conversationId;
+    currentChatConversationId.value = conversationId;
+    sideConversationListVisible.value = false;
+    const snapshot = await requestConversationLightSnapshot(conversationId);
+    applyConversationSnapshot(snapshot);
+    await nextTick();
+    maybeResumeForegroundStreamingDraft(conversationId, "detached_window_init");
+  } catch (error) {
+    setStatusError("status.loadMessagesFailed", error);
+  }
+}
+
+async function handleCloseWindow() {
+  if (detachedChatWindow.value) {
+    await getCurrentWindow().close();
+    return;
+  }
+  await closeWindowAndClearForeground();
+}
+
+async function detachCurrentConversationToWindow() {
+  console.info("[独立聊天窗口][前端链路] UnifiedWindowApp 进入 detachCurrentConversationToWindow", {
+    windowLabel: tauriWindowLabel.value,
+    detachedChatWindow: detachedChatWindow.value,
+    currentConversationId: String(currentChatConversationId.value || "").trim(),
+    chatting: chatting.value,
+    forcingArchive: forcingArchive.value,
+    compactingConversation: compactingConversation.value,
+    isMainConversation: !!currentForegroundConversationSummary.value?.isMainConversation,
+  });
+  setStatus("正在打开独立聊天窗口...");
+  if (detachedChatWindow.value) {
+    console.warn("[独立聊天窗口][前端链路] 当前已经是独立窗口，忽略独立窗口请求");
+    return;
+  }
+  const conversationId = String(currentChatConversationId.value || "").trim();
+  if (!conversationId || chatting.value || forcingArchive.value || compactingConversation.value) {
+    console.warn("[独立聊天窗口][前端链路] 当前状态不允许独立窗口", {
+      conversationId,
+      chatting: chatting.value,
+      forcingArchive: forcingArchive.value,
+      compactingConversation: compactingConversation.value,
+    });
+    return;
+  }
+  if (currentForegroundConversationSummary.value?.isMainConversation) {
+    console.warn("[独立聊天窗口][前端链路] 主会话不允许独立窗口", { conversationId });
+    setStatus("主会话不能独立打开，请选择一个子会话。");
+    return;
+  }
+  try {
+    console.info("[独立聊天窗口][前端链路] 准备 invoke detach_current_conversation_to_window", {
+      conversationId,
+    });
+    void invokeTauri<{ conversationId: string; windowLabel: string; mainConversationId?: string | null }>("detach_current_conversation_to_window", {
+      input: { conversationId },
+    }).then((result) => {
+      console.info("[独立聊天窗口][前端链路] invoke detach_current_conversation_to_window 已返回", result);
+      void refreshUnarchivedConversationOverview();
+    }).catch((error) => {
+      console.error("[独立聊天窗口][前端链路] 打开独立窗口失败", error);
+      setStatusError("status.loadMessagesFailed", error);
+      void refreshUnarchivedConversationOverview();
+    });
+    clearForegroundConversation("detach_current_conversation");
+    const mainConversationId = String(unarchivedConversations.value.find((item) => !!item.isMainConversation)?.conversationId || "").trim();
+    if (mainConversationId) {
+      await switchUnarchivedConversation(mainConversationId);
+    } else {
+      await refreshChatUnarchivedConversations();
+    }
+    setStatus("已发送独立聊天窗口请求");
+  } catch (error) {
+    console.error("[独立聊天窗口][前端链路] 打开独立窗口失败", error);
+    setStatusError("status.loadMessagesFailed", error);
+  }
+}
+
+async function sendChatFromCurrentWindow() {
+  if (detachedChatWindow.value) {
+    const temporaryApiConfigId = String(detachedTemporaryApiConfigId.value || "").trim();
+    if (temporaryApiConfigId && !config.apiConfigs.some((item) => item.id === temporaryApiConfigId && item.enableText)) {
+      setStatus("临时模型已不可用，请重新选择模型。");
+      return;
+    }
+  }
+  await chatFlow.sendChat();
 }
 
 function freezeForegroundConversation(reason: string) {
@@ -2824,6 +2999,17 @@ function syncCurrentConversationWorkspaceLabel() {
 async function switchUnarchivedConversation(conversationId: string) {
   const cid = String(conversationId || "").trim();
   if (!cid) return;
+  const targetOverview = unarchivedConversations.value.find((item) => String(item.conversationId || "").trim() === cid);
+  if (targetOverview?.detachedWindowOpen) {
+    try {
+      await invokeTauri<boolean>("focus_detached_chat_window_by_conversation", {
+        input: { conversationId: cid },
+      });
+    } catch (error) {
+      console.warn("[独立聊天窗口] 聚焦已占用会话失败", error);
+    }
+    return;
+  }
   const previousConversationId = String(currentChatConversationId.value || "").trim();
   const startedAt = perfNow();
   try {
@@ -2953,9 +3139,25 @@ async function branchConversationFromSelection(payload: { count: number; message
     const conversationId = String(result?.conversationId || "").trim();
     if (!conversationId) return;
     await refreshUnarchivedConversationOverview();
+    const warning = String(result?.warning || "").trim();
+    if (detachedChatWindow.value) {
+      try {
+        await invokeTauri<{ conversationId: string; windowLabel: string }>("detach_current_conversation_to_window", {
+          input: { conversationId },
+        });
+        if (warning) {
+          setStatus(`会话分支已在新独立窗口打开（降级整理）：${warning}`);
+        } else {
+          setStatus(`已在新独立窗口打开会话分支：${String(result?.title || "").trim() || conversationId}`);
+        }
+      } catch (detachError) {
+        console.error("[独立聊天窗口] 会话分支创建成功，但打开新独立窗口失败", detachError);
+        setStatus(`会话分支已创建，但打开新独立窗口失败：${formatI18nError(tr, "status.requestFailed", detachError)}`);
+      }
+      return;
+    }
     const snapshot = await requestConversationLightSnapshot(conversationId);
     applyConversationSnapshot(snapshot);
-    const warning = String(result?.warning || "").trim();
     if (warning) {
       setStatus(`会话分支创建完成（降级整理）：${warning}`);
     } else {
@@ -3262,7 +3464,7 @@ const appBootstrap = useAppBootstrap({
     if (state === "released") {
       recordHotkeyProbeDown.value = false;
     }
-    if (viewMode.value !== "chat") return;
+    if (viewMode.value !== "chat" || !isPrimaryChatWindow()) return;
     if (!config.recordBackgroundWakeEnabled) return;
     if (state === "pressed") {
       recordHotkeyProbeDown.value = true;
@@ -3343,9 +3545,11 @@ onMounted(() => {
   try {
     const label = String(getCurrentWindow().label || "").trim();
     tauriWindowLabel.value = label || "unknown";
-    isChatTauriWindow.value = tauriWindowLabel.value === "chat";
+    detachedChatWindow.value = tauriWindowLabel.value.startsWith("chat-detached-");
+    isChatTauriWindow.value = tauriWindowLabel.value === "chat" || detachedChatWindow.value;
   } catch {
     tauriWindowLabel.value = "unknown";
+    detachedChatWindow.value = false;
     isChatTauriWindow.value = false;
   }
   console.warn("[聊天追踪][窗口] 初始化", {
@@ -3548,7 +3752,7 @@ onBeforeUnmount(() => {
   clearRecordHotkeyProbeState();
   agentWorkPresence.cleanup();
   chatWindowActiveSynced.value = null;
-  if (isChatTauriWindow.value) {
+  if (isPrimaryChatWindow()) {
     void invokeTauri("set_chat_window_active", { active: false }).catch(() => {});
   }
   window.removeEventListener("focus", handleWindowFocusForMicPrewarm);
@@ -3905,7 +4109,7 @@ const { handleConfirmPlan } = useConfirmPlan({
   compactingConversation,
   setConversationPlanMode,
   forceCompactNow,
-  sendChat: chatFlow.sendChat,
+  sendChat: sendChatFromCurrentWindow,
 });
 
 watch(
@@ -4014,7 +4218,7 @@ const {
   selectedMentions: selectedChatMentions,
   clipboardImages,
   deleteUnarchivedConversationFromArchives,
-  sendChat: chatFlow.sendChat,
+  sendChat: sendChatFromCurrentWindow,
   stopChat: chatFlow.stopChat,
   setStatusError,
   setChatErrorText: (text: string) => {
@@ -4070,7 +4274,17 @@ useAppLifecycle({
   stopRecording,
   cleanupSpeechRecording,
   cleanupChatMedia,
-  afterMountedReady: autoCheckGithubUpdate,
+  afterMountedReady: async () => {
+    await initializeDetachedChatWindow();
+    void invokeTauri<boolean>("frontend_ready_start_remote_im_services")
+      .then((started) => {
+        console.info("[启动] 前端 mounted ready 已通知后端启动远程 IM 服务", { started });
+      })
+      .catch((error) => {
+        console.warn("[启动] 通知后端启动远程 IM 服务失败", error);
+      });
+    await autoCheckGithubUpdate();
+  },
 });
 
 useAppWatchers({

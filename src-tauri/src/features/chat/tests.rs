@@ -2223,7 +2223,9 @@
         let summaries = collect_unarchived_conversation_summaries(&state, &AppConfig::default(), &data);
 
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].workspace_label, "llm-workspace");
+        assert_eq!(summaries[0].workspace_label, "");
+        assert!(!summaries[0].detached_window_open);
+        assert_eq!(summaries[0].detached_window_label, None);
         assert_eq!(summaries[0].preview_messages.len(), 2);
         assert_eq!(summaries[0].preview_messages[0].message_id, "msg-2");
         assert_eq!(summaries[0].preview_messages[0].text_preview, "第二条");

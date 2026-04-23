@@ -3,10 +3,16 @@
     class="min-h-10 h-10 shrink-0 px-2 relative z-40 overflow-visible select-none"
     :class="viewMode === 'chat' ? 'navbar' : 'grid grid-cols-[1fr_auto_1fr] items-center bg-base-200 border-b border-base-300'"
   >
-    <div v-if="viewMode !== 'chat'" data-tauri-drag-region class="absolute inset-0 cursor-move" aria-hidden="true"></div>
+    <div
+      v-if="viewMode !== 'chat'"
+      data-tauri-drag-region
+      class="absolute inset-0 cursor-move"
+      aria-hidden="true"
+      @mousedown="emit('startDrag')"
+    ></div>
 
     <div v-if="viewMode === 'chat'" class="relative z-10 flex min-w-0 flex-none items-center gap-1" @mousedown.stop>
-      <div ref="conversationListPopoverRef" class="relative">
+      <div v-if="!detachedChatWindow" ref="conversationListPopoverRef" class="relative">
         <button
           class="btn btn-ghost btn-sm h-8 min-h-8 px-2"
           :title="t('chat.conversationList')"
@@ -31,6 +37,7 @@
       </div>
 
       <button
+        v-if="!detachedChatWindow"
         class="btn btn-ghost btn-sm h-8 min-h-8 px-2"
         :title="t('chat.newConversation')"
         @click.stop="handleCreateConversation"
@@ -39,6 +46,7 @@
       </button>
 
       <button
+        v-if="viewMode === 'chat'"
         class="btn btn-ghost btn-sm h-8 min-h-8 px-2"
         :disabled="forcingArchive || chatting"
         :title="forceArchiveTip"
@@ -84,6 +92,7 @@
       data-tauri-drag-region
       class="min-w-0 flex-1 self-stretch cursor-move"
       aria-hidden="true"
+      @mousedown="emit('startDrag')"
     ></div>
 
     <div
@@ -169,7 +178,7 @@
 
     <div class="relative z-10 flex justify-self-end gap-1" @mousedown.stop>
       <button
-        v-if="viewMode === 'chat'"
+        v-if="viewMode === 'chat' && !detachedChatWindow"
         class="btn btn-ghost btn-sm"
         :title="t('window.archivesTitle')"
         @click.stop="$emit('open-archives')"
@@ -177,7 +186,7 @@
         <History class="h-3.5 w-3.5" />
       </button>
       <button
-        v-if="viewMode === 'chat'"
+        v-if="viewMode === 'chat' && !detachedChatWindow"
         class="btn btn-ghost btn-sm"
         :title="openConfigTitle"
         @click.stop="$emit('open-config')"
@@ -379,6 +388,7 @@ const markdownMermaidProps = {
 
 const props = defineProps<{
   viewMode: "chat" | "archives" | "config";
+  detachedChatWindow?: boolean;
   currentTheme: string;
   titleText: string;
   chatUsagePercent: number;
@@ -419,6 +429,7 @@ const emit = defineEmits<{
   (e: "toggle-pin-conversation", conversationId: string): void;
   (e: "create-conversation", input?: CreateConversationInput): void;
   (e: "force-archive"): void;
+  (e: "startDrag"): void;
   (e: "close-window"): void;
   (e: "update:config-search-query", value: string): void;
   (e: "select-config-search-result", tab: ConfigSearchTab): void;

@@ -546,6 +546,8 @@ export type UnarchivedConversationSummary = {
   currentTodo?: string;
   planModeEnabled?: boolean;
   currentTodos?: ChatTodoItem[];
+  detachedWindowOpen?: boolean;
+  detachedWindowLabel?: string;
   previewMessages?: ConversationPreviewMessage[];
 };
 
@@ -581,6 +583,8 @@ export type ChatConversationOverviewItem = {
   runtimeState?: "idle" | "assistant_streaming" | "organizing_context";
   currentTodo?: string;
   currentTodos?: ChatTodoItem[];
+  detachedWindowOpen?: boolean;
+  detachedWindowLabel?: string;
   color?: string;
   canCreateNew?: boolean;
   backgroundStatus?: "completed" | "failed";

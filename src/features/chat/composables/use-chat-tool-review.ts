@@ -331,6 +331,7 @@ export function useChatToolReview(options: UseChatToolReviewOptions) {
     toolReviewPanelOpen,
     toolReviewBatches,
     toolReviewCurrentBatchKey,
+    toolReviewButtonCount,
     toolReviewButtonLabel,
     toolReviewButtonEnabled,
     toolReviewDetailMap,

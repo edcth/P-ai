@@ -2,10 +2,10 @@
   <div
     ref="chatLayoutRoot"
     class="h-full min-h-0"
-    :class="showSideConversationList ? 'flex flex-row overflow-hidden' : 'flex flex-col relative'"
+    :class="showSideConversationList && !detachedChatWindow ? 'flex flex-row overflow-hidden' : 'flex flex-col relative'"
   >
     <ChatConversationSidebar
-      v-if="showSideConversationList"
+      v-if="showSideConversationList && !detachedChatWindow"
       :items="unarchivedConversationItems"
       :active-conversation-id="activeConversationId"
       :user-alias="userAlias"
@@ -212,6 +212,7 @@
               <ChatWorkspaceToolbar
                 :chatting="chatting"
                 :frozen="frozen"
+                :conversation-busy="conversationBusy"
                 :workspace-button-label="t('chat.allowedWorkspaceButton')"
                 :workspace-button-name="currentWorkspaceName"
                 :persona-presence-chips="personaPresenceChips"
@@ -222,9 +223,13 @@
                 :supervision-active-label="t('chat.supervision.buttonActive')"
                 :supervision-title="supervisionButtonTitle"
                 :review-button-label="toolReviewButtonLabel"
+                :review-button-count="toolReviewButtonCount"
                 :review-panel-open="toolReviewPanelOpen"
                 :review-button-enabled="toolReviewButtonEnabled"
+                :show-detach-button="!detachedChatWindow && !activeConversationSummary?.isMainConversation"
+                :detach-disabled="!activeConversationId || activeConversationSummary?.isMainConversation || chatting || frozen || conversationBusy"
                 @lock-workspace="$emit('lockWorkspace')"
+                @open-branch-selection="openBranchSelectionMenu"
                 @mention-persona="agentId => {
                   const normalizedAgentId = String(agentId || '').trim();
                   if (!normalizedAgentId) return;
@@ -236,6 +241,7 @@
                   if (match) emit('addMention', match);
                 }"
                 @open-supervision-task="$emit('openSupervisionTask')"
+                @detach-conversation="handleDetachConversationRequest"
                 @toggle-tool-review="toggleToolReviewPanel"
               />
             </div>
@@ -304,7 +310,7 @@
             :chatting="chatting"
             :busy="conversationBusy"
             :frozen="frozen"
-            :show-side-conversation-list="showSideConversationList"
+            :show-side-conversation-list="detachedChatWindow ? false : showSideConversationList"
             :active-conversation-id="activeConversationId"
             :unarchived-conversation-items="unarchivedConversationItems"
             :user-alias="userAlias"
@@ -491,9 +497,17 @@ const props = defineProps<{
   unarchivedConversationItems: ChatConversationOverviewItem[];
   createConversationDepartmentOptions: Array<{ id: string; name: string; ownerName: string }>;
   defaultCreateConversationDepartmentId: string;
+  detachedChatWindow?: boolean;
 }>();
 
 const markdownIsDark = computed(() => isDarkAppTheme(props.currentTheme));
+const activeConversationSummary = computed(() => {
+  const activeConversationId = String(props.activeConversationId || "").trim();
+  if (!activeConversationId) return null;
+  return props.unarchivedConversationItems.find(
+    (item) => String(item.conversationId || "").trim() === activeConversationId,
+  ) || null;
+});
 const ephemeralBlockRenderIdMap = new WeakMap<ChatMessageBlock, string>();
 let ephemeralBlockRenderIdSeq = 0;
 
@@ -686,6 +700,7 @@ const emit = defineEmits<{
   (e: "confirmPlan", payload: { messageId: string }): void;
   (e: "lockWorkspace"): void;
   (e: "openSupervisionTask"): void;
+  (e: "detachConversation"): void;
   (e: "closeSupervisionTask"): void;
   (e: "saveSupervisionTask", payload: { durationHours: number; goal: string; why: string; todo: string }): void;
   (e: "switchConversation", conversationId: string): void;
@@ -704,6 +719,27 @@ const emit = defineEmits<{
   (e: "selectionActionShare", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
 }>();
 const { t } = useI18n();
+
+function handleDetachConversationRequest() {
+  console.info("[独立聊天窗口][前端链路] ChatView 收到 detachConversation，继续派发到窗口容器", {
+    activeConversationId: props.activeConversationId,
+    detachedChatWindow: !!props.detachedChatWindow,
+    isMainConversation: !!activeConversationSummary.value?.isMainConversation,
+    conversationBusy: props.conversationBusy,
+    frozen: props.frozen,
+    chatting: props.chatting,
+  });
+  emit("detachConversation");
+}
+
+function openBranchSelectionMenu() {
+  if (props.chatting || props.frozen || props.conversationBusy) return;
+  messageSelectionModeEnabled.value = true;
+  selectedMessageRenderIds.value = [];
+  void nextTick(() => {
+    composerPanelRef.value?.focusInput?.({ preventScroll: true });
+  });
+}
 
 const linkOpenErrorText = ref("");
 const composerPanelRef = ref<{ focusInput: (options?: FocusOptions) => void } | null>(null);
@@ -1167,6 +1203,7 @@ const {
   toolReviewPanelOpen,
   toolReviewBatches,
   toolReviewCurrentBatchKey,
+  toolReviewButtonCount,
   toolReviewButtonLabel,
   toolReviewButtonEnabled,
   toolReviewDetailMap,
