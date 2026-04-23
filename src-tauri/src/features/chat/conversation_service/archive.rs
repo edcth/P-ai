@@ -21,7 +21,11 @@ impl ConversationService {
                         .archived_at
                         .clone()
                         .unwrap_or_else(|| archive.updated_at.clone()),
-                    title: archive_first_user_preview(archive, &app_config.ui_language),
+                    title: if archive.title.trim().is_empty() {
+                        archive_first_user_preview(archive, &app_config.ui_language)
+                    } else {
+                        archive.title.trim().to_string()
+                    },
                     message_count: archive.messages.len(),
                     api_config_id,
                     agent_id: archive.agent_id.clone(),
