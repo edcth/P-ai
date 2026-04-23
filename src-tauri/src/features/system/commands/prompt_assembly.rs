@@ -205,6 +205,8 @@ fn conversation_user_main_workspace_root(conversation: &Conversation, state: &Ap
         .and_then(|workspace| shell_workspace_resolve_path_candidate(state, workspace))
 }
 
+const WORKSPACE_AGENTS_MD_MAX_BYTES: u64 = 32 * 1024;
+
 fn build_workspace_agents_md_block(conversation: &Conversation, state: &AppState) -> Option<String> {
     let Some(workspace_root) = conversation_user_main_workspace_root(conversation, state) else {
         eprintln!("[AGENTS注入] 跳过 main_workspace=（无） reason=未命中用户指定main工作目录");
@@ -215,6 +217,27 @@ fn build_workspace_agents_md_block(conversation: &Conversation, state: &AppState
         eprintln!(
             "[AGENTS注入] 跳过 main_workspace={} reason=根目录缺少AGENTS.md",
             workspace_root.display()
+        );
+        return None;
+    }
+    let agents_metadata = match std::fs::metadata(&agents_path) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            eprintln!(
+                "[AGENTS注入] 失败 main_workspace={} path={} reason=读取AGENTS.md元数据失败 error={err:?}",
+                workspace_root.display(),
+                agents_path.display()
+            );
+            return None;
+        }
+    };
+    if agents_metadata.len() > WORKSPACE_AGENTS_MD_MAX_BYTES {
+        eprintln!(
+            "[AGENTS注入] 跳过 main_workspace={} path={} reason=AGENTS.md超过大小上限 size_bytes={} max_bytes={}",
+            workspace_root.display(),
+            agents_path.display(),
+            agents_metadata.len(),
+            WORKSPACE_AGENTS_MD_MAX_BYTES
         );
         return None;
     }
@@ -495,6 +518,34 @@ mod prompt_assembly_tests {
         assert!(block.contains("当前主工作目录根下的 AGENTS.md"));
         assert!(block.contains("use pnpm"));
         assert!(block.contains("run tests"));
+    }
+
+    #[test]
+    fn build_workspace_agents_md_block_should_skip_oversized_agents_md() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "easy-call-ai-prompt-assembly-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let llm_workspace_path = temp_root.join("llm-workspace");
+        let project_root = temp_root.join("project-main-large-agents");
+        fs::create_dir_all(&llm_workspace_path).expect("create llm workspace");
+        fs::create_dir_all(&project_root).expect("create project root");
+        fs::write(
+            project_root.join("AGENTS.md"),
+            "a".repeat((WORKSPACE_AGENTS_MD_MAX_BYTES + 1) as usize),
+        )
+        .expect("write oversized agents");
+        let state = build_test_state(llm_workspace_path);
+        let conversation = build_test_conversation(vec![ShellWorkspaceConfig {
+            id: "main-1".to_string(),
+            name: "project".to_string(),
+            path: terminal_path_for_user(&project_root),
+            level: SHELL_WORKSPACE_LEVEL_MAIN.to_string(),
+            access: SHELL_WORKSPACE_ACCESS_FULL_ACCESS.to_string(),
+            built_in: false,
+        }]);
+
+        assert!(build_workspace_agents_md_block(&conversation, &state).is_none());
     }
 
     #[test]

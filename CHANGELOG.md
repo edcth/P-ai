@@ -1,6 +1,7 @@
 # 变更日志
 
 ## 进行中
+- 优化（workspace-agents-md-size-guard）：会话主工作目录的 `AGENTS.md` 自动注入新增 32KiB 大小上限；超过上限时仅记录带路径与字节数的跳过日志，不再读取正文，避免超大项目说明进入提示词上下文
 - 优化（welcome-completion-progress-theme-color）：设置首页欢迎卡的配置完成度圆环改为跟随主题主色，保留 DaisyUI `radial-progress` 默认结构，避免中性色在自定义深色主题下显得脏灰或与背景层级冲突
 - 优化（generated-dark-theme-base-swap）：自定义深色主题保持现有色阶生成算法不变，仅在生成后对调 `base-100` 与 `base-300`，让最深背景落到 `base-300`，同时保留亮色自定义主题与预设主题行为
 - 优化（conversation-read-agent-runtime-snapshot）：会话读取层的 active snapshot / active messages / 历史前后分页 fallback 分支不再通过 `data.clone()` 合并整份运行数据来解析有效人格，改为仅复制 agents 小快照并合并私有组织；会话索引与消息页仍基于原 `AppData` 处理，保留 active fallback 创建/归一化语义，同时减少大消息数据在读取路径上的额外复制
