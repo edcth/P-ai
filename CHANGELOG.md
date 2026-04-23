@@ -16,6 +16,15 @@
 - 重构（conversation-prompt-service-phase-1）：引入会话提示词服务第一阶段骨架，先收口提示词 owner 与只读 snapshot，不替换 `Conversation.messages` 作为持久化真源；系统提示词最终合成与对话消息投影入口开始统一经过服务层，并新增缓存命中稳定性与 `prompt_revision` 边界测试，确保 `todo/task` 与 `memory_recall` 不会误触发系统提示词 revision
 - 重构（conversation-prompt-service-phase-2）：继续收口提示词服务 owner，系统侧块生成统一改为由服务内部发起，并把主聊天、`SummaryContext`、工具安全审查、工具审查提交、vision 描述这几条高频真实业务入口的 latest user / prepared prompt 生成动作收进服务内部；外部主链只再传原始条件与场景意图，不再手搓系统块或 latest user 文本
 
+## 发布：v0.9.40
+
+- 优化（chat-virtual-scroll-compensation-and-own-message-alignment）：聊天虚拟滚动继续收口动态高度与补历史补偿语义，首屏快照与历史分页保持前端可控条数，消息统一补稳定 id，向上补历史改为以 `scrollHeight` 差值做主补偿、消息头像锚点做兜底，向上滚动时旧项测量优先吃缓存避免二次顶动；同时恢复“用户消息正式落库后再平滑顶到上缘”的行为，保留群组渲染与工具栏同层布局，修复长消息历史补位、用户消息对齐与滚动稳定性问题
+- 优化（chat-rewind-lightweight-preview-and-agent-check-removal）：撤回消息链路移除与当前历史回滚无关的 agent 存活检查、private org 合并与 overview 全量刷新依赖，未归档会话预览读取改为纯读且瘦身重字段；撤回成功后前端仅在本地已握有足够最近正式消息时才局部推送当前会话预览，否则不做额外读取或刷新，显著压低撤回耗时
+- 修复（archive-list-title-source-correction）：归档消息列表标题改为优先使用会话自身 `title`，仅在标题为空时才回退到首条用户消息预览，避免归档窗口左侧列表把正文预览误当标题展示
+- 优化（chat-history-page-fast-read-path）：会话补历史/补后续消息这条高频读取链路新增只读快路径；当已明确传入 `conversationId` 时，不再 clone 整份 `AppData` 再切局部消息页，而是直接借用缓存中的会话引用，只克隆目标分页消息并继续做最小 media materialize，显著压低补消息热路径的锁持有与读取耗时
+- 优化（chat-foreground-snapshot-and-tool-review-fast-read-path）：前台轻量快照与工具审查批次读取这两条高频读链继续切到只读快路径，命中 `conversationId` 时统一直接借用缓存中的目标会话引用，不再经由整份 `AppData` clone 后再切片，进一步把切换会话与工具审查面板首读压到近乎瞬时
+- 发布（release-0.9.40）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.40`，纳入本轮已完成的“虚拟滚动补偿与用户消息对齐收口、撤回链与会话预览瘦身、归档标题修正、补消息/轻量快照/工具审查快路径”等更新
+
 ## 发布：v0.9.39
 
 - 优化（chat-virtual-scroll-windowing-and-snapshot-throttle）：聊天窗口虚拟滚动切回更贴近现有成熟实现的 `@tanstack/vue-virtual` 结构，去掉 active turn 自动对齐与相关高频观察器，补齐稳定 `getItemKey`、只针对当前虚拟窗口取首个可见锚点、折叠态思维链/工具卡懒渲染、代码块与布局观察器延后一帧更新，并将首次切屏与向上补历史的消息页大小都收敛到 2 条，显著降低长消息会话中的滚动抖动、连续补历史和上滚卡顿
