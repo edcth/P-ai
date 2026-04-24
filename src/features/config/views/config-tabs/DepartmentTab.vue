@@ -101,6 +101,22 @@
             </div>
 
             <div class="px-4 py-4">
+              <label class="flex items-center justify-between gap-3 rounded-box border border-base-300 bg-base-200/40 px-3 py-3">
+                <div>
+                  <div class="text-sm font-medium">{{ t("config.department.deputyToggle") }}</div>
+                  <div class="mt-1 text-xs opacity-60">{{ t("config.department.deputyToggleHint") }}</div>
+                </div>
+                <input
+                  type="checkbox"
+                  class="toggle toggle-sm toggle-primary"
+                  :checked="!!selectedDepartment.isDeputy"
+                  :disabled="selectedDepartmentIsPrivateWorkspace || selectedDepartment.id === 'deputy-department'"
+                  @change="setSelectedDepartmentDeputy(($event.target as HTMLInputElement).checked)"
+                />
+              </label>
+            </div>
+
+            <div class="px-4 py-4">
               <div class="mb-2 text-[11px] uppercase tracking-wide opacity-40">{{ t("config.department.assignee") }}</div>
               <select
                 class="select select-bordered select-sm w-full"
@@ -109,7 +125,7 @@
                 @change="selectDepartmentAssignee(($event.target as HTMLSelectElement).value)"
               >
                 <option value="">{{ t("config.department.assigneePlaceholder") }}</option>
-                <option v-for="persona in personas" :key="persona.id" :value="persona.id">
+                <option v-for="persona in availableAssigneePersonas" :key="persona.id" :value="persona.id">
                   {{ persona.name }}
                 </option>
               </select>
@@ -469,6 +485,7 @@ function cloneDepartment(department: DepartmentConfig): DepartmentConfig {
     updatedAt: String(department.updatedAt || "").trim(),
     orderIndex: Math.max(1, Number(department.orderIndex || 1)),
     isBuiltInAssistant: !!department.isBuiltInAssistant,
+    isDeputy: !!department.isDeputy || String(department.id || "").trim() === "deputy-department",
     source: String(department.source || "").trim() || "main_config",
     scope: String(department.scope || "").trim() || "global",
     permissionControl: normalizePermissionControl(department.permissionControl),
@@ -490,6 +507,7 @@ function buildDepartmentSnapshot(departments: DepartmentConfig[] | null | undefi
       apiConfigIds: [...item.apiConfigIds],
       agentIds: [...item.agentIds],
       orderIndex: item.orderIndex,
+      isDeputy: !!item.isDeputy,
       permissionControl: item.permissionControl,
     })),
   );
@@ -588,6 +606,37 @@ const skillPermissionListDisabled = computed(() =>
   permissionListDisabled.value || skillPermissionRequiresExec.value,
 );
 
+const nonDeputyAssigneeIds = computed(() => {
+  const ids = new Set<string>();
+  for (const department of departmentDrafts.value) {
+    if (department.id === selectedDepartment.value?.id || department.isDeputy) continue;
+    const id = String(department.agentIds?.[0] || "").trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+});
+
+const deputyAssigneeIds = computed(() => {
+  const ids = new Set<string>();
+  for (const department of departmentDrafts.value) {
+    if (department.id === selectedDepartment.value?.id || !department.isDeputy) continue;
+    const id = String(department.agentIds?.[0] || "").trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+});
+
+const availableAssigneePersonas = computed(() =>
+  props.personas.filter((persona) => {
+    const id = String(persona.id || "").trim();
+    if (!id) return false;
+    if (selectedDepartment.value?.isDeputy) {
+      return !nonDeputyAssigneeIds.value.has(id);
+    }
+    return !deputyAssigneeIds.value.has(id) && id !== "deputy-agent";
+  }),
+);
+
 function ensureDepartmentPermissionControl(target: DepartmentConfig | null | undefined) {
   if (!target) return null;
   if (!target.permissionControl) {
@@ -606,6 +655,7 @@ function departmentComparableSnapshot(department: DepartmentConfig) {
     apiConfigIds: [...department.apiConfigIds],
     agentIds: [...department.agentIds],
     orderIndex: department.orderIndex,
+    isDeputy: !!department.isDeputy,
     permissionControl: department.permissionControl,
   });
 }
@@ -813,6 +863,7 @@ function addDepartment() {
     source: "main_config",
     scope: "global",
     permissionControl: normalizePermissionControl(null),
+    isDeputy: false,
   });
   selectedDepartmentId.value = id;
 }
@@ -876,6 +927,20 @@ function selectDepartmentAssignee(agentId: string) {
   const currentAgentId = target.agentIds[0] || "";
   if (currentAgentId === (newAgentIds[0] || "")) return;
   target.agentIds = newAgentIds;
+  touchSelectedDepartment();
+}
+
+function setSelectedDepartmentDeputy(enabled: boolean) {
+  const target = selectedDepartment.value;
+  if (!target) return;
+  target.isDeputy = target.id === "deputy-department" ? true : enabled;
+  const currentAgentId = String(target.agentIds?.[0] || "").trim();
+  if (target.isDeputy && (!currentAgentId || nonDeputyAssigneeIds.value.has(currentAgentId))) {
+    target.agentIds = ["deputy-agent"];
+  }
+  if (!target.isDeputy && (currentAgentId === "deputy-agent" || deputyAssigneeIds.value.has(currentAgentId))) {
+    target.agentIds = [];
+  }
   touchSelectedDepartment();
 }
 

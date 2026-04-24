@@ -450,12 +450,16 @@
       "moveDown": "Move down",
       "modelFallbackHint": "Tried from top to bottom. If the upper model fails, the next one is used automatically.",
       "allowedModelsNote": "Only models that support text conversations can be selected.",
+      "deputyToggle": "Deputy Department",
+      "deputyToggleHint": "Only deputy departments can receive delegated work. A deputy persona cannot also serve a non-deputy department.",
       "validation": {
         "emptyName": "Department name cannot be empty. Auto-save is paused.",
         "duplicateName": "Department names must be unique. Auto-save is paused.",
         "invalidModel": "Department \"{name}\" contains an invalid driver model. Please reselect it before auto-save resumes.",
         "missingAssistant": "The primary department is missing. Restore it first.",
-        "assistantNeedsModel": "The primary department must have at least one driver model. Auto-save is paused."
+        "assistantNeedsModel": "The primary department must have at least one driver model. Auto-save is paused.",
+        "deputyNeedsAssignee": "Deputy departments must select one deputy persona.",
+        "deputyAgentConflict": "A deputy department persona cannot also serve a non-deputy department."
       },
       "summary": "Department Summary",
       "summaryPlaceholder": "Visible to the leader: what kind of work this department should receive.",

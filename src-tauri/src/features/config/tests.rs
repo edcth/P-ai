@@ -255,6 +255,49 @@
     }
 
     #[test]
+    fn normalize_app_config_should_force_deputy_departments_to_deputy_only_agents() {
+        let mut cfg = AppConfig::default();
+        let mut primary = default_assistant_department("");
+        primary.id = "department-primary".to_string();
+        primary.name = "主部门".to_string();
+        primary.is_built_in_assistant = false;
+        primary.agent_ids = vec!["agent-a".to_string()];
+
+        let mut deputy = default_deputy_department("");
+        deputy.id = "department-deputy-custom".to_string();
+        deputy.name = "临时副手".to_string();
+        deputy.agent_ids = vec!["agent-a".to_string()];
+
+        cfg.departments = vec![primary, deputy];
+
+        normalize_app_config(&mut cfg);
+
+        let primary = cfg
+            .departments
+            .iter()
+            .find(|item| item.id == "department-primary")
+            .expect("primary department");
+        assert!(!primary.is_deputy);
+        assert_eq!(primary.agent_ids, vec!["agent-a".to_string()]);
+
+        let deputy = cfg
+            .departments
+            .iter()
+            .find(|item| item.id == "department-deputy-custom")
+            .expect("custom deputy department");
+        assert!(deputy.is_deputy);
+        assert_eq!(deputy.agent_ids, vec![DEPUTY_AGENT_ID.to_string()]);
+
+        let builtin_deputy = cfg
+            .departments
+            .iter()
+            .find(|item| item.id == DEPUTY_DEPARTMENT_ID)
+            .expect("builtin deputy department");
+        assert!(builtin_deputy.is_deputy);
+        assert_eq!(builtin_deputy.agent_ids, vec![DEPUTY_AGENT_ID.to_string()]);
+    }
+
+    #[test]
     fn normalize_app_config_should_drop_invalid_department_models_without_frontend_fallback() {
         let mut cfg = AppConfig {
             hotkey: "Alt+·".to_string(),
@@ -289,6 +332,7 @@
                     updated_at: "2026-03-10T00:00:00Z".to_string(),
                     order_index: 1,
                     is_built_in_assistant: true,
+                    is_deputy: false,
                     source: default_main_source(),
                     scope: default_global_scope(),
                     permission_control: DepartmentPermissionControl::default(),
@@ -305,6 +349,7 @@
                     updated_at: "2026-03-10T00:00:00Z".to_string(),
                     order_index: 2,
                     is_built_in_assistant: false,
+                    is_deputy: false,
                     source: default_main_source(),
                     scope: default_global_scope(),
                     permission_control: DepartmentPermissionControl::default(),
@@ -438,6 +483,7 @@
                 updated_at: "2026-03-10T00:00:00Z".to_string(),
                 order_index: 1,
                 is_built_in_assistant: true,
+                is_deputy: false,
                 source: default_main_source(),
                 scope: default_global_scope(),
                 permission_control: DepartmentPermissionControl::default(),

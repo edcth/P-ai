@@ -155,6 +155,8 @@ struct DepartmentConfig {
     order_index: i64,
     #[serde(default)]
     is_built_in_assistant: bool,
+    #[serde(default)]
+    is_deputy: bool,
     #[serde(default = "default_main_source")]
     source: String,
     #[serde(default = "default_global_scope")]
@@ -198,6 +200,7 @@ fn default_assistant_department(api_config_id: &str) -> DepartmentConfig {
         updated_at: now,
         order_index: 1,
         is_built_in_assistant: true,
+        is_deputy: false,
         source: default_main_source(),
         scope: default_global_scope(),
         permission_control: DepartmentPermissionControl::default(),
@@ -218,11 +221,12 @@ fn default_deputy_department(api_config_id: &str) -> DepartmentConfig {
             vec![api_config_id.clone()]
         },
         api_config_id,
-        agent_ids: vec![DEFAULT_AGENT_ID.to_string()],
+        agent_ids: vec![DEPUTY_AGENT_ID.to_string()],
         created_at: now.clone(),
         updated_at: now,
         order_index: 2,
         is_built_in_assistant: false,
+        is_deputy: true,
         source: default_main_source(),
         scope: default_global_scope(),
         permission_control: DepartmentPermissionControl::default(),
@@ -248,6 +252,7 @@ fn default_remote_customer_service_department(api_config_id: &str) -> Department
         updated_at: now,
         order_index: 3,
         is_built_in_assistant: false,
+        is_deputy: false,
         source: default_main_source(),
         scope: default_global_scope(),
         permission_control: DepartmentPermissionControl::default(),

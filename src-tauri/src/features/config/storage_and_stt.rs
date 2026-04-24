@@ -826,6 +826,7 @@ fn normalize_departments(config: &mut AppConfig) {
             updated_at: raw.updated_at.trim().to_string(),
             order_index: raw.order_index,
             is_built_in_assistant: raw.is_built_in_assistant || id == ASSISTANT_DEPARTMENT_ID,
+            is_deputy: raw.is_deputy || id == DEPUTY_DEPARTMENT_ID,
             source: if raw.source.trim().is_empty() { default_main_source() } else { raw.source.trim().to_string() },
             scope: if raw.scope.trim().is_empty() { default_global_scope() } else { raw.scope.trim().to_string() },
             permission_control: normalize_department_permission_control(&raw.permission_control),
@@ -879,6 +880,7 @@ fn normalize_departments(config: &mut AppConfig) {
         if item.id == ASSISTANT_DEPARTMENT_ID || item.is_built_in_assistant {
             item.id = ASSISTANT_DEPARTMENT_ID.to_string();
             item.is_built_in_assistant = true;
+            item.is_deputy = false;
             if item.name.trim().is_empty() {
                 item.name = default_assistant_department_name(&config.ui_language);
             }
@@ -887,6 +889,7 @@ fn normalize_departments(config: &mut AppConfig) {
                 item.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
             }
         } else if item.id == DEPUTY_DEPARTMENT_ID {
+            item.is_deputy = true;
             if item.name.trim().is_empty() {
                 item.name = "副手".to_string();
             }
@@ -898,9 +901,10 @@ fn normalize_departments(config: &mut AppConfig) {
             }
             normalize_department_api_bindings(item, &valid_text_chat_api_ids);
             if item.agent_ids.is_empty() {
-                item.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
+                item.agent_ids = vec![DEPUTY_AGENT_ID.to_string()];
             }
         } else if item.id == REMOTE_CUSTOMER_SERVICE_DEPARTMENT_ID {
+            item.is_deputy = false;
             if item.name.trim().is_empty() {
                 item.name = "远程客服".to_string();
             }
@@ -914,6 +918,36 @@ fn normalize_departments(config: &mut AppConfig) {
             if item.agent_ids.is_empty() {
                 item.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
             }
+        }
+    }
+
+    let non_deputy_agent_ids = out
+        .iter()
+        .filter(|department| !department.is_deputy)
+        .flat_map(|department| department.agent_ids.iter())
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<std::collections::HashSet<_>>();
+    for item in &mut out {
+        if !item.is_deputy {
+            item.agent_ids.retain(|id| id.trim() != DEPUTY_AGENT_ID);
+            if (item.id == ASSISTANT_DEPARTMENT_ID || item.is_built_in_assistant)
+                && item.agent_ids.is_empty()
+            {
+                item.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
+            }
+            continue;
+        }
+        let current = item
+            .agent_ids
+            .iter()
+            .find(|id| !id.trim().is_empty())
+            .map(|id| id.trim().to_string())
+            .unwrap_or_default();
+        if current.is_empty() || non_deputy_agent_ids.contains(&current) {
+            item.agent_ids = vec![DEPUTY_AGENT_ID.to_string()];
+        } else {
+            item.agent_ids = vec![current];
         }
     }
 

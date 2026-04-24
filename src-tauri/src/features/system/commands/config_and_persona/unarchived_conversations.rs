@@ -1463,6 +1463,7 @@ mod unarchived_conversations_tests {
             api_config_ids: vec!["api-a".to_string()],
             order_index: 0,
             is_built_in_assistant: false,
+            is_deputy: false,
             created_at: "2026-04-18T10:00:00Z".to_string(),
             updated_at: "2026-04-18T10:00:00Z".to_string(),
             source: "main_config".to_string(),

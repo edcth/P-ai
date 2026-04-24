@@ -782,6 +782,7 @@ fn read_app_data(path: &PathBuf) -> Result<AppData, String> {
         read_legacy_app_data(path)?
     };
     parsed.version = APP_DATA_SCHEMA_VERSION;
+    let builtin_agents_filled = ensure_required_builtin_agents(&mut parsed);
     let conversation_metadata_filled = fill_missing_conversation_metadata(&mut parsed);
     let message_speaker_filled = fill_missing_message_speaker_agent_ids(&mut parsed);
     let avatar_paths_migrated = migrate_agent_avatar_paths(path, &mut parsed);
@@ -789,6 +790,7 @@ fn read_app_data(path: &PathBuf) -> Result<AppData, String> {
     let migrated = migrate_app_data_inline_media_to_refs(path, &mut parsed);
     let main_conversation_marker_changed = normalize_main_conversation_marker(&mut parsed, "");
     if conversation_metadata_filled
+        || builtin_agents_filled
         || message_speaker_filled
         || avatar_paths_migrated
         || merged_archives

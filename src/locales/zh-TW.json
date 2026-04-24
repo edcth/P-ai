@@ -450,12 +450,16 @@
       "moveDown": "下移",
       "modelFallbackHint": "依照由上到下的順序嘗試；上方失敗時會自動切換到下一個。",
       "allowedModelsNote": "僅允許選擇可用於文本對話的模型。",
+      "deputyToggle": "副手部門",
+      "deputyToggleHint": "只有開啟後才能作為委託對象；副手人格不能同時擔任非副手部門。",
       "validation": {
         "emptyName": "部門名稱不能為空，當前不會自動保存。",
         "duplicateName": "部門名稱不能重複，當前不會自動保存。",
         "invalidModel": "部門「{name}」包含無效的驅動模型，請重新選擇後再自動保存。",
         "missingAssistant": "缺少主部門，請先恢復主部門配置。",
-        "assistantNeedsModel": "主部門必須至少配置一個驅動模型，當前不會自動保存。"
+        "assistantNeedsModel": "主部門必須至少配置一個驅動模型，當前不會自動保存。",
+        "deputyNeedsAssignee": "副手部門必須選擇一個副手人格。",
+        "deputyAgentConflict": "副手部門的人格不能同時擔任非副手部門。"
       },
       "summary": "部門概述",
       "summaryPlaceholder": "寫給上級領導看：這個部門適合承接什麼任務。",

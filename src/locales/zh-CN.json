@@ -450,12 +450,16 @@
       "moveDown": "下移",
       "modelFallbackHint": "按从上到下的顺序尝试；上方失败时会自动切换到下一个。",
       "allowedModelsNote": "仅允许选择可用于文本对话的模型。",
+      "deputyToggle": "副手部门",
+      "deputyToggleHint": "只有开启后才能作为委托对象；副手人格不能同时担任非副手部门。",
       "validation": {
         "emptyName": "部门名称不能为空，当前不会自动保存。",
         "duplicateName": "部门名称不能重复，当前不会自动保存。",
         "invalidModel": "部门「{name}」包含无效的驱动模型，请重新选择后再自动保存。",
         "missingAssistant": "缺少主部门，请先恢复主部门配置。",
-        "assistantNeedsModel": "主部门必须至少配置一个驱动模型，当前不会自动保存。"
+        "assistantNeedsModel": "主部门必须至少配置一个驱动模型，当前不会自动保存。",
+        "deputyNeedsAssignee": "副手部门必须选择一个副手人格。",
+        "deputyAgentConflict": "副手部门的人格不能同时担任非副手部门。"
       },
       "summary": "部门概述",
       "summaryPlaceholder": "写给上级领导看：这个部门适合承接什么任务。",

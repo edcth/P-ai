@@ -81,6 +81,7 @@ mod archive_host_selection_tests {
             updated_at: now_iso(),
             order_index: 0,
             is_built_in_assistant: false,
+            is_deputy: false,
             source: default_main_source(),
             scope: default_global_scope(),
             permission_control: DepartmentPermissionControl::default(),

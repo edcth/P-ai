@@ -1599,6 +1599,7 @@ fn prompt_department_context_from_provider_meta(
         .unwrap_or_default();
     let mut available = departments
         .iter()
+        .filter(|department| department.is_deputy)
         .filter(|department| department.id != current_department.id)
         .filter(|department| {
             department
@@ -1634,6 +1635,7 @@ fn build_departments_prompt_block(
         current: prompt_department_card_from_config(department, labels.empty_summary),
         available: departments
             .iter()
+            .filter(|item| item.is_deputy)
             .filter(|item| item.id != department.id)
             .filter(|item| {
                 item.agent_ids

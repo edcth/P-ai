@@ -2,6 +2,7 @@ const APP_DATA_SCHEMA_VERSION: u32 = 1;
 const ARCHIVE_IDLE_SECONDS: i64 = 30 * 60;
 const MAX_MULTIMODAL_BYTES: usize = 10 * 1024 * 1024;
 const DEFAULT_AGENT_ID: &str = "default-agent";
+const DEPUTY_AGENT_ID: &str = "deputy-agent";
 const USER_PERSONA_ID: &str = "user-persona";
 const SYSTEM_PERSONA_ID: &str = "system-persona";
 const ASSISTANT_DEPARTMENT_ID: &str = "assistant-department";

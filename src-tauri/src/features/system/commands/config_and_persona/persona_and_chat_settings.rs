@@ -34,6 +34,11 @@ fn save_agents(
         .iter()
         .find(|a| a.id == SYSTEM_PERSONA_ID)
         .cloned();
+    let existing_deputy_persona = data
+        .agents
+        .iter()
+        .find(|a| a.id == DEPUTY_AGENT_ID)
+        .cloned();
     data.agents = input
         .agents
         .into_iter()
@@ -48,6 +53,10 @@ fn save_agents(
         if let Some(system_persona) = existing_system_persona {
             data.agents.push(system_persona);
         }
+    }
+    if !data.agents.iter().any(|a| a.id == DEPUTY_AGENT_ID) {
+        data.agents
+            .push(existing_deputy_persona.unwrap_or_else(default_deputy_agent));
     }
     let next_ids = data
         .agents

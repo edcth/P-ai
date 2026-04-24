@@ -131,6 +131,7 @@ impl Default for AppData {
             version: APP_DATA_SCHEMA_VERSION,
             agents: vec![
                 default_agent(),
+                default_deputy_agent(),
                 default_user_persona(),
                 default_system_persona(),
             ],

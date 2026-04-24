@@ -165,6 +165,7 @@ export type DepartmentConfig = {
   updatedAt: string;
   orderIndex: number;
   isBuiltInAssistant?: boolean;
+  isDeputy?: boolean;
   source?: string;
   scope?: string;
   permissionControl?: DepartmentPermissionControl;

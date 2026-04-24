@@ -25,6 +25,25 @@ fn default_agent() -> AgentProfile {
     }
 }
 
+fn default_deputy_agent() -> AgentProfile {
+    let now = now_iso();
+    AgentProfile {
+        id: DEPUTY_AGENT_ID.to_string(),
+        name: "副手".to_string(),
+        system_prompt: "你是副手人格。你必须严格按照收到的任务行动，只完成被明确委托的目标；不要主动扩展需求，不发表无关意见，不替上级做额外决策。请用尽可能快的方式完成任务，并在结束时给出详细、结构化、可核查的汇报，包含完成情况、关键步骤、产出、风险或未完成原因。".to_string(),
+        tools: default_agent_tools(),
+        created_at: now.clone(),
+        updated_at: now,
+        avatar_path: None,
+        avatar_updated_at: None,
+        is_built_in_user: false,
+        is_built_in_system: true,
+        private_memory_enabled: false,
+        source: default_main_source(),
+        scope: default_global_scope(),
+    }
+}
+
 fn default_user_persona() -> AgentProfile {
     let now = now_iso();
     AgentProfile {
@@ -97,6 +116,27 @@ fn normalize_agent_tools(agent: &mut AgentProfile) -> bool {
         });
     if changed {
         agent.tools = next;
+    }
+    changed
+}
+
+fn ensure_required_builtin_agents(data: &mut AppData) -> bool {
+    let mut changed = false;
+    if !data.agents.iter().any(|agent| agent.id == DEFAULT_AGENT_ID) {
+        data.agents.push(default_agent());
+        changed = true;
+    }
+    if !data.agents.iter().any(|agent| agent.id == DEPUTY_AGENT_ID) {
+        data.agents.push(default_deputy_agent());
+        changed = true;
+    }
+    if !data.agents.iter().any(|agent| agent.id == USER_PERSONA_ID) {
+        data.agents.push(default_user_persona());
+        changed = true;
+    }
+    if !data.agents.iter().any(|agent| agent.id == SYSTEM_PERSONA_ID) {
+        data.agents.push(default_system_persona());
+        changed = true;
     }
     changed
 }

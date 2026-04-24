@@ -146,6 +146,12 @@ impl ConversationService {
         let target_department = department_by_id(&config, target_department_id)
             .cloned()
             .ok_or_else(|| format!("目标部门不存在，departmentId={target_department_id}"))?;
+        if !target_department.is_deputy {
+            drop(guard);
+            return Err(format!(
+                "目标部门不是副手部门，不能作为委托对象，departmentId={target_department_id}"
+            ));
+        }
         let target_agent_id = target_department
             .agent_ids
             .iter()

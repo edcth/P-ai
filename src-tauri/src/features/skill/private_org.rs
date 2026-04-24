@@ -356,6 +356,7 @@ fn load_private_departments_from_workspace(
             updated_at: now,
             order_index: (merged.len() as i64) + 1,
             is_built_in_assistant: false,
+            is_deputy: false,
             source: default_private_workspace_source(),
             scope: default_assistant_private_scope(),
             permission_control: DepartmentPermissionControl::default(),

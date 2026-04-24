@@ -50,5 +50,22 @@ export function validateDepartmentConfig(
     return t("config.department.validation.missingAssistant");
   }
 
+  const nonDeputyAgentIds = new Set<string>();
+  for (const department of departments) {
+    if (department.isDeputy) continue;
+    const agentId = String(department.agentIds?.[0] || "").trim();
+    if (agentId) nonDeputyAgentIds.add(agentId);
+  }
+  for (const department of departments) {
+    if (!department.isDeputy) continue;
+    const agentId = String(department.agentIds?.[0] || "").trim();
+    if (!agentId) {
+      return t("config.department.validation.deputyNeedsAssignee");
+    }
+    if (nonDeputyAgentIds.has(agentId)) {
+      return t("config.department.validation.deputyAgentConflict");
+    }
+  }
+
   return "";
 }
