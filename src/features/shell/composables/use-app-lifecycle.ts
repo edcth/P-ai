@@ -11,7 +11,9 @@ type UseAppLifecycleOptions = {
   onNativeDragState?: (active: boolean) => void;
   recordHotkeyMount: () => void;
   recordHotkeyUnmount: () => void;
+  beforeRefreshData?: () => Promise<void> | void;
   refreshAllViewData: () => Promise<void>;
+  afterRefreshData?: () => Promise<void> | void;
   viewMode: Ref<"chat" | "archives" | "config">;
   syncWindowControlsState: () => Promise<void>;
   stopRecording: (discard: boolean) => Promise<void>;
@@ -33,7 +35,9 @@ export function useAppLifecycle(options: UseAppLifecycleOptions) {
     window.addEventListener("drop", options.onDrop);
     options.recordHotkeyMount();
     try {
+      await options.beforeRefreshData?.();
       await options.refreshAllViewData();
+      await options.afterRefreshData?.();
       if (options.viewMode.value === "chat") {
         await options.syncWindowControlsState();
       }

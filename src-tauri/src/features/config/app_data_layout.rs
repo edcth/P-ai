@@ -394,6 +394,18 @@ fn read_conversation_shard(path: &PathBuf, conversation_id: &str) -> Result<Conv
     if conversation_id.is_empty() {
         return Err("Conversation id is empty".to_string());
     }
+    let store_paths = message_store::message_store_paths(path, conversation_id)?;
+    if let Some(conversation) =
+        message_store::read_ready_message_store_directory_conversation(&store_paths)?
+    {
+        return Ok(conversation);
+    }
+    if let Some(status) = message_store::read_message_store_manifest_status(&store_paths)? {
+        return Err(format!(
+            "会话消息仓库未处于可读取状态，conversation_id={}，kind={}，state={}",
+            conversation_id, status.message_store_kind, status.migration_state
+        ));
+    }
     let conversation_path = app_layout_chat_conversation_path(path, conversation_id);
     if conversation_path.exists() {
         return read_json_file::<Conversation>(&conversation_path, "conversation file");
@@ -414,6 +426,11 @@ fn read_conversation_shard(path: &PathBuf, conversation_id: &str) -> Result<Conv
 fn write_conversation_shard(path: &PathBuf, conversation: &Conversation) -> Result<bool, String> {
     fs::create_dir_all(app_layout_chat_conversations_dir(path))
         .map_err(|err| format!("Create chat conversations dir failed: {err}"))?;
+    let store_paths = message_store::message_store_paths(path, &conversation.id)?;
+    if message_store::should_write_jsonl_snapshot_directory_shard(&store_paths)? {
+        message_store::write_jsonl_snapshot_directory_shard(&store_paths, conversation)?;
+        return Ok(true);
+    }
     write_json_file_atomic_if_changed(
         &app_layout_chat_conversation_path(path, &conversation.id),
         conversation,
@@ -422,13 +439,12 @@ fn write_conversation_shard(path: &PathBuf, conversation: &Conversation) -> Resu
 }
 
 fn delete_conversation_shard(path: &PathBuf, conversation_id: &str) -> Result<bool, String> {
-    let conversation_path = app_layout_chat_conversation_path(path, conversation_id);
-    if !conversation_path.exists() {
+    let conversation_id = conversation_id.trim();
+    if conversation_id.is_empty() {
         return Ok(false);
     }
-    fs::remove_file(&conversation_path)
-        .map_err(|err| format!("Delete conversation file failed: {err}"))?;
-    Ok(true)
+    let store_paths = message_store::message_store_paths(path, conversation_id)?;
+    message_store::delete_message_store_shard_artifacts(&store_paths)
 }
 
 fn read_chat_index_shard(path: &PathBuf) -> Result<ChatIndexFile, String> {
@@ -500,6 +516,38 @@ fn file_metadata_signature(path: &PathBuf) -> (u64, Option<std::time::SystemTime
     }
 }
 
+fn update_conversation_cache_signature_for_file(
+    conversations: &mut ConversationDirCacheSignature,
+    file_path: &PathBuf,
+    file_name: String,
+) {
+    let Ok(metadata) = fs::metadata(file_path) else {
+        return;
+    };
+    if !metadata.is_file() {
+        return;
+    }
+    conversations.file_count += 1;
+    conversations.total_size = conversations.total_size.saturating_add(metadata.len());
+    let modified = metadata.modified().ok();
+    let should_replace_latest = match (
+        conversations.latest_modified,
+        modified,
+        conversations.latest_file_name.as_str(),
+    ) {
+        (None, Some(_), _) => true,
+        (None, None, current_name) => file_name.as_str() > current_name,
+        (Some(current), Some(next), current_name) => {
+            next > current || (next == current && file_name.as_str() > current_name)
+        }
+        (Some(_), None, _) => false,
+    };
+    if should_replace_latest {
+        conversations.latest_modified = modified;
+        conversations.latest_file_name = file_name;
+    }
+}
+
 fn app_data_cache_signature(path: &PathBuf) -> AppDataCacheSignature {
     let agents_path = app_layout_agents_path(path);
     let runtime_path = app_layout_runtime_state_path(path);
@@ -513,31 +561,44 @@ fn app_data_cache_signature(path: &PathBuf) -> AppDataCacheSignature {
     if let Ok(entries) = fs::read_dir(conversations_dir) {
         for entry in entries.flatten() {
             let entry_path = entry.path();
-            if entry_path.extension().and_then(|value| value.to_str()) != Some("json") {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if entry_path.extension().and_then(|value| value.to_str()) == Some("json") {
+                update_conversation_cache_signature_for_file(
+                    &mut conversations,
+                    &entry_path,
+                    file_name,
+                );
                 continue;
             }
-            let Ok(metadata) = entry.metadata() else {
+            if !entry_path.is_dir() {
                 continue;
-            };
-            conversations.file_count += 1;
-            conversations.total_size = conversations.total_size.saturating_add(metadata.len());
-            let modified = metadata.modified().ok();
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            let should_replace_latest = match (
-                conversations.latest_modified,
-                modified,
-                conversations.latest_file_name.as_str(),
-            ) {
-                (None, Some(_), _) => true,
-                (None, None, current_name) => file_name.as_str() > current_name,
-                (Some(current), Some(next), current_name) => {
-                    next > current || (next == current && file_name.as_str() > current_name)
+            }
+            for shard_file_name in [
+                message_store::MESSAGE_STORE_MANIFEST_FILE_NAME,
+                message_store::MESSAGE_STORE_META_FILE_NAME,
+                message_store::MESSAGE_STORE_MESSAGES_FILE_NAME,
+                message_store::MESSAGE_STORE_INDEX_FILE_NAME,
+            ] {
+                update_conversation_cache_signature_for_file(
+                    &mut conversations,
+                    &entry_path.join(shard_file_name),
+                    format!("{file_name}/{shard_file_name}"),
+                );
+            }
+            let blocks_dir = entry_path.join(message_store::MESSAGE_STORE_BLOCKS_DIR_NAME);
+            if let Ok(block_entries) = fs::read_dir(blocks_dir) {
+                for block_entry in block_entries.flatten() {
+                    let block_path = block_entry.path();
+                    if !block_path.is_file() {
+                        continue;
+                    }
+                    let block_file_name = block_entry.file_name().to_string_lossy().to_string();
+                    update_conversation_cache_signature_for_file(
+                        &mut conversations,
+                        &block_path,
+                        format!("{file_name}/{}/{}", message_store::MESSAGE_STORE_BLOCKS_DIR_NAME, block_file_name),
+                    );
                 }
-                (Some(_), None, _) => false,
-            };
-            if should_replace_latest {
-                conversations.latest_modified = modified;
-                conversations.latest_file_name = file_name;
             }
         }
     }
@@ -726,11 +787,7 @@ fn read_layout_app_data(path: &PathBuf) -> Result<AppData, String> {
         ChatIndexFile::default()
     };
     for item in &index.conversations {
-        let item_path = app_layout_chat_conversation_path(path, &item.id);
-        if !item_path.exists() {
-            continue;
-        }
-        if let Ok(conv) = read_json_file::<Conversation>(&item_path, "conversation file") {
+        if let Ok(conv) = read_conversation_shard(path, &item.id) {
             conversations.push(conv);
         }
     }
@@ -738,12 +795,27 @@ fn read_layout_app_data(path: &PathBuf) -> Result<AppData, String> {
         let conv_dir = app_layout_chat_conversations_dir(path);
         if conv_dir.exists() {
             if let Ok(entries) = fs::read_dir(&conv_dir) {
+                let mut seen_ids = std::collections::HashSet::<String>::new();
                 for entry in entries.flatten() {
                     let p = entry.path();
-                    if p.extension().and_then(|v| v.to_str()) != Some("json") {
+                    let conversation_id = if p.extension().and_then(|v| v.to_str()) == Some("json")
+                    {
+                        p.file_stem()
+                            .and_then(|v| v.to_str())
+                            .unwrap_or_default()
+                            .to_string()
+                    } else if p.is_dir() {
+                        p.file_name()
+                            .and_then(|v| v.to_str())
+                            .unwrap_or_default()
+                            .to_string()
+                    } else {
+                        continue;
+                    };
+                    if conversation_id.trim().is_empty() || !seen_ids.insert(conversation_id.clone()) {
                         continue;
                     }
-                    if let Ok(conv) = read_json_file::<Conversation>(&p, "conversation file") {
+                    if let Ok(conv) = read_conversation_shard(path, &conversation_id) {
                         conversations.push(conv);
                     }
                 }

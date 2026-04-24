@@ -342,6 +342,44 @@
       @remove-workspace="removeChatWorkspace"
       @save="saveChatWorkspacePicker"
     />
+    <div
+      v-if="messageStoreMigration.visible"
+      class="fixed inset-0 z-[9999] flex items-center justify-center bg-base-300/90 p-6 backdrop-blur"
+    >
+      <div class="w-full max-w-2xl rounded-box border border-base-content/10 bg-base-100 p-6 shadow-2xl">
+        <div class="text-xl font-semibold">会话消息仓库迁移</div>
+        <div class="mt-2 text-sm opacity-70">{{ messageStoreMigration.message }}</div>
+        <progress
+          v-if="messageStoreMigration.mode === 'migrating'"
+          class="progress progress-primary mt-5 w-full"
+          :value="messageStoreMigration.current"
+          :max="Math.max(messageStoreMigration.total, 1)"
+        />
+        <div v-if="messageStoreMigration.mode === 'migrating'" class="mt-2 text-xs opacity-60">
+          {{ messageStoreMigration.current }} / {{ messageStoreMigration.total }}
+        </div>
+        <div
+          v-if="messageStoreMigration.blockedItems.length > 0"
+          class="mt-5 max-h-64 space-y-2 overflow-auto rounded-box bg-base-200 p-3"
+        >
+          <div
+            v-for="item in messageStoreMigration.blockedItems"
+            :key="item.conversationId"
+            class="rounded-box bg-base-100 p-3 text-sm"
+          >
+            <div class="font-medium">{{ item.title || item.conversationId }}</div>
+            <div class="mt-1 text-xs opacity-60">{{ item.conversationId }}</div>
+            <div class="mt-2 text-error">{{ item.reason || "未知错误" }}</div>
+          </div>
+        </div>
+        <div v-if="messageStoreMigration.mode === 'blocked'" class="mt-5 flex justify-end gap-3">
+          <button class="btn btn-ghost" @click="cancelMessageStoreMigration">取消启动</button>
+          <button class="btn btn-error" @click="continueMessageStoreMigrationWithDiscard">
+            抛弃异常会话并继续迁移
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 <script setup lang="ts">
@@ -451,6 +489,30 @@ type DetachedChatWindowInfo = {
   conversationId?: string | null;
   windowLabel?: string | null;
 };
+type MessageStoreMigrationPreflightItem = {
+  conversationId: string;
+  title: string;
+  status: string;
+  messageCount: number;
+  reason?: string | null;
+};
+type MessageStoreMigrationPreflightReport = {
+  totalConversations: number;
+  readyCount: number;
+  legacyCount: number;
+  blockedCount: number;
+  canAutoMigrate: boolean;
+  items: MessageStoreMigrationPreflightItem[];
+};
+type MessageStoreMigrationProgressPayload = {
+  current: number;
+  total: number;
+  conversationId: string;
+  title: string;
+  status: string;
+  detail?: string | null;
+};
+type MessageStoreMigrationGateMode = "idle" | "checking" | "migrating" | "blocked" | "error";
 
 const viewMode = ref<"chat" | "archives" | "config">(props.fixedViewMode ?? "config");
 const { t, locale } = useI18n();
@@ -629,6 +691,25 @@ const terminalApprovalQueue = ref<TerminalApprovalRequestPayload[]>([]);
 const terminalApprovalResolving = ref(false);
 const loading = ref(false);
 const saving = ref(false);
+const startupDataReady = ref(false);
+const messageStoreMigration = reactive<{
+  visible: boolean;
+  mode: MessageStoreMigrationGateMode;
+  message: string;
+  current: number;
+  total: number;
+  blockedItems: MessageStoreMigrationPreflightItem[];
+}>({
+  visible: false,
+  mode: "idle",
+  message: "",
+  current: 0,
+  total: 0,
+  blockedItems: [],
+});
+let messageStoreMigrationResolve: (() => void) | null = null;
+let messageStoreMigrationReject: ((error: Error) => void) | null = null;
+let messageStoreMigrationProgressUnlisten: UnlistenFn | null = null;
 const chatting = ref(false);
 const forcingArchive = ref(false);
 const compactingConversation = ref(false);
@@ -3739,6 +3820,10 @@ onBeforeUnmount(() => {
     chatConversationTodosUpdatedUnlisten();
     chatConversationTodosUpdatedUnlisten = null;
   }
+  if (messageStoreMigrationProgressUnlisten) {
+    messageStoreMigrationProgressUnlisten();
+    messageStoreMigrationProgressUnlisten = null;
+  }
   if (chatConversationPinUpdatedUnlisten) {
     chatConversationPinUpdatedUnlisten();
     chatConversationPinUpdatedUnlisten = null;
@@ -3810,7 +3895,7 @@ watch(
       .join("|"),
   }),
   ({ mode }) => {
-    if (mode !== "chat") return;
+    if (mode !== "chat" || !startupDataReady.value) return;
     void refreshChatWorkspaceState();
   },
   { immediate: true },
@@ -4120,7 +4205,7 @@ watch(
     agentId: String(currentForegroundAgentId.value || "").trim(),
   }),
   ({ mode }) => {
-    if (mode !== "chat") return;
+    if (mode !== "chat" || !startupDataReady.value) return;
     void refreshChatUnarchivedConversations().catch((error) => {
       setStatusError("status.loadMessagesFailed", error);
     });
@@ -4134,7 +4219,7 @@ watch(
     conversationId: String(currentChatConversationId.value || "").trim(),
   }),
   ({ mode, conversationId }) => {
-    if (mode !== "chat") return;
+    if (mode !== "chat" || !startupDataReady.value) return;
     console.warn("[聊天追踪][流绑定] 准备绑定", {
       windowLabel: tauriWindowLabel.value,
       conversationId,
@@ -4256,6 +4341,93 @@ function setPromptPreviewDialogRef(el: Element | null) {
   promptPreviewDialog.value = (el as HTMLDialogElement | null) ?? null;
 }
 
+function resetMessageStoreMigrationGate() {
+  messageStoreMigration.visible = false;
+  messageStoreMigration.mode = "idle";
+  messageStoreMigration.message = "";
+  messageStoreMigration.current = 0;
+  messageStoreMigration.total = 0;
+  messageStoreMigration.blockedItems = [];
+}
+
+async function ensureMessageStoreMigrationProgressListener() {
+  if (messageStoreMigrationProgressUnlisten) return;
+  messageStoreMigrationProgressUnlisten = await listen<MessageStoreMigrationProgressPayload>(
+    "easy-call:message-store-migration-progress",
+    (event) => {
+      const payload = event.payload;
+      messageStoreMigration.visible = true;
+      messageStoreMigration.mode = payload.status === "failed" ? "error" : "migrating";
+      messageStoreMigration.current = Number(payload.current || 0);
+      messageStoreMigration.total = Number(payload.total || 0);
+      const title = String(payload.title || payload.conversationId || "").trim();
+      const detail = String(payload.detail || "").trim();
+      messageStoreMigration.message = detail || `正在迁移：${title || "会话"}`;
+    },
+  );
+}
+
+async function runMessageStoreMigrationFromGate(discardInvalid: boolean) {
+  await ensureMessageStoreMigrationProgressListener();
+  messageStoreMigration.visible = true;
+  messageStoreMigration.mode = "migrating";
+  messageStoreMigration.message = discardInvalid
+    ? "正在备份异常会话并继续迁移..."
+    : "正在迁移会话消息仓库...";
+  await invokeTauri("run_message_store_migration", {
+    input: { discardInvalid },
+  });
+  resetMessageStoreMigrationGate();
+}
+
+async function ensureMessageStoreMigrationGate() {
+  await ensureMessageStoreMigrationProgressListener();
+  messageStoreMigration.visible = true;
+  messageStoreMigration.mode = "checking";
+  messageStoreMigration.message = "正在检查会话消息仓库...";
+  const report = await invokeTauri<MessageStoreMigrationPreflightReport>(
+    "check_message_store_migration",
+  );
+  if (report.blockedCount > 0) {
+    messageStoreMigration.mode = "blocked";
+    messageStoreMigration.blockedItems = report.items.filter((item) => item.status === "blocked");
+    messageStoreMigration.message = `发现 ${report.blockedCount} 个异常会话。需要确认是否抛弃异常会话并继续迁移。`;
+    return await new Promise<void>((resolve, reject) => {
+      messageStoreMigrationResolve = resolve;
+      messageStoreMigrationReject = reject;
+    });
+  }
+  if (report.legacyCount > 0) {
+    messageStoreMigration.message = `发现 ${report.legacyCount} 个旧会话，正在迁移...`;
+    await runMessageStoreMigrationFromGate(false);
+    return;
+  }
+  resetMessageStoreMigrationGate();
+}
+
+function cancelMessageStoreMigration() {
+  const error = new Error("用户取消会话消息仓库迁移，启动已暂停。");
+  messageStoreMigration.mode = "error";
+  messageStoreMigration.message = error.message;
+  messageStoreMigrationReject?.(error);
+  messageStoreMigrationResolve = null;
+  messageStoreMigrationReject = null;
+}
+
+async function continueMessageStoreMigrationWithDiscard() {
+  try {
+    await runMessageStoreMigrationFromGate(true);
+    messageStoreMigrationResolve?.();
+  } catch (error) {
+    messageStoreMigration.mode = "error";
+    messageStoreMigration.message = formatI18nError(tr, "status.requestFailed", error);
+    messageStoreMigrationReject?.(error instanceof Error ? error : new Error(String(error)));
+  } finally {
+    messageStoreMigrationResolve = null;
+    messageStoreMigrationReject = null;
+  }
+}
+
 useAppLifecycle({
   appBootstrapMount: appBootstrap.mount,
   appBootstrapUnmount: appBootstrap.unmount,
@@ -4269,7 +4441,11 @@ useAppLifecycle({
   },
   recordHotkeyMount: recordHotkey.mount,
   recordHotkeyUnmount: recordHotkey.unmount,
+  beforeRefreshData: ensureMessageStoreMigrationGate,
   refreshAllViewData,
+  afterRefreshData: () => {
+    startupDataReady.value = true;
+  },
   viewMode,
   syncWindowControlsState,
   stopRecording,

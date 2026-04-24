@@ -229,6 +229,15 @@ fn refresh_cached_app_data_dirty(state: &AppState) {
         .store(dirty, std::sync::atomic::Ordering::Release);
 }
 
+fn conversation_shard_modified_time(
+    data_path: &PathBuf,
+    conversation_id: &str,
+) -> Option<std::time::SystemTime> {
+    message_store::message_store_paths(data_path, conversation_id)
+        .ok()
+        .and_then(|paths| message_store::message_store_shard_modified_time(&paths))
+}
+
 fn state_read_conversation_cached(
     state: &AppState,
     conversation_id: &str,
@@ -259,8 +268,7 @@ fn state_read_conversation_cached(
             return Ok(conversation.clone());
         }
     }
-    let conversation_path = app_layout_chat_conversation_path(&state.data_path, conversation_id);
-    let disk_mtime = path_modified_time(&conversation_path);
+    let disk_mtime = conversation_shard_modified_time(&state.data_path, conversation_id);
     {
         let cached = state
             .cached_conversations
@@ -401,10 +409,7 @@ fn state_write_conversation_cached(
         .lock()
         .map_err(|_| "Failed to lock app data persist write lock".to_string())?;
     let _ = write_conversation_shard(&state.data_path, conversation)?;
-    let disk_mtime = path_modified_time(&app_layout_chat_conversation_path(
-        &state.data_path,
-        &conversation.id,
-    ));
+    let disk_mtime = conversation_shard_modified_time(&state.data_path, &conversation.id);
     {
         let mut cached = state
             .cached_conversations
@@ -897,10 +902,7 @@ fn state_schedule_conversation_persist(
         .conversation_persist_latest_seq
         .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
         + 1;
-    let conversation_disk_mtime = path_modified_time(&app_layout_chat_conversation_path(
-        &state.data_path,
-        &conversation.id,
-    ));
+    let conversation_disk_mtime = conversation_shard_modified_time(&state.data_path, &conversation.id);
     {
         let mut cached = state
             .cached_conversations
@@ -1238,10 +1240,7 @@ fn start_conversation_persist_worker(state: &AppState) -> Result<(), String> {
                         .map(|conversation_id| {
                             (
                                 conversation_id.clone(),
-                                path_modified_time(&app_layout_chat_conversation_path(
-                                    &data_path,
-                                    conversation_id,
-                                )),
+                                conversation_shard_modified_time(&data_path, conversation_id),
                             )
                         })
                         .collect::<Vec<_>>();

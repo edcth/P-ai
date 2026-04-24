@@ -13,3 +13,5 @@ include!("config_and_persona/unarchived_conversations.rs");
 // ==================== 配置迁移 ====================
 include!("config_and_persona/migration.rs");
 
+// ==================== 消息仓库启动迁移 ====================
+include!("config_and_persona/message_store_migration.rs");

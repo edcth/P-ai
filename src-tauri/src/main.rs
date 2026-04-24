@@ -39,6 +39,7 @@ include!("features/core/time_semantics.rs");
 // ==================== 配置与存储 ====================
 include!("features/config/storage_and_stt.rs");
 include!("features/config/app_data_layout.rs");
+include!("features/chat/message_store/mod.rs");
 
 // ==================== 对话核心 ====================
 include!("features/chat/message_semantics.rs");
@@ -464,14 +465,10 @@ fn main() {
             if let Err(err) = warm_hidden_skill_snapshot_cache(app_state.inner()) {
                 eprintln!("[启动] 预热技能快照缓存失败: {err}");
             }
-            let guard = app_state
-                .conversation_lock
-                .lock()
-                .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
-            let data = match state_read_app_data_cached(&app_state) {
+            let data = match state_read_agents_runtime_snapshot(&app_state) {
                 Ok(data) => data,
                 Err(err) => {
-                    eprintln!("[启动] 读取应用数据失败（main::setup）: {err}");
+                    eprintln!("[启动] 读取轻量运行数据失败（main::setup）: {err}");
                     AppData::default()
                 }
             };
@@ -489,7 +486,6 @@ fn main() {
                 .iter()
                 .find(|a| a.id == data.assistant_department_agent_id)
                 .and_then(|a| a.avatar_path.clone());
-            drop(guard);
             let _ = sync_tray_icon_from_avatar_path(&app_handle, avatar_path.as_deref());
             attach_window_layout_persistence(&app_handle);
             hide_on_close(&app_handle);
@@ -550,6 +546,8 @@ fn main() {
             get_app_version,
             get_project_repository_url,
             load_config,
+            check_message_store_migration,
+            run_message_store_migration,
             load_app_bootstrap_snapshot,
             list_system_fonts,
             save_config,

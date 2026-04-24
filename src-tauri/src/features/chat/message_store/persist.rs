@@ -1,0 +1,1351 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MessageStoreDirectorySnapshotWrite {
+    manifest: MessageStoreManifest,
+    message_count: usize,
+    last_message_id: String,
+}
+
+pub(super) fn write_jsonl_snapshot_directory_shard(
+    paths: &MessageStorePaths,
+    conversation: &Conversation,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    let existing_manifest = read_message_store_manifest(&paths.manifest_file)?;
+    if existing_manifest
+        .as_ref()
+        .is_some_and(MessageStoreManifest::should_read_jsonl)
+    {
+        return write_jsonl_snapshot_directory_shard_incremental(paths, conversation);
+    }
+    write_jsonl_snapshot_directory_shard_full(paths, conversation)
+}
+
+fn write_jsonl_snapshot_directory_shard_full(
+    paths: &MessageStorePaths,
+    conversation: &Conversation,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    let expected_last_message_id = conversation
+        .messages
+        .last()
+        .map(|message| message.id.trim().to_string())
+        .unwrap_or_default();
+    let blocks = build_jsonl_snapshot_conversation_blocks_for_conversation(conversation)?;
+    if blocks.message_count != conversation.messages.len()
+        || blocks.last_message_id != expected_last_message_id
+    {
+        return Err(format!(
+            "写入会话块失败：构建结果不一致，conversation_id={}，expected_count={}，actual_count={}，expected_last={}，actual_last={}",
+            paths.conversation_id,
+            conversation.messages.len(),
+            blocks.message_count,
+            expected_last_message_id,
+            blocks.last_message_id
+        ));
+    }
+    let manifest = MessageStoreManifest::jsonl_snapshot_building(conversation)
+        .jsonl_snapshot_ready(blocks.total_bytes, 1);
+    let meta = ConversationShardMeta::from_conversation(conversation);
+
+    write_conversation_shard_meta_atomic(&paths.meta_file, &meta)?;
+    write_jsonl_snapshot_conversation_blocks(paths, &blocks)?;
+    write_message_store_index_atomic(&paths.index_file, &blocks.index)?;
+    write_message_store_manifest_atomic(&paths.manifest_file, &manifest)?;
+
+    Ok(MessageStoreDirectorySnapshotWrite {
+        manifest,
+        message_count: blocks.message_count,
+        last_message_id: blocks.last_message_id,
+    })
+}
+
+fn write_jsonl_snapshot_directory_shard_incremental(
+    paths: &MessageStorePaths,
+    conversation: &Conversation,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    let old_index = (*read_message_store_index_file(&paths.index_file)?).clone();
+    let old_block_ids = ordered_message_store_index_block_ids(&old_index);
+    if old_block_ids.is_empty() {
+        return Err(format!(
+            "增量写入会话块失败：ready 会话缺少旧 block 索引，conversation_id={}",
+            paths.conversation_id
+        ));
+    }
+    let source_blocks = split_conversation_messages_into_blocks(conversation);
+    if source_blocks.is_empty() {
+        return Err(format!(
+            "增量写入会话块失败：ready 会话没有消息，conversation_id={}",
+            paths.conversation_id
+        ));
+    }
+    let old_block_count = old_block_ids.len();
+    let new_block_count = source_blocks.len();
+    if new_block_count < old_block_count {
+        return Err(format!(
+            "增量写入会话块失败：block 数量减少，需要结构性重建，conversation_id={}，old_count={}，new_count={}",
+            paths.conversation_id,
+            old_block_count,
+            new_block_count
+        ));
+    }
+    for (idx, block) in source_blocks.iter().enumerate().take(old_block_count) {
+        if old_block_ids
+            .get(idx)
+            .is_some_and(|old_block_id| Some(*old_block_id) == Some(block.block_id))
+        {
+            continue;
+        }
+        return Err(format!(
+            "增量写入会话块失败：block 顺序不一致，需要结构性重建，conversation_id={}，index={}，old_block={:?}，new_block={}",
+            paths.conversation_id,
+            idx,
+            old_block_ids.get(idx),
+            block.block_file
+        ));
+    }
+
+    let mut rewrite_block_indices = std::collections::BTreeSet::<usize>::new();
+    rewrite_block_indices.insert(new_block_count - 1);
+    for idx in old_block_count..new_block_count {
+        rewrite_block_indices.insert(idx);
+    }
+    if new_block_count > old_block_count {
+        for idx in old_block_count.saturating_sub(2)..new_block_count.saturating_sub(2) {
+            rewrite_block_indices.insert(idx);
+        }
+    }
+
+    fs::create_dir_all(&paths.blocks_dir).map_err(|err| {
+        format!(
+            "创建会话块目录失败，conversation_id={}，path={}，error={err}",
+            paths.conversation_id,
+            paths.blocks_dir.display()
+        )
+    })?;
+    let building_manifest = MessageStoreManifest::jsonl_snapshot_building(conversation);
+    write_message_store_manifest_atomic(&paths.manifest_file, &building_manifest)?;
+
+    let mut next_items = Vec::<MessageStoreIndexItem>::with_capacity(conversation.messages.len());
+    for (idx, block_refs) in source_blocks.iter().enumerate() {
+        if rewrite_block_indices.contains(&idx) {
+            let should_slim = idx < new_block_count.saturating_sub(2);
+            let block = build_jsonl_snapshot_conversation_block(block_refs, should_slim)?;
+            let block_path = paths.shard_dir.join(&block.block_file);
+            write_jsonl_snapshot_atomic(&block_path, &block.content)?;
+            next_items.extend(block.index_items);
+            continue;
+        }
+            next_items.extend(
+                old_index
+                    .items
+                    .iter()
+                    .filter(|item| item.block_id == Some(block_refs.block_id))
+                    .cloned(),
+            );
+    }
+
+    if next_items.len() != conversation.messages.len() {
+        return Err(format!(
+            "增量写入会话块失败：索引消息数量不一致，conversation_id={}，expected={}，actual={}",
+            paths.conversation_id,
+            conversation.messages.len(),
+            next_items.len()
+        ));
+    }
+
+    let next_index = MessageStoreIndexFile::new(MESSAGE_STORE_MANIFEST_VERSION, next_items);
+    cleanup_stale_conversation_block_files(paths, &source_blocks)?;
+    if paths.messages_file.exists() {
+        fs::remove_file(&paths.messages_file).map_err(|err| {
+            format!(
+                "清理旧单文件 JSONL 失败，conversation_id={}，path={}，error={err}",
+                paths.conversation_id,
+                paths.messages_file.display()
+            )
+        })?;
+    }
+
+    let total_bytes = message_store_index_total_bytes(paths, &next_index)?;
+    let last_message_id = next_index
+        .items
+        .last()
+        .map(|item| item.message_id.clone())
+        .unwrap_or_default();
+    let manifest = MessageStoreManifest::jsonl_snapshot_building(conversation)
+        .jsonl_snapshot_ready(total_bytes, 1);
+    let meta = ConversationShardMeta::from_conversation(conversation);
+
+    write_conversation_shard_meta_atomic(&paths.meta_file, &meta)?;
+    write_message_store_index_atomic(&paths.index_file, &next_index)?;
+    write_message_store_manifest_atomic(&paths.manifest_file, &manifest)?;
+
+    Ok(MessageStoreDirectorySnapshotWrite {
+        manifest,
+        message_count: next_index.items.len(),
+        last_message_id,
+    })
+}
+
+fn ordered_message_store_index_block_ids(index: &MessageStoreIndexFile) -> Vec<u32> {
+    let mut out = Vec::<u32>::new();
+    for item in &index.items {
+        let Some(block_id) = item.block_id else {
+            continue;
+        };
+        if out.last().is_some_and(|last| *last == block_id) {
+            continue;
+        }
+        out.push(block_id);
+    }
+    out
+}
+
+fn cleanup_stale_conversation_block_files(
+    paths: &MessageStorePaths,
+    source_blocks: &[ConversationBlockMessageRefs<'_>],
+) -> Result<(), String> {
+    let expected_block_files = source_blocks
+        .iter()
+        .map(|block| block.block_file.clone())
+        .collect::<std::collections::HashSet<_>>();
+    cleanup_stale_conversation_block_files_by_names(paths, &expected_block_files)
+}
+
+fn cleanup_stale_conversation_block_files_by_names(
+    paths: &MessageStorePaths,
+    expected_block_files: &std::collections::HashSet<String>,
+) -> Result<(), String> {
+    if let Ok(entries) = fs::read_dir(&paths.blocks_dir) {
+        for entry in entries.flatten() {
+            let block_path = entry.path();
+            if !block_path.is_file() {
+                continue;
+            }
+            let block_name = entry.file_name().to_string_lossy().to_string();
+            let block_file = format!("{MESSAGE_STORE_BLOCKS_DIR_NAME}/{block_name}");
+            if expected_block_files.contains(&block_file) {
+                continue;
+            }
+            fs::remove_file(&block_path).map_err(|err| {
+                format!(
+                    "清理过期会话块失败，conversation_id={}，path={}，error={err}",
+                    paths.conversation_id,
+                    block_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn write_conversation_directory_meta_shard(
+    paths: &MessageStorePaths,
+    meta: &ConversationPersistMeta,
+) -> Result<(), String> {
+    let shard_meta = ConversationShardMeta::from_persist_meta(meta);
+    write_conversation_shard_meta_atomic(&paths.meta_file, &shard_meta)
+}
+
+pub(super) fn write_jsonl_snapshot_messages_shard(
+    paths: &MessageStorePaths,
+    snapshot: &ConversationPersistMessagesSnapshot,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    let expected_last_message_id = snapshot
+        .messages
+        .last()
+        .map(|message| message.id.trim().to_string())
+        .unwrap_or_default();
+    let blocks = build_jsonl_snapshot_conversation_blocks(&snapshot.messages)?;
+    if blocks.message_count != snapshot.messages.len()
+        || blocks.last_message_id != expected_last_message_id
+    {
+        return Err(format!(
+            "写入会话块失败：消息快照构建结果不一致，conversation_id={}，expected_count={}，actual_count={}，expected_last={}，actual_last={}",
+            paths.conversation_id,
+            snapshot.messages.len(),
+            blocks.message_count,
+            expected_last_message_id,
+            blocks.last_message_id
+        ));
+    }
+    let manifest = MessageStoreManifest::jsonl_snapshot_ready_for_messages(
+        blocks.message_count,
+        blocks.last_message_id.clone(),
+        blocks.total_bytes,
+        1,
+    );
+
+    write_jsonl_snapshot_conversation_blocks(paths, &blocks)?;
+    write_message_store_index_atomic(&paths.index_file, &blocks.index)?;
+    write_message_store_manifest_atomic(&paths.manifest_file, &manifest)?;
+
+    Ok(MessageStoreDirectorySnapshotWrite {
+        manifest,
+        message_count: blocks.message_count,
+        last_message_id: blocks.last_message_id,
+    })
+}
+
+fn write_jsonl_snapshot_conversation_blocks(
+    paths: &MessageStorePaths,
+    blocks: &JsonlSnapshotConversationBlocks,
+) -> Result<(), String> {
+    fs::create_dir_all(&paths.blocks_dir).map_err(|err| {
+        format!(
+            "创建会话块目录失败，conversation_id={}，path={}，error={err}",
+            paths.conversation_id,
+            paths.blocks_dir.display()
+        )
+    })?;
+    for block in &blocks.blocks {
+        let block_path = paths.shard_dir.join(&block.block_file);
+        write_jsonl_snapshot_atomic(&block_path, &block.content)?;
+    }
+    let expected_block_files = blocks
+        .blocks
+        .iter()
+        .map(|block| block.block_file.clone())
+        .collect::<std::collections::HashSet<_>>();
+    cleanup_stale_conversation_block_files_by_names(paths, &expected_block_files)?;
+    if paths.messages_file.exists() {
+        fs::remove_file(&paths.messages_file).map_err(|err| {
+            format!(
+                "清理旧单文件 JSONL 失败，conversation_id={}，path={}，error={err}",
+                paths.conversation_id,
+                paths.messages_file.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub(super) fn write_jsonl_snapshot_appended_message_shard(
+    paths: &MessageStorePaths,
+    meta: &ConversationPersistMeta,
+    message: &ChatMessage,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    write_jsonl_snapshot_appended_messages_shard(paths, &[(meta, message)], Some(meta))
+}
+
+pub(super) fn write_jsonl_snapshot_appended_messages_shard(
+    paths: &MessageStorePaths,
+    entries: &[(&ConversationPersistMeta, &ChatMessage)],
+    final_meta: Option<&ConversationPersistMeta>,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    if entries.is_empty() {
+        return Err(format!(
+            "追加 JSONL 消息失败：追加列表为空，conversation_id={}",
+            paths.conversation_id
+        ));
+    }
+    for (meta, _) in entries {
+        if meta.conversation_id() != paths.conversation_id {
+            return Err(format!(
+                "追加 JSONL 消息失败：meta 会话 ID 不一致，expected={}，actual={}",
+                paths.conversation_id,
+                meta.conversation_id()
+            ));
+        }
+    }
+    if let Some(meta) = final_meta {
+        if meta.conversation_id() != paths.conversation_id {
+            return Err(format!(
+                "追加 JSONL 消息失败：final meta 会话 ID 不一致，expected={}，actual={}",
+                paths.conversation_id,
+                meta.conversation_id()
+            ));
+        }
+    }
+    let final_meta = final_meta
+        .or_else(|| entries.last().map(|(meta, _)| *meta))
+        .ok_or_else(|| "追加 JSONL 消息失败：缺少最终 meta".to_string())?;
+    let manifest = read_message_store_manifest(&paths.manifest_file)?
+        .ok_or_else(|| format!("追加 JSONL 消息失败：缺少 manifest，conversation_id={}", paths.conversation_id))?;
+    if !manifest.should_read_jsonl() {
+        return Err(format!(
+            "追加 JSONL 消息失败：目录型会话未处于 ready JSONL 状态，conversation_id={}",
+            paths.conversation_id
+        ));
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    let mut index = (*read_message_store_index_file(&paths.index_file)?).clone();
+    let mut encoded_entries = Vec::<String>::with_capacity(entries.len());
+    let mut next_offset = manifest.messages_jsonl_bytes;
+    for (_, message) in entries {
+        if find_index_item_position(&index, &message.id).is_some() {
+            return Err(format!(
+                "追加 JSONL 消息失败：消息 ID 已存在，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                message.id
+            ));
+        }
+        let encoded = encode_jsonl_snapshot_message(message)?;
+        let byte_len = encoded.as_bytes().len() as u64;
+        let item = message_store_index_item_for_message(message, next_offset, byte_len);
+        index.items.push(item);
+        next_offset += byte_len;
+        encoded_entries.push(encoded);
+    }
+    index.rebuild_position_lookup();
+    validate_message_store_index_file(&paths.index_file, &index)?;
+
+    if let Some(parent) = paths.messages_file.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "创建 JSONL 消息目录失败，path={}，error={err}",
+                parent.display()
+            )
+        })?;
+    }
+    let tmp_path = paths.messages_file.with_extension(format!("jsonl.tmp.{}", Uuid::new_v4()));
+    {
+        let mut source = fs::File::open(&paths.messages_file).map_err(|err| {
+            format!(
+                "打开 JSONL 消息文件失败，path={}，error={err}",
+                paths.messages_file.display()
+            )
+        })?;
+        let mut target = fs::File::create(&tmp_path).map_err(|err| {
+            format!(
+                "创建 JSONL 消息临时文件失败，path={}，error={err}",
+                tmp_path.display()
+            )
+        })?;
+        std::io::copy(&mut source, &mut target).map_err(|err| {
+            format!(
+                "复制 JSONL 消息文件失败，source={}，tmp={}，error={err}",
+                paths.messages_file.display(),
+                tmp_path.display()
+            )
+        })?;
+        for ((_, message), encoded) in entries.iter().zip(encoded_entries.iter()) {
+            std::io::Write::write_all(&mut target, encoded.as_bytes()).map_err(|err| {
+                format!(
+                    "追加 JSONL 消息临时文件失败，path={}，message_id={}，error={err}",
+                    tmp_path.display(),
+                    message.id
+                )
+            })?;
+        }
+    }
+
+    let last_message_id = entries
+        .last()
+        .map(|(_, message)| message.id.trim().to_string())
+        .unwrap_or_default();
+    let next_manifest = MessageStoreManifest::jsonl_snapshot_ready_for_messages(
+        index.items.len(),
+        last_message_id.clone(),
+        next_offset,
+        manifest.messages_index_revision + 1,
+    );
+    let mut building_manifest = manifest.clone();
+    building_manifest.migration_state = MessageStoreMigrationState::Building;
+    building_manifest.updated_at = now_iso();
+    write_message_store_manifest_atomic(&paths.manifest_file, &building_manifest)?;
+    write_conversation_directory_meta_shard(paths, final_meta)?;
+    replace_message_store_file_atomic(&tmp_path, &paths.messages_file, "JSONL 消息")?;
+    write_message_store_index_atomic(&paths.index_file, &index)?;
+    write_message_store_manifest_atomic(&paths.manifest_file, &next_manifest)?;
+
+    Ok(MessageStoreDirectorySnapshotWrite {
+        manifest: next_manifest,
+        message_count: index.items.len(),
+        last_message_id,
+    })
+}
+
+pub(super) fn write_jsonl_snapshot_truncated_messages_shard(
+    paths: &MessageStorePaths,
+    meta: &ConversationPersistMeta,
+    keep_count: usize,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    if meta.conversation_id() != paths.conversation_id {
+        return Err(format!(
+            "截断 JSONL 消息失败：meta 会话 ID 不一致，expected={}，actual={}",
+            paths.conversation_id,
+            meta.conversation_id()
+        ));
+    }
+    let manifest = read_message_store_manifest(&paths.manifest_file)?.ok_or_else(|| {
+        format!(
+            "截断 JSONL 消息失败：缺少 manifest，conversation_id={}",
+            paths.conversation_id
+        )
+    })?;
+    if !manifest.should_read_jsonl() {
+        return Err(format!(
+            "截断 JSONL 消息失败：目录型会话未处于 ready JSONL 状态，conversation_id={}",
+            paths.conversation_id
+        ));
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    let mut index = (*read_message_store_index_file(&paths.index_file)?).clone();
+    if keep_count > index.items.len() {
+        return Err(format!(
+            "截断 JSONL 消息失败：保留数量超过当前消息数，conversation_id={}，keep_count={}，message_count={}",
+            paths.conversation_id,
+            keep_count,
+            index.items.len()
+        ));
+    }
+    let keep_bytes = if keep_count == 0 {
+        0
+    } else {
+        let item = &index.items[keep_count - 1];
+        item.offset.checked_add(item.byte_len).ok_or_else(|| {
+            format!(
+                "截断 JSONL 消息失败：offset 溢出，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                item.message_id
+            )
+        })?
+    };
+    if keep_bytes > manifest.messages_jsonl_bytes {
+        return Err(format!(
+            "截断 JSONL 消息失败：保留字节超过 manifest 大小，conversation_id={}，keep_bytes={}，manifest_bytes={}",
+            paths.conversation_id,
+            keep_bytes,
+            manifest.messages_jsonl_bytes
+        ));
+    }
+
+    index.items.truncate(keep_count);
+    index.rebuild_position_lookup();
+    validate_message_store_index_file(&paths.index_file, &index)?;
+
+    if let Some(parent) = paths.messages_file.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "创建 JSONL 消息目录失败，path={}，error={err}",
+                parent.display()
+            )
+        })?;
+    }
+    let tmp_path = paths.messages_file.with_extension(format!("jsonl.tmp.{}", Uuid::new_v4()));
+    {
+        let source = fs::File::open(&paths.messages_file).map_err(|err| {
+            format!(
+                "打开 JSONL 消息文件失败，path={}，error={err}",
+                paths.messages_file.display()
+            )
+        })?;
+        let mut target = fs::File::create(&tmp_path).map_err(|err| {
+            format!(
+                "创建 JSONL 消息临时文件失败，path={}，error={err}",
+                tmp_path.display()
+            )
+        })?;
+        let mut limited = std::io::Read::take(source, keep_bytes);
+        std::io::copy(&mut limited, &mut target).map_err(|err| {
+            format!(
+                "复制 JSONL 消息前缀失败，source={}，tmp={}，bytes={}，error={err}",
+                paths.messages_file.display(),
+                tmp_path.display(),
+                keep_bytes
+            )
+        })?;
+    }
+
+    let last_message_id = index
+        .items
+        .last()
+        .map(|item| item.message_id.trim().to_string())
+        .unwrap_or_default();
+    let next_manifest = MessageStoreManifest::jsonl_snapshot_ready_for_messages(
+        index.items.len(),
+        last_message_id.clone(),
+        keep_bytes,
+        manifest.messages_index_revision + 1,
+    );
+    let mut building_manifest = manifest.clone();
+    building_manifest.migration_state = MessageStoreMigrationState::Building;
+    building_manifest.updated_at = now_iso();
+    write_message_store_manifest_atomic(&paths.manifest_file, &building_manifest)?;
+    write_conversation_directory_meta_shard(paths, meta)?;
+    replace_message_store_file_atomic(&tmp_path, &paths.messages_file, "JSONL 消息")?;
+    write_message_store_index_atomic(&paths.index_file, &index)?;
+    write_message_store_manifest_atomic(&paths.manifest_file, &next_manifest)?;
+
+    Ok(MessageStoreDirectorySnapshotWrite {
+        manifest: next_manifest,
+        message_count: index.items.len(),
+        last_message_id,
+    })
+}
+
+pub(super) fn write_jsonl_snapshot_replaced_message_shard(
+    paths: &MessageStorePaths,
+    meta: &ConversationPersistMeta,
+    message: &ChatMessage,
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    if meta.conversation_id() != paths.conversation_id {
+        return Err(format!(
+            "替换 JSONL 消息失败：meta 会话 ID 不一致，expected={}，actual={}",
+            paths.conversation_id,
+            meta.conversation_id()
+        ));
+    }
+    let manifest = read_message_store_manifest(&paths.manifest_file)?.ok_or_else(|| {
+        format!(
+            "替换 JSONL 消息失败：缺少 manifest，conversation_id={}",
+            paths.conversation_id
+        )
+    })?;
+    if !manifest.should_read_jsonl() {
+        return Err(format!(
+            "替换 JSONL 消息失败：目录型会话未处于 ready JSONL 状态，conversation_id={}",
+            paths.conversation_id
+        ));
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    let mut index = (*read_message_store_index_file(&paths.index_file)?).clone();
+    let Some(position) = find_index_item_position(&index, &message.id) else {
+        return Err(format!(
+            "替换 JSONL 消息失败：消息不存在，conversation_id={}，message_id={}",
+            paths.conversation_id,
+            message.id
+        ));
+    };
+    let old_item = index.items[position].clone();
+    let old_end = old_item.offset.checked_add(old_item.byte_len).ok_or_else(|| {
+        format!(
+            "替换 JSONL 消息失败：旧 offset 溢出，conversation_id={}，message_id={}",
+            paths.conversation_id,
+            old_item.message_id
+        )
+    })?;
+    let encoded = encode_jsonl_snapshot_message(message)?;
+    let new_len = encoded.as_bytes().len() as u64;
+    let delta = i128::from(new_len) - i128::from(old_item.byte_len);
+
+    index.items[position] = message_store_index_item_for_message(message, old_item.offset, new_len);
+    for item in index.items.iter_mut().skip(position + 1) {
+        let next_offset = i128::from(item.offset) + delta;
+        if next_offset < 0 || next_offset > i128::from(u64::MAX) {
+            return Err(format!(
+                "替换 JSONL 消息失败：offset 调整溢出，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                item.message_id
+            ));
+        }
+        item.offset = next_offset as u64;
+    }
+    index.rebuild_position_lookup();
+    validate_message_store_index_file(&paths.index_file, &index)?;
+
+    if let Some(parent) = paths.messages_file.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "创建 JSONL 消息目录失败，path={}，error={err}",
+                parent.display()
+            )
+        })?;
+    }
+    let tmp_path = paths.messages_file.with_extension(format!("jsonl.tmp.{}", Uuid::new_v4()));
+    {
+        let mut source = fs::File::open(&paths.messages_file).map_err(|err| {
+            format!(
+                "打开 JSONL 消息文件失败，path={}，error={err}",
+                paths.messages_file.display()
+            )
+        })?;
+        let mut target = fs::File::create(&tmp_path).map_err(|err| {
+            format!(
+                "创建 JSONL 消息临时文件失败，path={}，error={err}",
+                tmp_path.display()
+            )
+        })?;
+        std::io::copy(&mut std::io::Read::by_ref(&mut source).take(old_item.offset), &mut target)
+            .map_err(|err| {
+                format!(
+                    "复制 JSONL 消息替换前缀失败，source={}，tmp={}，message_id={}，error={err}",
+                    paths.messages_file.display(),
+                    tmp_path.display(),
+                    message.id
+                )
+            })?;
+        std::io::Write::write_all(&mut target, encoded.as_bytes()).map_err(|err| {
+            format!(
+                "写入 JSONL 替换消息失败，path={}，message_id={}，error={err}",
+                tmp_path.display(),
+                message.id
+            )
+        })?;
+        std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(old_end)).map_err(|err| {
+            format!(
+                "定位 JSONL 消息替换后缀失败，path={}，offset={}，error={err}",
+                paths.messages_file.display(),
+                old_end
+            )
+        })?;
+        std::io::copy(&mut source, &mut target).map_err(|err| {
+            format!(
+                "复制 JSONL 消息替换后缀失败，source={}，tmp={}，message_id={}，error={err}",
+                paths.messages_file.display(),
+                tmp_path.display(),
+                message.id
+            )
+        })?;
+    }
+
+    let next_bytes = if delta.is_negative() {
+        manifest
+            .messages_jsonl_bytes
+            .checked_sub(delta.unsigned_abs() as u64)
+            .ok_or_else(|| {
+                format!(
+                    "替换 JSONL 消息失败：文件大小调整下溢，conversation_id={}",
+                    paths.conversation_id
+                )
+            })?
+    } else {
+        manifest
+            .messages_jsonl_bytes
+            .checked_add(delta as u64)
+            .ok_or_else(|| {
+                format!(
+                    "替换 JSONL 消息失败：文件大小调整溢出，conversation_id={}",
+                    paths.conversation_id
+                )
+            })?
+    };
+    let last_message_id = index
+        .items
+        .last()
+        .map(|item| item.message_id.trim().to_string())
+        .unwrap_or_default();
+    let next_manifest = MessageStoreManifest::jsonl_snapshot_ready_for_messages(
+        index.items.len(),
+        last_message_id.clone(),
+        next_bytes,
+        manifest.messages_index_revision + 1,
+    );
+    let mut building_manifest = manifest.clone();
+    building_manifest.migration_state = MessageStoreMigrationState::Building;
+    building_manifest.updated_at = now_iso();
+    write_message_store_manifest_atomic(&paths.manifest_file, &building_manifest)?;
+    write_conversation_directory_meta_shard(paths, meta)?;
+    replace_message_store_file_atomic(&tmp_path, &paths.messages_file, "JSONL 消息")?;
+    write_message_store_index_atomic(&paths.index_file, &index)?;
+    write_message_store_manifest_atomic(&paths.manifest_file, &next_manifest)?;
+
+    Ok(MessageStoreDirectorySnapshotWrite {
+        manifest: next_manifest,
+        message_count: index.items.len(),
+        last_message_id,
+    })
+}
+
+pub(super) fn write_jsonl_snapshot_spliced_messages_shard(
+    paths: &MessageStorePaths,
+    meta: &ConversationPersistMeta,
+    start_index: usize,
+    delete_count: usize,
+    inserted_messages: &[ChatMessage],
+) -> Result<MessageStoreDirectorySnapshotWrite, String> {
+    if meta.conversation_id() != paths.conversation_id {
+        return Err(format!(
+            "拼接 JSONL 消息失败：meta 会话 ID 不一致，expected={}，actual={}",
+            paths.conversation_id,
+            meta.conversation_id()
+        ));
+    }
+    let manifest = read_message_store_manifest(&paths.manifest_file)?.ok_or_else(|| {
+        format!(
+            "拼接 JSONL 消息失败：缺少 manifest，conversation_id={}",
+            paths.conversation_id
+        )
+    })?;
+    if !manifest.should_read_jsonl() {
+        return Err(format!(
+            "拼接 JSONL 消息失败：目录型会话未处于 ready JSONL 状态，conversation_id={}",
+            paths.conversation_id
+        ));
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    let mut old_index = (*read_message_store_index_file(&paths.index_file)?).clone();
+    let old_len = old_index.items.len();
+    if start_index > old_len || delete_count > old_len.saturating_sub(start_index) {
+        return Err(format!(
+            "拼接 JSONL 消息失败：范围越界，conversation_id={}，start_index={}，delete_count={}，message_count={}",
+            paths.conversation_id,
+            start_index,
+            delete_count,
+            old_len
+        ));
+    }
+    let prefix_bytes = if start_index == 0 {
+        0
+    } else {
+        let item = &old_index.items[start_index - 1];
+        item.offset.checked_add(item.byte_len).ok_or_else(|| {
+            format!(
+                "拼接 JSONL 消息失败：前缀 offset 溢出，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                item.message_id
+            )
+        })?
+    };
+    let suffix_start_index = start_index + delete_count;
+    let suffix_bytes = if delete_count == 0 {
+        prefix_bytes
+    } else {
+        let item = &old_index.items[suffix_start_index - 1];
+        item.offset.checked_add(item.byte_len).ok_or_else(|| {
+            format!(
+                "拼接 JSONL 消息失败：删除段 offset 溢出，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                item.message_id
+            )
+        })?
+    };
+
+    let mut next_items = Vec::<MessageStoreIndexItem>::with_capacity(
+        old_len - delete_count + inserted_messages.len(),
+    );
+    next_items.extend(old_index.items[..start_index].iter().cloned());
+    let mut encoded_inserted = Vec::<String>::with_capacity(inserted_messages.len());
+    let mut next_offset = prefix_bytes;
+    for message in inserted_messages {
+        let message_id = message.id.trim();
+        if message_id.is_empty() {
+            return Err(format!(
+                "拼接 JSONL 消息失败：插入消息 ID 为空，conversation_id={}",
+                paths.conversation_id
+            ));
+        }
+        if next_items
+            .iter()
+            .any(|item| item.message_id.trim() == message_id)
+            || old_index.items[suffix_start_index..]
+                .iter()
+                .any(|item| item.message_id.trim() == message_id)
+        {
+            return Err(format!(
+                "拼接 JSONL 消息失败：消息 ID 冲突，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                message_id
+            ));
+        }
+        let encoded = encode_jsonl_snapshot_message(message)?;
+        let byte_len = encoded.as_bytes().len() as u64;
+        next_items.push(message_store_index_item_for_message(message, next_offset, byte_len));
+        next_offset = next_offset.checked_add(byte_len).ok_or_else(|| {
+            format!(
+                "拼接 JSONL 消息失败：插入 offset 溢出，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                message_id
+            )
+        })?;
+        encoded_inserted.push(encoded);
+    }
+    let delta = i128::from(next_offset) - i128::from(suffix_bytes);
+    for item in old_index.items[suffix_start_index..].iter().cloned() {
+        let shifted_offset = i128::from(item.offset) + delta;
+        if shifted_offset < 0 || shifted_offset > i128::from(u64::MAX) {
+            return Err(format!(
+                "拼接 JSONL 消息失败：后缀 offset 调整溢出，conversation_id={}，message_id={}",
+                paths.conversation_id,
+                item.message_id
+            ));
+        }
+        let mut shifted = item;
+        shifted.offset = shifted_offset as u64;
+        next_items.push(shifted);
+    }
+    old_index.items = next_items;
+    old_index.rebuild_position_lookup();
+    validate_message_store_index_file(&paths.index_file, &old_index)?;
+
+    if let Some(parent) = paths.messages_file.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "创建 JSONL 消息目录失败，path={}，error={err}",
+                parent.display()
+            )
+        })?;
+    }
+    let tmp_path = paths.messages_file.with_extension(format!("jsonl.tmp.{}", Uuid::new_v4()));
+    {
+        let mut source = fs::File::open(&paths.messages_file).map_err(|err| {
+            format!(
+                "打开 JSONL 消息文件失败，path={}，error={err}",
+                paths.messages_file.display()
+            )
+        })?;
+        let mut target = fs::File::create(&tmp_path).map_err(|err| {
+            format!(
+                "创建 JSONL 消息临时文件失败，path={}，error={err}",
+                tmp_path.display()
+            )
+        })?;
+        std::io::copy(&mut std::io::Read::by_ref(&mut source).take(prefix_bytes), &mut target)
+            .map_err(|err| {
+                format!(
+                    "复制 JSONL 拼接前缀失败，source={}，tmp={}，error={err}",
+                    paths.messages_file.display(),
+                    tmp_path.display()
+                )
+            })?;
+        for (message, encoded) in inserted_messages.iter().zip(encoded_inserted.iter()) {
+            std::io::Write::write_all(&mut target, encoded.as_bytes()).map_err(|err| {
+                format!(
+                    "写入 JSONL 拼接消息失败，path={}，message_id={}，error={err}",
+                    tmp_path.display(),
+                    message.id
+                )
+            })?;
+        }
+        std::io::Seek::seek(&mut source, std::io::SeekFrom::Start(suffix_bytes)).map_err(|err| {
+            format!(
+                "定位 JSONL 拼接后缀失败，path={}，offset={}，error={err}",
+                paths.messages_file.display(),
+                suffix_bytes
+            )
+        })?;
+        std::io::copy(&mut source, &mut target).map_err(|err| {
+            format!(
+                "复制 JSONL 拼接后缀失败，source={}，tmp={}，error={err}",
+                paths.messages_file.display(),
+                tmp_path.display()
+            )
+        })?;
+    }
+
+    let next_bytes = if delta.is_negative() {
+        manifest
+            .messages_jsonl_bytes
+            .checked_sub(delta.unsigned_abs() as u64)
+            .ok_or_else(|| {
+                format!(
+                    "拼接 JSONL 消息失败：文件大小调整下溢，conversation_id={}",
+                    paths.conversation_id
+                )
+            })?
+    } else {
+        manifest
+            .messages_jsonl_bytes
+            .checked_add(delta as u64)
+            .ok_or_else(|| {
+                format!(
+                    "拼接 JSONL 消息失败：文件大小调整溢出，conversation_id={}",
+                    paths.conversation_id
+                )
+            })?
+    };
+    let last_message_id = old_index
+        .items
+        .last()
+        .map(|item| item.message_id.trim().to_string())
+        .unwrap_or_default();
+    let next_manifest = MessageStoreManifest::jsonl_snapshot_ready_for_messages(
+        old_index.items.len(),
+        last_message_id.clone(),
+        next_bytes,
+        manifest.messages_index_revision + 1,
+    );
+    let mut building_manifest = manifest.clone();
+    building_manifest.migration_state = MessageStoreMigrationState::Building;
+    building_manifest.updated_at = now_iso();
+    write_message_store_manifest_atomic(&paths.manifest_file, &building_manifest)?;
+    write_conversation_directory_meta_shard(paths, meta)?;
+    replace_message_store_file_atomic(&tmp_path, &paths.messages_file, "JSONL 消息")?;
+    write_message_store_index_atomic(&paths.index_file, &old_index)?;
+    write_message_store_manifest_atomic(&paths.manifest_file, &next_manifest)?;
+
+    Ok(MessageStoreDirectorySnapshotWrite {
+        manifest: next_manifest,
+        message_count: old_index.items.len(),
+        last_message_id,
+    })
+}
+
+pub(super) fn should_write_jsonl_snapshot_directory_shard(
+    paths: &MessageStorePaths,
+) -> Result<bool, String> {
+    Ok(read_message_store_manifest(&paths.manifest_file)?
+        .map(|manifest| manifest.should_write_jsonl_snapshot())
+        .unwrap_or(false))
+}
+
+pub(super) fn write_jsonl_snapshot_building_manifest(
+    paths: &MessageStorePaths,
+    conversation: &Conversation,
+) -> Result<(), String> {
+    write_message_store_manifest_atomic(
+        &paths.manifest_file,
+        &MessageStoreManifest::jsonl_snapshot_building(conversation),
+    )
+}
+
+#[cfg(test)]
+mod message_store_persist_tests {
+    use super::*;
+
+    fn test_message(id: &str) -> ChatMessage {
+        ChatMessage {
+            id: id.to_string(),
+            role: "user".to_string(),
+            created_at: "2026-04-24T00:00:00Z".to_string(),
+            speaker_agent_id: None,
+            parts: vec![MessagePart::Text {
+                text: format!("message {id}"),
+            }],
+            extra_text_blocks: Vec::new(),
+            provider_meta: None,
+            tool_call: None,
+            mcp_call: None,
+        }
+    }
+
+    fn test_conversation(messages: Vec<ChatMessage>) -> Conversation {
+        Conversation {
+            id: "conversation-persist".to_string(),
+            title: "persist".to_string(),
+            agent_id: DEFAULT_AGENT_ID.to_string(),
+            department_id: ASSISTANT_DEPARTMENT_ID.to_string(),
+            bound_conversation_id: None,
+            parent_conversation_id: None,
+            child_conversation_ids: Vec::new(),
+            fork_message_cursor: None,
+            last_read_message_id: String::new(),
+            conversation_kind: String::new(),
+            root_conversation_id: None,
+            delegate_id: None,
+            created_at: "2026-04-24T00:00:00Z".to_string(),
+            updated_at: "2026-04-24T00:00:00Z".to_string(),
+            last_user_at: None,
+            last_assistant_at: None,
+            status: String::new(),
+            summary: String::new(),
+            user_profile_snapshot: String::new(),
+            shell_workspace_path: None,
+            shell_workspaces: Vec::new(),
+            archived_at: None,
+            messages,
+            current_todos: Vec::new(),
+            memory_recall_table: Vec::new(),
+            plan_mode_enabled: false,
+        }
+    }
+
+    #[test]
+    fn message_store_persist_should_write_directory_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-persist-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let conversation = test_conversation(vec![test_message("m1"), test_message("m2")]);
+
+        let write = write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+        let loaded = read_message_store_directory_conversation(&paths)
+            .expect("read directory snapshot");
+
+        assert_eq!(write.message_count, 2);
+        assert_eq!(write.last_message_id, "m2");
+        assert!(write.manifest.should_read_jsonl());
+        assert_eq!(loaded.messages.len(), 2);
+        assert!(paths.meta_file.exists());
+        assert!(paths.messages_file.exists());
+        assert!(paths.index_file.exists());
+        assert!(paths.manifest_file.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_should_update_meta_without_touching_messages() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-meta-only-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let mut conversation = test_conversation(vec![test_message("m1"), test_message("m2")]);
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+        let messages_before = fs::read_to_string(&paths.messages_file).expect("read messages before");
+        conversation.title = "updated title".to_string();
+        conversation.messages.push(test_message("m3"));
+        let meta = ConversationPersistMeta::from_conversation(&conversation);
+
+        write_conversation_directory_meta_shard(&paths, &meta).expect("write meta only");
+        let loaded_meta = read_conversation_shard_meta(&paths.meta_file).expect("read meta");
+        let messages_after = fs::read_to_string(&paths.messages_file).expect("read messages after");
+
+        assert_eq!(loaded_meta.title, "updated title");
+        assert_eq!(messages_after, messages_before);
+        assert!(!messages_after.contains("m3"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_should_update_messages_without_touching_meta() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-messages-only-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let conversation = test_conversation(vec![test_message("m1")]);
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+        let meta_before = fs::read_to_string(&paths.meta_file).expect("read meta before");
+        let updated = test_conversation(vec![test_message("m1"), test_message("m2")]);
+        let snapshot = ConversationPersistMessagesSnapshot::from_conversation(&updated);
+
+        let write = write_jsonl_snapshot_messages_shard(&paths, &snapshot)
+            .expect("write messages only");
+        let meta_after = fs::read_to_string(&paths.meta_file).expect("read meta after");
+        let loaded = read_message_store_directory_conversation(&paths)
+            .expect("read directory snapshot");
+
+        assert_eq!(write.message_count, 2);
+        assert_eq!(write.last_message_id, "m2");
+        assert_eq!(meta_after, meta_before);
+        assert_eq!(
+            loaded.messages.iter().map(|message| message.id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2"]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_should_append_message_without_decoding_existing_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-append-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let conversation = test_conversation(vec![test_message("m1"), test_message("m2")]);
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+
+        let mut updated = conversation.clone();
+        let appended = test_message("m3");
+        updated.updated_at = appended.created_at.clone();
+        updated.last_assistant_at = Some(appended.created_at.clone());
+        updated.messages.push(appended.clone());
+        let meta = ConversationPersistMeta::from_conversation(&updated);
+        let write = write_jsonl_snapshot_appended_message_shard(&paths, &meta, &appended)
+            .expect("append message");
+        let loaded = read_message_store_directory_conversation(&paths)
+            .expect("read directory snapshot");
+
+        assert_eq!(write.message_count, 3);
+        assert_eq!(write.last_message_id, "m3");
+        assert_eq!(
+            loaded.messages.iter().map(|message| message.id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2", "m3"]
+        );
+        assert_eq!(loaded.updated_at, appended.created_at);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_should_append_message_batch_with_one_file_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-append-batch-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let conversation = test_conversation(vec![test_message("m1")]);
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+
+        let appended_2 = test_message("m2");
+        let appended_3 = test_message("m3");
+        let mut meta_2 = ConversationPersistMeta::from_conversation(&conversation);
+        meta_2.updated_at = appended_2.created_at.clone();
+        meta_2.last_assistant_at = Some(appended_2.created_at.clone());
+        let mut meta_3 = meta_2.clone();
+        meta_3.updated_at = appended_3.created_at.clone();
+        meta_3.last_assistant_at = Some(appended_3.created_at.clone());
+        let write = write_jsonl_snapshot_appended_messages_shard(
+            &paths,
+            &[(&meta_2, &appended_2), (&meta_3, &appended_3)],
+            Some(&meta_3),
+        )
+        .expect("append message batch");
+        let loaded = read_message_store_directory_conversation(&paths)
+            .expect("read directory snapshot");
+
+        assert_eq!(write.message_count, 3);
+        assert_eq!(write.last_message_id, "m3");
+        assert_eq!(
+            loaded.messages.iter().map(|message| message.id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2", "m3"]
+        );
+        assert_eq!(loaded.updated_at, appended_3.created_at);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_should_truncate_messages_by_index_prefix() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-truncate-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let mut conversation = test_conversation(vec![
+            test_message("m1"),
+            test_message("m2"),
+            test_message("m3"),
+        ]);
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+        conversation.messages.truncate(2);
+        let meta = ConversationPersistMeta::from_conversation(&conversation);
+
+        let write = write_jsonl_snapshot_truncated_messages_shard(&paths, &meta, 2)
+            .expect("truncate messages");
+        let loaded = read_message_store_directory_conversation(&paths)
+            .expect("read truncated directory");
+        let index = read_message_store_index_file(&paths.index_file).expect("read index");
+        let manifest = read_message_store_manifest(&paths.manifest_file)
+            .expect("read manifest")
+            .expect("manifest exists");
+
+        assert_eq!(write.message_count, 2);
+        assert_eq!(write.last_message_id, "m2");
+        assert_eq!(
+            loaded.messages.iter().map(|message| message.id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2"]
+        );
+        assert_eq!(index.items.len(), 2);
+        assert_eq!(manifest.source_message_count, 2);
+        assert_eq!(manifest.last_message_id, "m2");
+        assert_eq!(
+            manifest.messages_jsonl_bytes,
+            fs::metadata(&paths.messages_file).expect("metadata").len()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_should_replace_one_message_and_shift_offsets() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-replace-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let conversation = test_conversation(vec![
+            test_message("m1"),
+            test_message("m2"),
+            test_message("m3"),
+        ]);
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+        let mut updated_message = test_message("m2");
+        updated_message.parts = vec![MessagePart::Text {
+            text: "message m2 with much longer replacement content".to_string(),
+        }];
+        let mut updated = conversation.clone();
+        if let Some(message) = updated.messages.iter_mut().find(|item| item.id == "m2") {
+            *message = updated_message.clone();
+        }
+        let meta = ConversationPersistMeta::from_conversation(&updated);
+
+        let write = write_jsonl_snapshot_replaced_message_shard(&paths, &meta, &updated_message)
+            .expect("replace message");
+        let loaded = read_message_store_directory_conversation(&paths)
+            .expect("read replaced directory");
+        let index = read_message_store_index_file(&paths.index_file).expect("read index");
+        let manifest = read_message_store_manifest(&paths.manifest_file)
+            .expect("read manifest")
+            .expect("manifest exists");
+
+        assert_eq!(write.message_count, 3);
+        assert_eq!(write.last_message_id, "m3");
+        assert_eq!(
+            loaded.messages.iter().map(|message| message.id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2", "m3"]
+        );
+        match loaded.messages[1].parts.first() {
+            Some(MessagePart::Text { text }) => assert!(text.contains("longer replacement")),
+            _ => panic!("expected replaced text message"),
+        }
+        assert_eq!(index.items.len(), 3);
+        assert_eq!(
+            manifest.messages_jsonl_bytes,
+            fs::metadata(&paths.messages_file).expect("metadata").len()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_should_splice_messages_and_shift_offsets() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-splice-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let mut conversation = test_conversation(vec![
+            test_message("m1"),
+            test_message("m2"),
+            test_message("m3"),
+        ]);
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write directory snapshot");
+        let inserted = vec![test_message("r1")];
+        conversation.messages.splice(1..2, inserted.clone());
+        let meta = ConversationPersistMeta::from_conversation(&conversation);
+
+        let write = write_jsonl_snapshot_spliced_messages_shard(
+            &paths,
+            &meta,
+            1,
+            1,
+            &inserted,
+        )
+        .expect("splice messages");
+        let loaded = read_message_store_directory_conversation(&paths)
+            .expect("read spliced directory");
+        let index = read_message_store_index_file(&paths.index_file).expect("read index");
+        let manifest = read_message_store_manifest(&paths.manifest_file)
+            .expect("read manifest")
+            .expect("manifest exists");
+
+        assert_eq!(write.message_count, 3);
+        assert_eq!(write.last_message_id, "m3");
+        assert_eq!(
+            loaded.messages.iter().map(|message| message.id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "r1", "m3"]
+        );
+        assert_eq!(index.items.len(), 3);
+        assert_eq!(
+            manifest.messages_jsonl_bytes,
+            fs::metadata(&paths.messages_file).expect("metadata").len()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn message_store_persist_gate_should_only_allow_ready_jsonl_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "easy-call-message-store-gate-{}",
+            Uuid::new_v4()
+        ));
+        let data_path = root.join("app_data.json");
+        let paths = message_store_paths(&data_path, "conversation-persist").expect("paths");
+        let conversation = test_conversation(vec![test_message("m1")]);
+
+        assert!(!should_write_jsonl_snapshot_directory_shard(&paths).expect("missing manifest"));
+        write_message_store_manifest_atomic(
+            &paths.manifest_file,
+            &MessageStoreManifest::jsonl_snapshot_building(&conversation),
+        )
+        .expect("write building manifest");
+        assert!(!should_write_jsonl_snapshot_directory_shard(&paths).expect("building manifest"));
+        write_jsonl_snapshot_directory_shard(&paths, &conversation)
+            .expect("write ready snapshot");
+        assert!(should_write_jsonl_snapshot_directory_shard(&paths).expect("ready manifest"));
+        let _ = fs::remove_dir_all(root);
+    }
+}
