@@ -1,8 +1,10 @@
 import { ref } from "vue";
 import { invokeTauri } from "../../../services/tauri-api";
 import type {
+  ArchiveBlockPage,
   ArchiveSummary,
   ChatMessage,
+  ConversationBlockSummary,
   DelegateConversationSummary,
   RemoteImContactConversationSummary,
   UnarchivedConversationSummary,
@@ -79,31 +81,85 @@ function archiveIdFromPayloadObject(archive: Record<string, unknown>): string {
 
 export function useArchivesView(options: UseArchivesViewOptions) {
   const archives = ref<ArchiveSummary[]>([]);
+  const archiveBlocks = ref<ConversationBlockSummary[]>([]);
   const archiveMessages = ref<ChatMessage[]>([]);
   const archiveSummaryText = ref("");
   const selectedArchiveId = ref("");
+  const selectedArchiveBlockId = ref<number | null>(null);
+  const archiveHasPrevBlock = ref(false);
+  const archiveHasNextBlock = ref(false);
   const unarchivedConversations = ref<UnarchivedConversationSummary[]>([]);
+  const unarchivedBlocks = ref<ConversationBlockSummary[]>([]);
   const unarchivedMessages = ref<ChatMessage[]>([]);
   const selectedUnarchivedConversationId = ref("");
+  const selectedUnarchivedBlockId = ref<number | null>(null);
+  const unarchivedHasPrevBlock = ref(false);
+  const unarchivedHasNextBlock = ref(false);
   const delegateConversations = ref<DelegateConversationSummary[]>([]);
   const delegateMessages = ref<ChatMessage[]>([]);
   const selectedDelegateConversationId = ref("");
   const remoteImContactConversations = ref<RemoteImContactConversationSummary[]>([]);
+  const remoteImContactBlocks = ref<ConversationBlockSummary[]>([]);
   const remoteImContactMessages = ref<ChatMessage[]>([]);
   const selectedRemoteImContactId = ref("");
+  const selectedRemoteImContactBlockId = ref<number | null>(null);
+  const remoteImHasPrevBlock = ref(false);
+  const remoteImHasNextBlock = ref(false);
 
   async function selectUnarchivedConversation(conversationId: string) {
     const previousId = selectedUnarchivedConversationId.value;
+    const previousBlocks = unarchivedBlocks.value;
+    const previousBlockId = selectedUnarchivedBlockId.value;
     const previousMessages = unarchivedMessages.value;
+    const previousHasPrev = unarchivedHasPrevBlock.value;
+    const previousHasNext = unarchivedHasNextBlock.value;
     try {
-      const messages = await invokeTauri<ChatMessage[]>("get_unarchived_conversation_messages", {
+      const page = await invokeTauri<ArchiveBlockPage>("get_unarchived_conversation_block_page", {
         input: { conversationId },
       });
       selectedUnarchivedConversationId.value = conversationId;
-      unarchivedMessages.value = messages;
+      unarchivedBlocks.value = Array.isArray(page?.blocks) ? page.blocks : [];
+      selectedUnarchivedBlockId.value = Number.isFinite(page?.selectedBlockId) ? page.selectedBlockId : null;
+      unarchivedMessages.value = Array.isArray(page?.messages) ? page.messages : [];
+      unarchivedHasPrevBlock.value = !!page?.hasPrevBlock;
+      unarchivedHasNextBlock.value = !!page?.hasNextBlock;
     } catch (e) {
       selectedUnarchivedConversationId.value = previousId;
+      unarchivedBlocks.value = previousBlocks;
+      selectedUnarchivedBlockId.value = previousBlockId;
       unarchivedMessages.value = previousMessages;
+      unarchivedHasPrevBlock.value = previousHasPrev;
+      unarchivedHasNextBlock.value = previousHasNext;
+      options.setStatusError("status.loadMessagesFailed", e);
+    }
+  }
+
+  async function selectUnarchivedConversationBlock(blockId?: number | null) {
+    const conversationId = String(selectedUnarchivedConversationId.value || "").trim();
+    if (!conversationId) return;
+    const previousBlocks = unarchivedBlocks.value;
+    const previousBlockId = selectedUnarchivedBlockId.value;
+    const previousMessages = unarchivedMessages.value;
+    const previousHasPrev = unarchivedHasPrevBlock.value;
+    const previousHasNext = unarchivedHasNextBlock.value;
+    try {
+      const page = await invokeTauri<ArchiveBlockPage>("get_unarchived_conversation_block_page", {
+        input: {
+          conversationId,
+          blockId: typeof blockId === "number" ? blockId : undefined,
+        },
+      });
+      unarchivedBlocks.value = Array.isArray(page?.blocks) ? page.blocks : unarchivedBlocks.value;
+      selectedUnarchivedBlockId.value = Number.isFinite(page?.selectedBlockId) ? page.selectedBlockId : null;
+      unarchivedMessages.value = Array.isArray(page?.messages) ? page.messages : [];
+      unarchivedHasPrevBlock.value = !!page?.hasPrevBlock;
+      unarchivedHasNextBlock.value = !!page?.hasNextBlock;
+    } catch (e) {
+      unarchivedBlocks.value = previousBlocks;
+      selectedUnarchivedBlockId.value = previousBlockId;
+      unarchivedMessages.value = previousMessages;
+      unarchivedHasPrevBlock.value = previousHasPrev;
+      unarchivedHasNextBlock.value = previousHasNext;
       options.setStatusError("status.loadMessagesFailed", e);
     }
   }
@@ -113,7 +169,11 @@ export function useArchivesView(options: UseArchivesViewOptions) {
       unarchivedConversations.value = await invokeTauri<UnarchivedConversationSummary[]>("list_unarchived_conversations");
       if (unarchivedConversations.value.length === 0) {
         selectedUnarchivedConversationId.value = "";
+        selectedUnarchivedBlockId.value = null;
+        unarchivedBlocks.value = [];
         unarchivedMessages.value = [];
+        unarchivedHasPrevBlock.value = false;
+        unarchivedHasNextBlock.value = false;
         return;
       }
       const targetId = unarchivedConversations.value.some((item) => item.conversationId === selectedUnarchivedConversationId.value)
@@ -131,10 +191,18 @@ export function useArchivesView(options: UseArchivesViewOptions) {
       const selectedId = String(selectedUnarchivedConversationId.value || "").trim();
       if (!unarchivedConversations.value.some((item) => String(item.conversationId || "").trim() === selectedId)) {
         selectedUnarchivedConversationId.value = "";
+        selectedUnarchivedBlockId.value = null;
+        unarchivedBlocks.value = [];
         unarchivedMessages.value = [];
+        unarchivedHasPrevBlock.value = false;
+        unarchivedHasNextBlock.value = false;
       }
       if (unarchivedConversations.value.length === 0) {
+        selectedUnarchivedBlockId.value = null;
+        unarchivedBlocks.value = [];
         unarchivedMessages.value = [];
+        unarchivedHasPrevBlock.value = false;
+        unarchivedHasNextBlock.value = false;
       }
     } catch (e) {
       options.setStatusError("status.loadMessagesFailed", e);
@@ -184,8 +252,12 @@ export function useArchivesView(options: UseArchivesViewOptions) {
       archives.value = await invokeTauri<ArchiveSummary[]>("list_archives");
       if (archives.value.length === 0) {
         selectedArchiveId.value = "";
+        selectedArchiveBlockId.value = null;
+        archiveBlocks.value = [];
         archiveMessages.value = [];
         archiveSummaryText.value = "";
+        archiveHasPrevBlock.value = false;
+        archiveHasNextBlock.value = false;
         return;
       }
       const targetId = archives.value.some((a) => a.archiveId === selectedArchiveId.value)
@@ -199,17 +271,59 @@ export function useArchivesView(options: UseArchivesViewOptions) {
 
   async function selectRemoteImContactConversation(contactId: string) {
     const previousId = selectedRemoteImContactId.value;
+    const previousBlocks = remoteImContactBlocks.value;
+    const previousBlockId = selectedRemoteImContactBlockId.value;
     const previousMessages = remoteImContactMessages.value;
+    const previousHasPrev = remoteImHasPrevBlock.value;
+    const previousHasNext = remoteImHasNextBlock.value;
     // 先更新高亮，避免等待消息加载导致左侧选中反馈卡顿。
     selectedRemoteImContactId.value = contactId;
     try {
-      const messages = await invokeTauri<ChatMessage[]>("remote_im_get_contact_conversation_messages", {
+      const page = await invokeTauri<ArchiveBlockPage>("remote_im_get_contact_conversation_block_page", {
         input: { contactId },
       });
-      remoteImContactMessages.value = messages;
+      remoteImContactBlocks.value = Array.isArray(page?.blocks) ? page.blocks : [];
+      selectedRemoteImContactBlockId.value = Number.isFinite(page?.selectedBlockId) ? page.selectedBlockId : null;
+      remoteImContactMessages.value = Array.isArray(page?.messages) ? page.messages : [];
+      remoteImHasPrevBlock.value = !!page?.hasPrevBlock;
+      remoteImHasNextBlock.value = !!page?.hasNextBlock;
     } catch (e) {
       selectedRemoteImContactId.value = previousId;
+      remoteImContactBlocks.value = previousBlocks;
+      selectedRemoteImContactBlockId.value = previousBlockId;
       remoteImContactMessages.value = previousMessages;
+      remoteImHasPrevBlock.value = previousHasPrev;
+      remoteImHasNextBlock.value = previousHasNext;
+      options.setStatusError("status.loadMessagesFailed", e);
+    }
+  }
+
+  async function selectRemoteImContactConversationBlock(blockId?: number | null) {
+    const contactId = String(selectedRemoteImContactId.value || "").trim();
+    if (!contactId) return;
+    const previousBlocks = remoteImContactBlocks.value;
+    const previousBlockId = selectedRemoteImContactBlockId.value;
+    const previousMessages = remoteImContactMessages.value;
+    const previousHasPrev = remoteImHasPrevBlock.value;
+    const previousHasNext = remoteImHasNextBlock.value;
+    try {
+      const page = await invokeTauri<ArchiveBlockPage>("remote_im_get_contact_conversation_block_page", {
+        input: {
+          contactId,
+          blockId: typeof blockId === "number" ? blockId : undefined,
+        },
+      });
+      remoteImContactBlocks.value = Array.isArray(page?.blocks) ? page.blocks : remoteImContactBlocks.value;
+      selectedRemoteImContactBlockId.value = Number.isFinite(page?.selectedBlockId) ? page.selectedBlockId : null;
+      remoteImContactMessages.value = Array.isArray(page?.messages) ? page.messages : [];
+      remoteImHasPrevBlock.value = !!page?.hasPrevBlock;
+      remoteImHasNextBlock.value = !!page?.hasNextBlock;
+    } catch (e) {
+      remoteImContactBlocks.value = previousBlocks;
+      selectedRemoteImContactBlockId.value = previousBlockId;
+      remoteImContactMessages.value = previousMessages;
+      remoteImHasPrevBlock.value = previousHasPrev;
+      remoteImHasNextBlock.value = previousHasNext;
       options.setStatusError("status.loadMessagesFailed", e);
     }
   }
@@ -221,7 +335,11 @@ export function useArchivesView(options: UseArchivesViewOptions) {
         await invokeTauri<RemoteImContactConversationSummary[]>("remote_im_list_contact_conversations");
       if (remoteImContactConversations.value.length === 0) {
         selectedRemoteImContactId.value = "";
+        selectedRemoteImContactBlockId.value = null;
+        remoteImContactBlocks.value = [];
         remoteImContactMessages.value = [];
+        remoteImHasPrevBlock.value = false;
+        remoteImHasNextBlock.value = false;
         return;
       }
       const targetId = remoteImContactConversations.value.some((item) => item.contactId === selectedRemoteImContactId.value)
@@ -240,18 +358,60 @@ export function useArchivesView(options: UseArchivesViewOptions) {
 
   async function selectArchive(archiveId: string) {
     const previousId = selectedArchiveId.value;
+    const previousBlockId = selectedArchiveBlockId.value;
+    const previousBlocks = archiveBlocks.value;
     const previousMessages = archiveMessages.value;
     const previousSummary = archiveSummaryText.value;
+    const previousHasPrev = archiveHasPrevBlock.value;
+    const previousHasNext = archiveHasNextBlock.value;
     try {
       const summary = await invokeTauri<string>("get_archive_summary", { archiveId });
-      const messages = await invokeTauri<ChatMessage[]>("get_archive_messages", { archiveId });
+      const page = await invokeTauri<ArchiveBlockPage>("get_archive_block_page", {
+        input: { archiveId },
+      });
       selectedArchiveId.value = archiveId;
       archiveSummaryText.value = String(summary || "").trim();
-      archiveMessages.value = messages;
+      archiveBlocks.value = Array.isArray(page?.blocks) ? page.blocks : [];
+      selectedArchiveBlockId.value = Number.isFinite(page?.selectedBlockId) ? page.selectedBlockId : null;
+      archiveMessages.value = Array.isArray(page?.messages) ? page.messages : [];
+      archiveHasPrevBlock.value = !!page?.hasPrevBlock;
+      archiveHasNextBlock.value = !!page?.hasNextBlock;
     } catch (e) {
       selectedArchiveId.value = previousId;
+      selectedArchiveBlockId.value = previousBlockId;
+      archiveBlocks.value = previousBlocks;
       archiveSummaryText.value = previousSummary;
       archiveMessages.value = previousMessages;
+      archiveHasPrevBlock.value = previousHasPrev;
+      archiveHasNextBlock.value = previousHasNext;
+      options.setStatusError("status.loadArchivesFailed", e);
+    }
+  }
+
+  async function selectArchiveBlock(blockId?: number | null) {
+    const archiveId = String(selectedArchiveId.value || "").trim();
+    if (!archiveId) return;
+    const previousBlockId = selectedArchiveBlockId.value;
+    const previousMessages = archiveMessages.value;
+    const previousHasPrev = archiveHasPrevBlock.value;
+    const previousHasNext = archiveHasNextBlock.value;
+    try {
+      const page = await invokeTauri<ArchiveBlockPage>("get_archive_block_page", {
+        input: {
+          archiveId,
+          blockId: typeof blockId === "number" ? blockId : undefined,
+        },
+      });
+      archiveBlocks.value = Array.isArray(page?.blocks) ? page.blocks : archiveBlocks.value;
+      selectedArchiveBlockId.value = Number.isFinite(page?.selectedBlockId) ? page.selectedBlockId : null;
+      archiveMessages.value = Array.isArray(page?.messages) ? page.messages : [];
+      archiveHasPrevBlock.value = !!page?.hasPrevBlock;
+      archiveHasNextBlock.value = !!page?.hasNextBlock;
+    } catch (e) {
+      selectedArchiveBlockId.value = previousBlockId;
+      archiveMessages.value = previousMessages;
+      archiveHasPrevBlock.value = previousHasPrev;
+      archiveHasNextBlock.value = previousHasNext;
       options.setStatusError("status.loadArchivesFailed", e);
     }
   }
@@ -263,8 +423,12 @@ export function useArchivesView(options: UseArchivesViewOptions) {
       options.setStatus(options.t("status.archiveDeleted"));
       if (selectedArchiveId.value === archiveId) {
         selectedArchiveId.value = "";
+        selectedArchiveBlockId.value = null;
+        archiveBlocks.value = [];
         archiveSummaryText.value = "";
         archiveMessages.value = [];
+        archiveHasPrevBlock.value = false;
+        archiveHasNextBlock.value = false;
       }
       await loadArchives();
     } catch (e) {
@@ -290,7 +454,11 @@ export function useArchivesView(options: UseArchivesViewOptions) {
       const nextConversationId = String(result?.activeConversationId || "").trim();
       if (selectedUnarchivedConversationId.value === conversationId) {
         selectedUnarchivedConversationId.value = nextConversationId;
+        selectedUnarchivedBlockId.value = null;
+        unarchivedBlocks.value = [];
         unarchivedMessages.value = [];
+        unarchivedHasPrevBlock.value = false;
+        unarchivedHasNextBlock.value = false;
       }
       await loadArchives();
       return result;
@@ -385,27 +553,42 @@ export function useArchivesView(options: UseArchivesViewOptions) {
 
   return {
     archives,
+    archiveBlocks,
     archiveMessages,
     archiveSummaryText,
     selectedArchiveId,
+    selectedArchiveBlockId,
+    archiveHasPrevBlock,
+    archiveHasNextBlock,
     unarchivedConversations,
+    unarchivedBlocks,
     unarchivedMessages,
     selectedUnarchivedConversationId,
+    selectedUnarchivedBlockId,
+    unarchivedHasPrevBlock,
+    unarchivedHasNextBlock,
     delegateConversations,
     delegateMessages,
     selectedDelegateConversationId,
     remoteImContactConversations,
+    remoteImContactBlocks,
     remoteImContactMessages,
     selectedRemoteImContactId,
+    selectedRemoteImContactBlockId,
+    remoteImHasPrevBlock,
+    remoteImHasNextBlock,
     selectUnarchivedConversation,
+    selectUnarchivedConversationBlock,
     selectDelegateConversation,
     selectRemoteImContactConversation,
+    selectRemoteImContactConversationBlock,
     loadUnarchivedConversations,
     loadUnarchivedConversationListOnly,
     loadDelegateConversations,
     loadRemoteImContactConversations,
     loadArchives,
     selectArchive,
+    selectArchiveBlock,
     deleteUnarchivedConversation,
     deleteRemoteImContactConversation,
     deleteArchive,

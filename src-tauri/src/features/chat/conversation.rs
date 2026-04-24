@@ -66,36 +66,6 @@ fn resolved_foreground_department_id_for_conversation(
         .unwrap_or_else(fallback_foreground_department_id)
 }
 
-fn normalize_foreground_conversation_departments(
-    config: &AppConfig,
-    data: &mut AppData,
-) -> bool {
-    let main_conversation_id = data
-        .main_conversation_id
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_string();
-    let mut changed = false;
-    for conversation in &mut data.conversations {
-        if !conversation_visible_in_foreground_lists(conversation)
-            || !conversation.summary.trim().is_empty()
-        {
-            continue;
-        }
-        let next_department_id = resolved_foreground_department_id_for_conversation(
-            config,
-            conversation,
-            conversation.id.trim() == main_conversation_id,
-        );
-        if conversation.department_id.trim() != next_department_id {
-            conversation.department_id = next_department_id;
-            changed = true;
-        }
-    }
-    changed
-}
-
 fn main_conversation_index(data: &AppData, _agent_id: &str) -> Option<usize> {
     let target_id = data
         .main_conversation_id
@@ -304,6 +274,7 @@ fn build_foreground_chat_conversation_record(
     conversation
 }
 
+#[cfg(test)]
 fn ensure_active_conversation_index(
     data: &mut AppData,
     api_config_id: &str,
@@ -354,6 +325,7 @@ fn ensure_active_conversation_index(
     data.conversations.len() - 1
 }
 
+#[cfg(test)]
 fn ensure_main_conversation_index(
     data: &mut AppData,
     api_config_id: &str,
@@ -675,6 +647,7 @@ fn decide_archive_before_send_from_usage(
     (decision, usage.source)
 }
 
+#[cfg(test)]
 fn archive_conversation_now(
     data: &mut AppData,
     conversation_id: &str,

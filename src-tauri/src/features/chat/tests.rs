@@ -1960,6 +1960,9 @@
             provider_request_gates: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            conversation_index_repair_gates: Arc::new(Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             remote_im_contact_runtime_states: Arc::new(Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -2038,6 +2041,33 @@
             .lock()
             .map_err(|err| format!("lock conversation_runtime_slots failed: {err}"))?;
         Ok(slots.values().map(|slot| slot.pending_queue.len()).sum())
+    }
+
+    #[test]
+    fn state_read_conversation_cached_should_self_heal_missing_chat_index_item() {
+        let state = test_chat_runtime_state();
+        let now = now_iso();
+        let mut conversation = test_chat_conversation("conversation-heal", "active", &now);
+        conversation.summary = "测试摘要".to_string();
+
+        write_conversation_shard(&state.data_path, &conversation).expect("write conversation");
+        write_chat_index_shard(&state.data_path, &ChatIndexFile::default())
+            .expect("write empty chat index");
+
+        let loaded = state_read_conversation_cached(&state, &conversation.id)
+            .expect("read conversation with self heal");
+        assert_eq!(loaded.id, conversation.id);
+
+        let chat_index = read_chat_index_shard(&state.data_path).expect("read chat index");
+        let item = chat_index
+            .conversations
+            .iter()
+            .find(|item| item.id == conversation.id)
+            .expect("healed chat index item");
+        assert_eq!(item.updated_at, conversation.updated_at);
+        assert_eq!(item.status, conversation.status);
+        assert_eq!(item.summary, conversation.summary);
+        assert_eq!(item.archived_at, conversation.archived_at);
     }
 
     #[test]

@@ -1624,6 +1624,7 @@ fn compute_image_hash_hex(image: &BinaryPart) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+#[cfg(test)]
 fn find_image_text_cache(
     data: &AppData,
     hash: &str,

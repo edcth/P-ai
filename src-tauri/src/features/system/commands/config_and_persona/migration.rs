@@ -390,7 +390,7 @@ fn collect_oauth_files_from_providers(config: &AppConfig) -> Result<Vec<Migratio
 
 fn build_export_payload(state: &AppState) -> Result<MigrationPayload, String> {
     let mut config = state_read_config_cached(state)?;
-    let mut runtime_data = state_read_app_data_cached(state)?;
+    let mut runtime_data = state_read_agents_runtime_snapshot(state)?;
     let memories = memory_store_list_memories(&state.data_path)?;
 
     config.shell_workspaces = Vec::new();
@@ -873,7 +873,7 @@ fn apply_import_config_migration_package(
 
     let backup_dir = backup_current_migration_targets(state.inner())?;
     let current_config = state_read_config_cached(&state)?;
-    let current_data = state_read_app_data_cached(&state)?;
+    let current_data = state_read_agents_runtime_snapshot(&state)?;
     let (
         final_config,
         provider_added_count,

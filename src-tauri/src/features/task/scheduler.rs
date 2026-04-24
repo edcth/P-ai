@@ -34,11 +34,11 @@ fn task_scope_for_conversation(conversation: &Conversation) -> &'static str {
 }
 
 fn task_scope_for_missing_conversation(
-    data: &AppData,
+    runtime: &RuntimeStateFile,
     requested_conversation_id: &str,
     stored_target_scope: &str,
 ) -> &'static str {
-    if data.remote_im_contacts.iter().any(|contact| {
+    if runtime.remote_im_contacts.iter().any(|contact| {
         contact
             .bound_conversation_id
             .as_deref()
@@ -51,18 +51,46 @@ fn task_scope_for_missing_conversation(
 }
 
 fn task_resolve_main_dispatch_conversation_id(
-    data: &mut AppData,
+    state: &AppState,
+    runtime: &mut RuntimeStateFile,
     api_config_id: &str,
     agent_id: &str,
     fallback_to_main: bool,
 ) -> Result<TaskResolvedConversation, String> {
-    let conversation_idx = ensure_main_conversation_index(data, api_config_id, agent_id);
-    let conversation_id = data
-        .conversations
-        .get(conversation_idx)
-        .map(|item| item.id.clone())
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "No active main conversation configured for task dispatch.".to_string())?;
+    let conversation_id = if let Some(existing_id) = runtime
+        .main_conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|conversation_id| match state_read_conversation_cached(state, conversation_id) {
+            Ok(conversation) => task_conversation_available_for_dispatch(&conversation)
+                .then_some(conversation.id),
+            Err(err) => {
+                runtime_log_warn(format!(
+                    "[任务调度] 警告，任务=resolve_main_dispatch_conversation_read，conversation_id={}，error={}",
+                    conversation_id, err
+                ));
+                None
+            }
+        })
+    {
+        existing_id
+    } else {
+        let conversation = build_conversation_record(
+            api_config_id,
+            agent_id,
+            ASSISTANT_DEPARTMENT_ID,
+            "",
+            CONVERSATION_KIND_CHAT,
+            None,
+            None,
+        );
+        let conversation_id = conversation.id.clone();
+        state_schedule_conversation_persist(state, &conversation, true)?;
+        runtime.main_conversation_id = Some(conversation_id.clone());
+        state_write_runtime_state_cached(state, runtime)?;
+        conversation_id
+    };
     Ok(TaskResolvedConversation {
         conversation_id,
         target_scope: TASK_TARGET_SCOPE_DESKTOP.to_string(),
@@ -71,7 +99,8 @@ fn task_resolve_main_dispatch_conversation_id(
 }
 
 fn task_resolve_dispatch_conversation(
-    data: &mut AppData,
+    state: &AppState,
+    runtime: &mut RuntimeStateFile,
     api_config_id: &str,
     agent_id: &str,
     requested_conversation_id: Option<&str>,
@@ -81,28 +110,35 @@ fn task_resolve_dispatch_conversation(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let requested_scope = task_scope_for_missing_conversation(data, requested, stored_target_scope);
-        if let Some(conversation) = data
-            .conversations
-            .iter()
-            .find(|item| item.id == requested && task_conversation_available_for_dispatch(item))
-        {
-            return Ok(Some(TaskResolvedConversation {
-                conversation_id: conversation.id.clone(),
-                target_scope: task_scope_for_conversation(conversation).to_string(),
-                fallback_to_main: false,
-            }));
+        let requested_scope =
+            task_scope_for_missing_conversation(runtime, requested, stored_target_scope);
+        if let Ok(conversation) = state_read_conversation_cached(state, requested) {
+            if task_conversation_available_for_dispatch(&conversation) {
+                return Ok(Some(TaskResolvedConversation {
+                    conversation_id: conversation.id.clone(),
+                    target_scope: task_scope_for_conversation(&conversation).to_string(),
+                    fallback_to_main: false,
+                }));
+            }
         }
         if requested_scope == TASK_TARGET_SCOPE_CONTACT {
             return Ok(None);
         }
-        return task_resolve_main_dispatch_conversation_id(data, api_config_id, agent_id, true).map(Some);
+        return task_resolve_main_dispatch_conversation_id(
+            state,
+            runtime,
+            api_config_id,
+            agent_id,
+            true,
+        )
+        .map(Some);
     }
 
     if task_target_scope_normalized(stored_target_scope) == TASK_TARGET_SCOPE_CONTACT {
         return Ok(None);
     }
-    task_resolve_main_dispatch_conversation_id(data, api_config_id, agent_id, false).map(Some)
+    task_resolve_main_dispatch_conversation_id(state, runtime, api_config_id, agent_id, false)
+        .map(Some)
 }
 
 fn task_resolve_dispatch_session(
@@ -112,18 +148,16 @@ fn task_resolve_dispatch_session(
     let app_config = read_config(&state.config_path)?;
     let selected_api = resolve_selected_api_config(&app_config, None)
         .ok_or_else(|| "No API config configured for task dispatch.".to_string())?;
-    let mut data = state_read_app_data_cached(state)?;
-    let mut changed = false;
-    let before_conversation_count = data.conversations.len();
-    let before_main_conversation_id = data.main_conversation_id.clone();
-    let agent_id = if data
-        .agents
+    let agents = state_read_agents_cached(state)?;
+    let mut runtime = state_read_runtime_state_cached(state)?;
+    let before_main_conversation_id = runtime.main_conversation_id.clone();
+    let agent_id = if agents
         .iter()
-        .any(|a| a.id == data.assistant_department_agent_id && !a.is_built_in_user && !a.is_built_in_system)
+        .any(|a| a.id == runtime.assistant_department_agent_id && !a.is_built_in_user && !a.is_built_in_system)
     {
-        data.assistant_department_agent_id.clone()
+        runtime.assistant_department_agent_id.clone()
     } else {
-        data.agents
+        agents
             .iter()
             .find(|a| !a.is_built_in_user && !a.is_built_in_system)
             .map(|a| a.id.clone())
@@ -135,32 +169,18 @@ fn task_resolve_dispatch_session(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let resolved = task_resolve_dispatch_conversation(
-        &mut data,
+        state,
+        &mut runtime,
         &selected_api.id,
         &agent_id,
         requested_conversation_id,
         &task.target_scope,
     )?;
-    changed = changed
-        || data.conversations.len() != before_conversation_count
-        || data.main_conversation_id != before_main_conversation_id;
     let department_id = department_for_agent_id(&app_config, &agent_id)
         .map(|item| item.id.clone())
         .unwrap_or_else(|| ASSISTANT_DEPARTMENT_ID.to_string());
-    if changed {
-        match resolved.as_ref() {
-            Some(resolved_session) => {
-                persist_selected_conversations_and_runtime(
-                    state,
-                    &data,
-                    std::slice::from_ref(&resolved_session.conversation_id),
-                    "task_resolve_dispatch_session",
-                )?;
-            }
-            None => {
-                persist_runtime_state_only(state, &data, "task_resolve_dispatch_session")?;
-            }
-        }
+    if runtime.main_conversation_id != before_main_conversation_id {
+        state_write_runtime_state_cached(state, &runtime)?;
     }
     let Some(resolved) = resolved else {
         return Ok(None);
@@ -183,12 +203,10 @@ fn task_conversation_last_message_is_system_persona(
     state: &AppState,
     conversation_id: &str,
 ) -> Result<bool, String> {
-    let data = state_read_app_data_cached(state)?;
-    Ok(data
-        .conversations
-        .iter()
-        .find(|conversation| conversation.id == conversation_id)
-        .and_then(|conversation| conversation.messages.last())
+    let conversation = state_read_conversation_cached(state, conversation_id)?;
+    Ok(conversation
+        .messages
+        .last()
         .and_then(|message| message.speaker_agent_id.as_deref())
         .map(str::trim)
         == Some(SYSTEM_PERSONA_ID))

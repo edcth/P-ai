@@ -526,6 +526,24 @@ export type ArchiveSummary = {
   messageCount?: number;
 };
 
+export type ConversationBlockSummary = {
+  blockId: number;
+  messageCount: number;
+  firstMessageId: string;
+  lastMessageId: string;
+  firstCreatedAt?: string;
+  lastCreatedAt?: string;
+  isLatest: boolean;
+};
+
+export type ArchiveBlockPage = {
+  blocks: ConversationBlockSummary[];
+  selectedBlockId: number;
+  messages: ChatMessage[];
+  hasPrevBlock: boolean;
+  hasNextBlock: boolean;
+};
+
 export type UnarchivedConversationSummary = {
   conversationId: string;
   title: string;

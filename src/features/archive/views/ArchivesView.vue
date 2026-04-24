@@ -126,6 +126,35 @@
             <div class="text-sm opacity-70 mb-1">{{ t("archives.summary") }}</div>
             <div class="whitespace-pre-wrap wrap-break-word text-sm">{{ archiveSummaryText }}</div>
           </div>
+          <div
+            v-if="(viewMode === 'archive' && archiveBlocks.length > 0) || (viewMode === 'current' && unarchivedBlocks.length > 0) || (viewMode === 'remoteIm' && remoteImContactBlocks.length > 0)"
+            class="sticky top-0 z-10 flex items-center justify-between gap-2 rounded border border-base-300 bg-base-200/95 px-3 py-2 backdrop-blur"
+          >
+            <button
+              type="button"
+              class="btn btn-sm bg-base-100 border-base-300 hover:bg-base-200"
+              :disabled="!activeHasPrevBlock"
+              @click="focusAdjacentArchiveBlock(-1)"
+            >
+              {{ t("archives.prevBlock") }}
+            </button>
+            <div class="min-w-0 flex-1 text-center">
+              <div class="truncate text-sm font-medium">
+                {{ selectedArchiveBlockSummaryLabel }}
+              </div>
+              <div class="truncate text-xs opacity-70">
+                {{ selectedArchiveBlockRangeLabel }}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="btn btn-sm bg-base-100 border-base-300 hover:bg-base-200"
+              :disabled="!activeHasNextBlock"
+              @click="focusAdjacentArchiveBlock(1)"
+            >
+              {{ t("archives.nextBlock") }}
+            </button>
+          </div>
           <div v-for="m in visibleMessages" :key="m.id" class="border border-base-300 rounded p-3 bg-base-100">
             <div class="flex items-center justify-between mb-1">
               <div class="badge badge-primary badge-sm">{{ speakerLabel(m) }}</div>
@@ -213,6 +242,7 @@ import { summarizeToolActivityForDisplay } from "../../../utils/chat-message-sem
 import type {
   ArchiveSummary,
   ChatMessage,
+  ConversationBlockSummary,
   DelegateConversationSummary,
   RemoteImContactConversationSummary,
   MessagePart,
@@ -223,16 +253,28 @@ import type {
 const props = defineProps<{
   archives: ArchiveSummary[];
   selectedArchiveId: string;
+  archiveBlocks: ConversationBlockSummary[];
+  selectedArchiveBlockId?: number | null;
+  archiveHasPrevBlock?: boolean;
+  archiveHasNextBlock?: boolean;
   archiveMessages: ChatMessage[];
   archiveSummaryText: string;
   unarchivedConversations: UnarchivedConversationSummary[];
+  unarchivedBlocks: ConversationBlockSummary[];
   selectedUnarchivedConversationId: string;
+  selectedUnarchivedBlockId?: number | null;
+  unarchivedHasPrevBlock?: boolean;
+  unarchivedHasNextBlock?: boolean;
   unarchivedMessages: ChatMessage[];
   delegateConversations: DelegateConversationSummary[];
   selectedDelegateConversationId: string;
   delegateMessages: ChatMessage[];
   remoteImContactConversations: RemoteImContactConversationSummary[];
+  remoteImContactBlocks: ConversationBlockSummary[];
   selectedRemoteImContactId: string;
+  selectedRemoteImContactBlockId?: number | null;
+  remoteImHasPrevBlock?: boolean;
+  remoteImHasNextBlock?: boolean;
   remoteImContactMessages: ChatMessage[];
   userAlias: string;
   personaNameMap?: Record<string, string>;
@@ -242,9 +284,12 @@ const { t, locale } = useI18n();
 const emit = defineEmits<{
   (e: "loadArchives"): void;
   (e: "selectArchive", archiveId: string): void;
+  (e: "selectArchiveBlock", blockId?: number | null): void;
   (e: "selectUnarchivedConversation", conversationId: string): void;
+  (e: "selectUnarchivedBlock", blockId?: number | null): void;
   (e: "selectDelegateConversation", conversationId: string): void;
   (e: "selectRemoteImContactConversation", contactId: string): void;
+  (e: "selectRemoteImContactBlock", blockId?: number | null): void;
   (e: "exportArchive", payload: { format: "markdown" | "json" }): void;
   (e: "deleteArchive", archiveId: string): void;
   (e: "deleteUnarchivedConversation", conversationId: string): void;
@@ -274,6 +319,70 @@ const visibleMessages = computed(() =>
         ? props.remoteImContactMessages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "tool")
         : props.archiveMessages,
 );
+const selectedArchiveBlockSummary = computed(() =>
+  props.archiveBlocks.find((item) => item.blockId === props.selectedArchiveBlockId) ?? null,
+);
+const selectedUnarchivedBlockSummary = computed(() =>
+  props.unarchivedBlocks.find((item) => item.blockId === props.selectedUnarchivedBlockId) ?? null,
+);
+const selectedRemoteImBlockSummary = computed(() =>
+  props.remoteImContactBlocks.find((item) => item.blockId === props.selectedRemoteImContactBlockId) ?? null,
+);
+const activeBlocks = computed(() =>
+  viewMode.value === "current"
+    ? props.unarchivedBlocks
+    : viewMode.value === "remoteIm"
+      ? props.remoteImContactBlocks
+      : props.archiveBlocks,
+);
+const activeSelectedBlockId = computed(() =>
+  viewMode.value === "current"
+    ? props.selectedUnarchivedBlockId
+    : viewMode.value === "remoteIm"
+      ? props.selectedRemoteImContactBlockId
+      : props.selectedArchiveBlockId,
+);
+const activeHasPrevBlock = computed(() =>
+  viewMode.value === "current"
+    ? !!props.unarchivedHasPrevBlock
+    : viewMode.value === "remoteIm"
+      ? !!props.remoteImHasPrevBlock
+      : !!props.archiveHasPrevBlock,
+);
+const activeHasNextBlock = computed(() =>
+  viewMode.value === "current"
+    ? !!props.unarchivedHasNextBlock
+    : viewMode.value === "remoteIm"
+      ? !!props.remoteImHasNextBlock
+      : !!props.archiveHasNextBlock,
+);
+const activeSelectedBlockSummary = computed(() =>
+  viewMode.value === "current"
+    ? selectedUnarchivedBlockSummary.value
+    : viewMode.value === "remoteIm"
+      ? selectedRemoteImBlockSummary.value
+      : selectedArchiveBlockSummary.value,
+);
+const selectedArchiveBlockSummaryLabel = computed(() => {
+  const block = activeSelectedBlockSummary.value;
+  if (!block) return "";
+  return t("archives.blockSummary", {
+    id: block.blockId + 1,
+    count: block.messageCount,
+  });
+});
+const selectedArchiveBlockRangeLabel = computed(() => {
+  const block = activeSelectedBlockSummary.value;
+  if (!block) return "";
+  const startRaw = formatDate(block.firstCreatedAt || "");
+  const endRaw = formatDate(block.lastCreatedAt || "");
+  const start = startRaw === "-" ? "" : startRaw;
+  const end = endRaw === "-" ? "" : endRaw;
+  if (start && end && start !== end) {
+    return `${start} - ${end}`;
+  }
+  return start || end || "";
+});
 const selectedCurrentConversationSummary = computed(() =>
   props.unarchivedConversations.find(
     (item) => String(item.conversationId || "").trim() === String(props.selectedUnarchivedConversationId || "").trim(),
@@ -283,6 +392,22 @@ const archiveImportInputRef = ref<HTMLInputElement | null>(null);
 
 function switchViewMode(mode: "current" | "delegate" | "archive" | "remoteIm") {
   viewMode.value = mode;
+}
+
+function focusAdjacentArchiveBlock(step: -1 | 1) {
+  const currentIndex = activeBlocks.value.findIndex((item) => item.blockId === activeSelectedBlockId.value);
+  if (currentIndex < 0) return;
+  const next = activeBlocks.value[currentIndex + step];
+  if (!next) return;
+  if (viewMode.value === "current") {
+    emit("selectUnarchivedBlock", next.blockId);
+    return;
+  }
+  if (viewMode.value === "remoteIm") {
+    emit("selectRemoteImContactBlock", next.blockId);
+    return;
+  }
+  emit("selectArchiveBlock", next.blockId);
 }
 
 function readPendingArchiveFocusRequest(): { conversationId: string; viewMode: "current" } | null {

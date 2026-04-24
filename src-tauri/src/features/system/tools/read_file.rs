@@ -263,11 +263,11 @@ fn build_text_read_result(
 
 fn resolve_pdf_image_mode(state: &AppState, api_config_id: &str) -> Result<bool, String> {
     let app_config = state_read_config_cached(state)?;
-    let data = state_read_app_data_cached(state)?;
+    let runtime = state_read_runtime_state_cached(state)?;
     let selected_api = resolve_selected_api_config(&app_config, Some(api_config_id))
         .or_else(|| resolve_selected_api_config(&app_config, None))
         .ok_or_else(|| "当前未找到可用聊天模型配置。".to_string())?;
-    Ok(data.pdf_read_mode == "image" && selected_api.enable_image)
+    Ok(runtime.pdf_read_mode == "image" && selected_api.enable_image)
 }
 
 fn build_pdf_image_read_result(
@@ -870,6 +870,9 @@ fn test_read_file_state() -> AppState {
                 std::collections::HashSet::new(),
             )),
             provider_request_gates: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            conversation_index_repair_gates: Arc::new(Mutex::new(
                 std::collections::HashMap::new(),
             )),
             remote_im_contact_runtime_states: Arc::new(Mutex::new(

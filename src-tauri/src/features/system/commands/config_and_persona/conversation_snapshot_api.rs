@@ -240,6 +240,7 @@ fn build_conversation_preview_messages(
         .collect()
 }
 
+#[cfg(test)]
 fn normalized_pinned_conversation_ids(data: &AppData) -> Vec<String> {
     let main_conversation_id = data
         .main_conversation_id
@@ -375,6 +376,7 @@ fn sort_unarchived_conversation_summaries(
     ordered
 }
 
+#[cfg(test)]
 fn collect_unarchived_conversation_summaries(
     state: &AppState,
     app_config: &AppConfig,
@@ -542,7 +544,7 @@ struct ForegroundConversationSnapshotCore {
     current_todos: Vec<ConversationTodoItem>,
 }
 
-const DEFAULT_FOREGROUND_SNAPSHOT_RECENT_LIMIT: usize = 2;
+const DEFAULT_FOREGROUND_SNAPSHOT_RECENT_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

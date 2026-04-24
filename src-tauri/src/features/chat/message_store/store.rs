@@ -56,6 +56,26 @@ pub(super) struct MessageStoreCompactionSegment {
 }
 
 #[derive(Debug, Clone)]
+pub(super) struct MessageStoreBlockSummary {
+    pub(super) block_id: u32,
+    pub(super) message_count: usize,
+    pub(super) first_message_id: String,
+    pub(super) last_message_id: String,
+    pub(super) first_created_at: Option<String>,
+    pub(super) last_created_at: Option<String>,
+    pub(super) is_latest: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct MessageStoreBlockPage {
+    pub(super) blocks: Vec<MessageStoreBlockSummary>,
+    pub(super) selected_block_id: u32,
+    pub(super) messages: Vec<ChatMessage>,
+    pub(super) has_prev_block: bool,
+    pub(super) has_next_block: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct MessageStoreBranchSelection {
     pub(super) selected_messages: Vec<ChatMessage>,
     pub(super) first_selected_ordinal: usize,
@@ -81,9 +101,46 @@ struct JsonlSnapshotMessageStore {
     index_file: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+struct CachedMessageStoreBlockFile {
+    modified_at: Option<std::time::SystemTime>,
+    len: u64,
+    messages_by_id: Arc<std::collections::HashMap<String, ChatMessage>>,
+}
+
 enum MessageStoreBackend<'a> {
     ConversationJson(ConversationJsonMessageStore<'a>),
     JsonlSnapshot(JsonlSnapshotMessageStore),
+}
+
+static MESSAGE_STORE_BLOCK_FILE_CACHE: OnceLock<
+    Mutex<std::collections::HashMap<PathBuf, CachedMessageStoreBlockFile>>,
+> = OnceLock::new();
+
+fn message_store_block_file_cache(
+) -> &'static Mutex<std::collections::HashMap<PathBuf, CachedMessageStoreBlockFile>> {
+    MESSAGE_STORE_BLOCK_FILE_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn lock_message_store_block_file_cache(
+) -> std::sync::MutexGuard<
+    'static,
+    std::collections::HashMap<PathBuf, CachedMessageStoreBlockFile>,
+> {
+    message_store_block_file_cache().lock().unwrap_or_else(|poison| {
+        eprintln!(
+            "[消息存储] 会话块缓存锁已污染，继续使用内部状态，error={:?}",
+            poison
+        );
+        poison.into_inner()
+    })
+}
+
+pub(super) fn retain_message_store_block_file_cache_paths(
+    allowed_paths: &std::collections::HashSet<PathBuf>,
+) {
+    let mut cache = lock_message_store_block_file_cache();
+    cache.retain(|path, _| allowed_paths.contains(path));
 }
 
 impl<'a> ConversationJsonMessageStore<'a> {
@@ -408,6 +465,129 @@ pub(super) fn read_ready_message_store_recent_messages_page(
         return Ok(None);
     };
     store.read_recent_messages_page(limit).map(Some)
+}
+
+pub(super) fn read_ready_message_store_recent_messages_page_cached(
+    paths: &MessageStorePaths,
+    limit: usize,
+) -> Result<Option<MessageStoreLimitPage>, String> {
+    let Some(manifest) = read_message_store_manifest(&paths.manifest_file)? else {
+        return Ok(None);
+    };
+    if !manifest.should_read_jsonl() {
+        return Ok(None);
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    if !paths.index_file.exists() {
+        return Ok(None);
+    }
+    let index = read_message_store_index_file(&paths.index_file)?;
+    let limit = normalized_message_limit(limit);
+    let start = index.items.len().saturating_sub(limit);
+    let messages =
+        read_jsonl_snapshot_messages_by_index_items_cached(&paths.messages_file, &index.items[start..])?;
+    Ok(Some(MessageStoreLimitPage {
+        messages,
+        has_more: start > 0,
+    }))
+}
+
+pub(super) fn read_ready_message_store_recent_blocks_page(
+    paths: &MessageStorePaths,
+    block_limit: usize,
+) -> Result<Option<MessageStoreLimitPage>, String> {
+    read_ready_message_store_recent_blocks_page_with_cache(paths, block_limit, false)
+}
+
+pub(super) fn read_ready_message_store_recent_blocks_page_cached(
+    paths: &MessageStorePaths,
+    block_limit: usize,
+) -> Result<Option<MessageStoreLimitPage>, String> {
+    read_ready_message_store_recent_blocks_page_with_cache(paths, block_limit, true)
+}
+
+pub(super) fn read_ready_message_store_latest_block_paths(
+    paths: &MessageStorePaths,
+    block_limit: usize,
+) -> Result<Option<Vec<PathBuf>>, String> {
+    let Some(manifest) = read_message_store_manifest(&paths.manifest_file)? else {
+        return Ok(None);
+    };
+    if !manifest.should_read_jsonl() {
+        return Ok(None);
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    if !paths.index_file.exists() {
+        return Ok(None);
+    }
+    let index = read_message_store_index_file(&paths.index_file)?;
+    let mut block_ids = ordered_message_store_index_block_ids(&index);
+    if block_ids.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let normalized_limit = block_limit.clamp(1, 8);
+    let start = block_ids.len().saturating_sub(normalized_limit);
+    block_ids = block_ids[start..].to_vec();
+    let mut block_paths = Vec::<PathBuf>::with_capacity(block_ids.len());
+    for block_id in block_ids {
+        block_paths.push(jsonl_snapshot_index_item_path(
+            &paths.messages_file,
+            Some(block_id),
+        )?);
+    }
+    Ok(Some(block_paths))
+}
+
+fn read_ready_message_store_recent_blocks_page_with_cache(
+    paths: &MessageStorePaths,
+    block_limit: usize,
+    use_block_cache: bool,
+) -> Result<Option<MessageStoreLimitPage>, String> {
+    let Some(manifest) = read_message_store_manifest(&paths.manifest_file)? else {
+        return Ok(None);
+    };
+    if !manifest.should_read_jsonl() {
+        return Ok(None);
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    if !paths.index_file.exists() {
+        return Ok(None);
+    }
+    let index = read_message_store_index_file(&paths.index_file)?;
+    let block_ids = ordered_message_store_index_block_ids(&index);
+    if block_ids.is_empty() {
+        return Ok(Some(MessageStoreLimitPage {
+            messages: Vec::new(),
+            has_more: false,
+        }));
+    }
+    let normalized_limit = block_limit.clamp(1, 8);
+    let selected_block_ids = block_ids
+        .iter()
+        .rev()
+        .take(normalized_limit)
+        .copied()
+        .collect::<Vec<_>>();
+    let mut selected_block_ids = selected_block_ids;
+    selected_block_ids.reverse();
+    let selected_block_ids = selected_block_ids
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let selected_items = index
+        .items
+        .iter()
+        .filter(|item| selected_block_ids.contains(&item.block_id.unwrap_or(0)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let messages = if use_block_cache {
+        read_jsonl_snapshot_messages_by_index_items_cached(&paths.messages_file, &selected_items)?
+    } else {
+        read_jsonl_snapshot_messages_by_index_items(&paths.messages_file, &selected_items)?
+    };
+    Ok(Some(MessageStoreLimitPage {
+        messages,
+        has_more: block_ids.len() > normalized_limit,
+    }))
 }
 
 pub(super) fn read_ready_message_store_message_by_id(
@@ -751,6 +931,62 @@ pub(super) fn read_ready_message_store_compaction_segment_before(
     store
         .read_compaction_segment_before(boundary_message_id)
         .map(Some)
+}
+
+pub(super) fn read_ready_message_store_block_page(
+    paths: &MessageStorePaths,
+    requested_block_id: Option<u32>,
+) -> Result<Option<MessageStoreBlockPage>, String> {
+    let Some(manifest) = read_message_store_manifest(&paths.manifest_file)? else {
+        return Ok(None);
+    };
+    if !manifest.should_read_jsonl() {
+        return Ok(None);
+    }
+    validate_ready_message_store_snapshot_integrity(paths, &manifest)?;
+    if !paths.index_file.exists() {
+        return Ok(None);
+    }
+    let index = read_message_store_index_file(&paths.index_file)?;
+    if index.items.is_empty() {
+        return Ok(Some(MessageStoreBlockPage {
+            blocks: Vec::new(),
+            selected_block_id: requested_block_id.unwrap_or(0),
+            messages: Vec::new(),
+            has_prev_block: false,
+            has_next_block: false,
+        }));
+    }
+    let summaries = build_message_store_block_summaries(paths, &index)?;
+    let selected_block_id = requested_block_id
+        .filter(|block_id| summaries.iter().any(|item| item.block_id == *block_id))
+        .or_else(|| summaries.last().map(|item| item.block_id))
+        .unwrap_or(0);
+    let selected_idx = summaries
+        .iter()
+        .position(|item| item.block_id == selected_block_id)
+        .ok_or_else(|| {
+            format!(
+                "会话块不存在，conversation_id={}，block_id={selected_block_id}",
+                paths.conversation_id
+            )
+        })?;
+    let selected_items = index
+        .items
+        .iter()
+        .filter(|item| item.block_id.unwrap_or(0) == selected_block_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let messages =
+        read_jsonl_snapshot_messages_by_index_items_cached(&paths.messages_file, &selected_items)?;
+    let has_next_block = selected_idx + 1 < summaries.len();
+    Ok(Some(MessageStoreBlockPage {
+        blocks: summaries,
+        selected_block_id,
+        messages,
+        has_prev_block: selected_idx > 0,
+        has_next_block,
+    }))
 }
 
 pub(super) fn read_message_store_current_compaction_segment_for_conversation(
@@ -1108,6 +1344,185 @@ fn read_jsonl_snapshot_messages_by_index_items(
         messages.push(message);
     }
     Ok(messages)
+}
+
+fn read_jsonl_snapshot_messages_by_index_items_cached(
+    path: &PathBuf,
+    items: &[MessageStoreIndexItem],
+) -> Result<Vec<ChatMessage>, String> {
+    let mut messages = Vec::with_capacity(items.len());
+    let mut current_file_path = PathBuf::new();
+    let mut current_file: Option<fs::File> = None;
+    let mut current_modified_at: Option<std::time::SystemTime> = None;
+    let mut current_len = 0_u64;
+    let mut current_messages_by_id = std::collections::HashMap::<String, ChatMessage>::new();
+    let mut current_cache_dirty = false;
+
+    let flush_current_cache = |
+        current_file_path: &PathBuf,
+        current_modified_at: &Option<std::time::SystemTime>,
+        current_len: u64,
+        current_messages_by_id: &std::collections::HashMap<String, ChatMessage>,
+        current_cache_dirty: bool,
+    | {
+        if !current_cache_dirty || current_file_path.as_os_str().is_empty() {
+            return;
+        }
+        lock_message_store_block_file_cache().insert(
+            current_file_path.clone(),
+            CachedMessageStoreBlockFile {
+                modified_at: *current_modified_at,
+                len: current_len,
+                messages_by_id: Arc::new(current_messages_by_id.clone()),
+            },
+        );
+    };
+
+    for item in items {
+        let item_path = jsonl_snapshot_index_item_path(path, item.block_id)?;
+        if current_file_path != item_path {
+            flush_current_cache(
+                &current_file_path,
+                &current_modified_at,
+                current_len,
+                &current_messages_by_id,
+                current_cache_dirty,
+            );
+            current_cache_dirty = false;
+            current_file = None;
+            current_messages_by_id.clear();
+
+            let metadata = fs::metadata(&item_path).map_err(|err| {
+                format!(
+                    "读取会话块元数据失败，path={}，message_id={}，error={err}",
+                    item_path.display(),
+                    item.message_id
+                )
+            })?;
+            current_modified_at = metadata.modified().ok();
+            current_len = metadata.len();
+            {
+                let cache = lock_message_store_block_file_cache();
+                if let Some(cached) = cache.get(&item_path) {
+                    if cached.modified_at == current_modified_at && cached.len == current_len {
+                        current_messages_by_id = (*cached.messages_by_id).clone();
+                    }
+                }
+            }
+            current_file_path = item_path;
+        }
+
+        if let Some(message) = current_messages_by_id.get(item.message_id.trim()) {
+            messages.push(message.clone());
+            continue;
+        }
+
+        if current_file.is_none() {
+            current_file = Some(fs::File::open(&current_file_path).map_err(|err| {
+                format!(
+                    "打开 JSONL 消息文件失败，path={}，message_id={}，error={err}",
+                    current_file_path.display(),
+                    item.message_id
+                )
+            })?);
+        }
+        let Some(file) = current_file.as_mut() else {
+            return Err(format!("打开 JSONL 消息文件失败，message_id={}", item.message_id));
+        };
+        std::io::Seek::seek(file, std::io::SeekFrom::Start(item.offset)).map_err(|err| {
+            format!(
+                "定位 JSONL 消息失败，path={}，message_id={}，offset={}，error={err}",
+                current_file_path.display(),
+                item.message_id,
+                item.offset
+            )
+        })?;
+        let mut buffer = vec![0_u8; item.byte_len as usize];
+        std::io::Read::read_exact(file, &mut buffer).map_err(|err| {
+            format!(
+                "读取 JSONL 消息失败，path={}，message_id={}，offset={}，byte_len={}，error={err}",
+                current_file_path.display(),
+                item.message_id,
+                item.offset,
+                item.byte_len
+            )
+        })?;
+        let raw = String::from_utf8(buffer)
+            .map_err(|err| format!("JSONL 消息不是 UTF-8，message_id={}，error={err}", item.message_id))?;
+        let line = raw.trim_end_matches(['\r', '\n']);
+        let message = decode_jsonl_snapshot_message(line)
+            .map_err(|err| format!("解析 JSONL 消息失败，message_id={}，error={err}", item.message_id))?;
+        if message.id.trim() != item.message_id.trim() {
+            return Err(format!(
+                "JSONL 索引与消息不一致，path={}，expected_message_id={}，actual_message_id={}，offset={}，byte_len={}",
+                current_file_path.display(),
+                item.message_id,
+                message.id,
+                item.offset,
+                item.byte_len
+            ));
+        }
+        current_messages_by_id.insert(message.id.clone(), message.clone());
+        current_cache_dirty = true;
+        messages.push(message);
+    }
+
+    flush_current_cache(
+        &current_file_path,
+        &current_modified_at,
+        current_len,
+        &current_messages_by_id,
+        current_cache_dirty,
+    );
+    Ok(messages)
+}
+
+fn build_message_store_block_summaries(
+    path: &MessageStorePaths,
+    index: &MessageStoreIndexFile,
+) -> Result<Vec<MessageStoreBlockSummary>, String> {
+    let block_ids = ordered_message_store_index_block_ids(index);
+    let latest_block_id = block_ids.last().copied().unwrap_or(0);
+    let mut summaries = Vec::<MessageStoreBlockSummary>::with_capacity(block_ids.len());
+    for block_id in block_ids {
+        let block_items = index
+            .items
+            .iter()
+            .filter(|item| item.block_id.unwrap_or(0) == block_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        if block_items.is_empty() {
+            continue;
+        }
+        let first_message = read_jsonl_snapshot_messages_by_index_items(
+            &path.messages_file,
+            &block_items[0..1],
+        )?
+        .into_iter()
+        .next();
+        let last_message = read_jsonl_snapshot_messages_by_index_items(
+            &path.messages_file,
+            &block_items[(block_items.len() - 1)..],
+        )?
+        .into_iter()
+        .next();
+        summaries.push(MessageStoreBlockSummary {
+            block_id,
+            message_count: block_items.len(),
+            first_message_id: block_items
+                .first()
+                .map(|item| item.message_id.clone())
+                .unwrap_or_default(),
+            last_message_id: block_items
+                .last()
+                .map(|item| item.message_id.clone())
+                .unwrap_or_default(),
+            first_created_at: first_message.map(|message| message.created_at),
+            last_created_at: last_message.map(|message| message.created_at),
+            is_latest: block_id == latest_block_id,
+        });
+    }
+    Ok(summaries)
 }
 
 fn jsonl_snapshot_index_item_path(base_messages_file: &PathBuf, block_id: Option<u32>) -> Result<PathBuf, String> {

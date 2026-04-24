@@ -168,8 +168,8 @@ fn build_user_mention_context_snapshot_with_agents(
 
 fn build_user_mention_dispatch_plans(
     app_config: &AppConfig,
-    data: &AppData,
-    conversation_id: &str,
+    conversation: &Conversation,
+    agents: &[AgentProfile],
     source_department_id: &str,
     source_agent_id: &str,
     latest_user_text: &str,
@@ -178,12 +178,6 @@ fn build_user_mention_dispatch_plans(
     let Some(items) = mentions.filter(|items| !items.is_empty()) else {
         return Ok((Vec::new(), Vec::new()));
     };
-    let conversation = data
-        .conversations
-        .iter()
-        .find(|item| item.id == conversation_id && item.summary.trim().is_empty())
-        .ok_or_else(|| format!("未找到目标会话，conversationId={conversation_id}"))?;
-    let agents = &data.agents;
     let mention_background =
         build_user_mention_context_snapshot_with_agents(conversation, agents, latest_user_text);
     let mut mention_plans = Vec::<UserMentionPlan>::new();
@@ -217,7 +211,7 @@ fn build_user_mention_dispatch_plans(
         }
         let Some(target_department) = department_by_id(app_config, &target_department_id) else {
             mention_failures.push(UserMentionFailurePlan {
-                root_conversation_id: conversation_id.to_string(),
+                root_conversation_id: conversation.id.clone(),
                 source_agent_id: source_agent_id.to_string(),
                 target_department_id: target_department_id.clone(),
                 target_agent_id: target_agent_id.clone(),
@@ -232,7 +226,7 @@ fn build_user_mention_dispatch_plans(
             .any(|item| item.trim() == target_agent_id)
         {
             mention_failures.push(UserMentionFailurePlan {
-                root_conversation_id: conversation_id.to_string(),
+                root_conversation_id: conversation.id.clone(),
                 source_agent_id: source_agent_id.to_string(),
                 target_department_id: target_department_id.clone(),
                 target_agent_id: target_agent_id.clone(),
@@ -246,7 +240,7 @@ fn build_user_mention_dispatch_plans(
             .any(|agent| agent.id == target_agent_id && !agent.is_built_in_user)
         {
             mention_failures.push(UserMentionFailurePlan {
-                root_conversation_id: conversation_id.to_string(),
+                root_conversation_id: conversation.id.clone(),
                 source_agent_id: source_agent_id.to_string(),
                 target_department_id: target_department_id.clone(),
                 target_agent_id: target_agent_id.clone(),
@@ -258,7 +252,7 @@ fn build_user_mention_dispatch_plans(
         let target_api_config_ids = delegate_target_chat_api_config_ids(app_config, target_department);
         if target_api_config_ids.is_empty() {
             mention_failures.push(UserMentionFailurePlan {
-                root_conversation_id: conversation_id.to_string(),
+                root_conversation_id: conversation.id.clone(),
                 source_agent_id: source_agent_id.to_string(),
                 target_department_id: target_department_id.clone(),
                 target_agent_id: target_agent_id.clone(),
@@ -268,7 +262,7 @@ fn build_user_mention_dispatch_plans(
             continue;
         }
         mention_plans.push(UserMentionPlan {
-            root_conversation_id: conversation_id.to_string(),
+            root_conversation_id: conversation.id.clone(),
             source_department_id: source_department_id.to_string(),
             source_agent_id: source_agent_id.to_string(),
             target_department_id,
@@ -280,68 +274,6 @@ fn build_user_mention_dispatch_plans(
         });
     }
     Ok((mention_plans, mention_failures))
-}
-
-fn first_available_department_agent_id(
-    department: &DepartmentConfig,
-    data: &AppData,
-) -> Option<String> {
-    department
-        .agent_ids
-        .iter()
-        .map(|item| item.trim())
-        .find(|agent_id| {
-            !agent_id.is_empty()
-                && data
-                    .agents
-                    .iter()
-                    .any(|agent| agent.id == *agent_id && !agent.is_built_in_user)
-        })
-        .map(ToOwned::to_owned)
-}
-
-fn resolve_session_binding_for_send<'a>(
-    app_config: &'a AppConfig,
-    data: &AppData,
-    requested_department_id: Option<&str>,
-    requested_agent_id: &str,
-) -> Result<(&'a DepartmentConfig, String), String> {
-    let requested_agent_id = requested_agent_id.trim();
-    if requested_agent_id.is_empty() {
-        return Err("会话信息不完整".to_string());
-    }
-
-    if let Some(department_id) = requested_department_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let department = department_by_id(app_config, department_id)
-            .ok_or_else(|| "部门已经消失".to_string())?;
-        if department
-            .agent_ids
-            .iter()
-            .any(|item| item.trim() == requested_agent_id)
-        {
-            return Ok((department, requested_agent_id.to_string()));
-        }
-        let rebound_agent_id = first_available_department_agent_id(department, data)
-            .ok_or_else(|| format!("部门没有可用人格：{}", department.id))?;
-        return Ok((department, rebound_agent_id));
-    }
-
-    let department = department_for_agent_id(app_config, requested_agent_id)
-        .or_else(|| assistant_department(app_config))
-        .ok_or_else(|| "未找到可用部门".to_string())?;
-    if department
-        .agent_ids
-        .iter()
-        .any(|item| item.trim() == requested_agent_id)
-    {
-        return Ok((department, requested_agent_id.to_string()));
-    }
-    let rebound_agent_id = first_available_department_agent_id(department, data)
-        .ok_or_else(|| format!("部门没有可用人格：{}", department.id))?;
-    Ok((department, rebound_agent_id))
 }
 
 fn enqueue_user_mention_result_message(
@@ -700,29 +632,39 @@ async fn send_chat_message(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            eprintln!("[聊天发送] 缺少 department_id，拒绝发送用户消息");
+            "缺少 department_id".to_string()
+        })?;
     let requested_agent_id = session.agent_id.trim().to_string();
+    let conversation_id = session
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            eprintln!("[聊天发送] 缺少 conversation_id，拒绝发送用户消息");
+            "缺少 conversation_id".to_string()
+        })?;
 
     if requested_agent_id.is_empty() {
         return Err("会话信息不完整".to_string());
     }
 
-    // 获取或创建会话ID
     let prepare_started_at = std::time::Instant::now();
-    let (conversation_id, department_id, agent_id, model_config_id, mention_plans, mention_failures) = {
+    let (department_id, agent_id, model_config_id, mention_plans, mention_failures) = {
         let config_started_at = std::time::Instant::now();
         let app_config = state_read_config_cached(&state)?;
         let config_elapsed_ms = config_started_at.elapsed().as_millis();
         let app_data_started_at = std::time::Instant::now();
-        let mut data = state_read_app_data_cached(&state)?;
+        let agents = state_read_agents_cached(&state)?;
         let app_data_elapsed_ms = app_data_started_at.elapsed().as_millis();
         let department_started_at = std::time::Instant::now();
-        let (department, agent_id) = resolve_session_binding_for_send(
-            &app_config,
-            &data,
-            requested_department_id.as_deref(),
-            &requested_agent_id,
-        )?;
+        let department = department_by_id(&app_config, requested_department_id.as_str())
+            .ok_or_else(|| format!("部门已经消失：{}", requested_department_id))?;
+        let agent_id = requested_agent_id.clone();
         let department_elapsed_ms = department_started_at.elapsed().as_millis();
         let api_config_id = department_primary_api_config_id(department);
         if api_config_id.trim().is_empty() {
@@ -730,43 +672,14 @@ async fn send_chat_message(
         }
 
         let conversation_started_at = std::time::Instant::now();
-        let resolved_conversation = {
-            let _guard = lock_conversation_with_metrics(
-                &state,
-                "conversation_service_resolve_send_target_conversation",
-            )?;
-            conversation_service().resolve_send_target_conversation_in_data(
-                &mut data,
-                &state.data_path,
-                session.conversation_id.as_deref(),
-                &api_config_id,
-                &department.id,
-                &agent_id,
-            )?
+        let conversation = {
+            state_read_conversation_cached(&state, &conversation_id)?
         };
         let conversation_elapsed_ms = conversation_started_at.elapsed().as_millis();
-        if let Some(reject_reason) = resolved_conversation.requested_reject_reason.as_deref() {
-            if let Some(requested_cid) = session
-                .conversation_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                eprintln!(
-                    "[聊天] 会话 conversation_id 被拒绝，已选择回退会话: requested_cid={}, reject_reason={}, fallback_cid={}, department_id={}, agent_id={}",
-                    requested_cid,
-                    reject_reason,
-                    resolved_conversation.conversation_id,
-                    department.id,
-                    agent_id
-                );
-            }
-        }
-        let conversation_id = resolved_conversation.conversation_id.clone();
         let (mention_plans, mention_failures) = build_user_mention_dispatch_plans(
             &app_config,
-            &data,
-            &conversation_id,
+            &conversation,
+            &agents,
             &department.id,
             &agent_id,
             &display_text,
@@ -786,7 +699,6 @@ async fn send_chat_message(
         );
 
         (
-            conversation_id,
             department.id.clone(),
             agent_id,
             api_config_id,
@@ -944,28 +856,39 @@ async fn send_user_mention_message_inner(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            eprintln!("[聊天发送] 缺少 department_id，拒绝发送用户@委托消息");
+            "缺少 department_id".to_string()
+        })?;
     let requested_agent_id = session.agent_id.trim().to_string();
+    let conversation_id = session
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            eprintln!("[聊天发送] 缺少 conversation_id，拒绝发送用户@委托消息");
+            "缺少 conversation_id".to_string()
+        })?;
 
     if requested_agent_id.is_empty() {
         return Err("会话信息不完整".to_string());
     }
 
     let prepare_started_at = std::time::Instant::now();
-    let (conversation_id, department_id, agent_id, model_config_id, mention_plans, mention_failures) = {
+    let (department_id, agent_id, model_config_id, mention_plans, mention_failures) = {
         let config_started_at = std::time::Instant::now();
         let app_config = state_read_config_cached(state)?;
         let config_elapsed_ms = config_started_at.elapsed().as_millis();
         let app_data_started_at = std::time::Instant::now();
-        let mut data = state_read_app_data_cached(state)?;
+        let agents = state_read_agents_cached(state)?;
         let app_data_elapsed_ms = app_data_started_at.elapsed().as_millis();
         let department_started_at = std::time::Instant::now();
-        let (department, agent_id) = resolve_session_binding_for_send(
-            &app_config,
-            &data,
-            requested_department_id.as_deref(),
-            &requested_agent_id,
-        )?;
+        let department = department_by_id(&app_config, requested_department_id.as_str())
+            .ok_or_else(|| format!("部门已经消失：{}", requested_department_id))?;
+        let agent_id = requested_agent_id.clone();
         let department_elapsed_ms = department_started_at.elapsed().as_millis();
         let api_config_id = department_primary_api_config_id(department);
         if api_config_id.trim().is_empty() {
@@ -973,26 +896,14 @@ async fn send_user_mention_message_inner(
         }
 
         let conversation_started_at = std::time::Instant::now();
-        let resolved_conversation = {
-            let _guard = lock_conversation_with_metrics(
-                state,
-                "conversation_service_resolve_send_target_conversation",
-            )?;
-            conversation_service().resolve_send_target_conversation_in_data(
-                &mut data,
-                &state.data_path,
-                session.conversation_id.as_deref(),
-                &api_config_id,
-                &department.id,
-                &agent_id,
-            )?
+        let conversation = {
+            state_read_conversation_cached(state, &conversation_id)?
         };
         let conversation_elapsed_ms = conversation_started_at.elapsed().as_millis();
-        let conversation_id = resolved_conversation.conversation_id.clone();
         let (mention_plans, mention_failures) = build_user_mention_dispatch_plans(
             &app_config,
-            &data,
-            &conversation_id,
+            &conversation,
+            &agents,
             &department.id,
             &agent_id,
             &display_text,
@@ -1013,7 +924,6 @@ async fn send_user_mention_message_inner(
         );
 
         (
-            conversation_id,
             department.id.clone(),
             agent_id,
             api_config_id,

@@ -1,76 +1,4 @@
 impl ConversationService {
-    fn resolve_send_target_conversation_in_data(
-        &self,
-        data: &mut AppData,
-        data_path: &PathBuf,
-        requested_conversation_id: Option<&str>,
-        api_config_id: &str,
-        department_id: &str,
-        agent_id: &str,
-    ) -> Result<SendTargetConversationResolution, String> {
-        let normalized_requested = requested_conversation_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let (conversation_id, requested_reject_reason) =
-            if let Some(conversation_id) = normalized_requested {
-                if data.conversations.iter().any(|conversation| {
-                    conversation.id == conversation_id && conversation.summary.trim().is_empty()
-                }) {
-                    (conversation_id.to_string(), None)
-                } else {
-                    let idx = ensure_active_foreground_conversation_index_atomic(
-                        data,
-                        data_path,
-                        api_config_id,
-                        agent_id,
-                    );
-                    let fallback_id = data
-                        .conversations
-                        .get(idx)
-                        .map(|item| item.id.clone())
-                        .ok_or_else(|| "活动会话索引超出范围".to_string())?;
-                    let reject_reason = data
-                        .conversations
-                        .iter()
-                        .find(|conversation| conversation.id == conversation_id)
-                        .map(|conversation| {
-                            if !conversation.summary.trim().is_empty() {
-                                "summary_present".to_string()
-                            } else {
-                                "unknown".to_string()
-                            }
-                        })
-                        .unwrap_or_else(|| "not_found".to_string());
-                    (fallback_id, Some(reject_reason))
-                }
-            } else {
-                let idx = ensure_active_foreground_conversation_index_atomic(
-                    data,
-                    data_path,
-                    api_config_id,
-                    agent_id,
-                );
-                let conversation_id = data
-                    .conversations
-                    .get(idx)
-                    .map(|item| item.id.clone())
-                    .ok_or_else(|| "活动会话索引超出范围".to_string())?;
-                (conversation_id, None)
-            };
-
-        let conversation = data
-            .conversations
-            .iter_mut()
-            .find(|item| item.id == conversation_id && item.summary.trim().is_empty())
-            .ok_or_else(|| format!("未找到目标会话，conversationId={conversation_id}"))?;
-        conversation.department_id = department_id.to_string();
-        conversation.agent_id = agent_id.to_string();
-        Ok(SendTargetConversationResolution {
-            conversation_id,
-            requested_reject_reason,
-        })
-    }
-
     fn resolve_delegate_result_target_conversation(
         &self,
         state: &AppState,
@@ -81,43 +9,50 @@ impl ConversationService {
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
         let config = read_config(&state.config_path)?;
-        let mut data = state_read_app_data_cached(state)?;
-        let before_len = data.conversations.len();
-        let before_main_id = data.main_conversation_id.clone();
         let assistant_agent_id = assistant_department_agent_id(&config)
             .ok_or_else(|| "未找到助理部门委任人".to_string())?;
         let department_id = department_for_agent_id(&config, &assistant_agent_id)
             .map(|item| item.id.clone())
             .unwrap_or_else(|| ASSISTANT_DEPARTMENT_ID.to_string());
-        let target_conversation_id = if data.conversations.iter().any(|item| {
-            item.id == root_conversation_id
-                && item.summary.trim().is_empty()
-                && !conversation_is_delegate(item)
-        }) {
-            root_conversation_id.to_string()
-        } else {
-            let main_idx = ensure_main_conversation_index(&mut data, "", &assistant_agent_id);
-            let conversation_id = data
-                .conversations
-                .get(main_idx)
-                .map(|item| item.id.clone())
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| "未找到可用主会话，无法回发委托结果".to_string())?;
+        let target_conversation_id = if state_read_conversation_cached(state, root_conversation_id)
+            .ok()
+            .filter(|conversation| {
+                conversation.summary.trim().is_empty() && !conversation_is_delegate(conversation)
+            })
+            .is_some()
+        {
+            root_conversation_id.trim().to_string()
+        } else if let Some(conversation_id) =
+            self.resolve_latest_foreground_conversation_id(state, &assistant_agent_id)?
+        {
             eprintln!(
-                "[委托线程] 原始会话不可用，委托结果回退到主会话: requested_conversation_id={}, fallback_conversation_id={}",
+                "[委托线程] 原始会话不可用，委托结果回退到前台会话: requested_conversation_id={}, fallback_conversation_id={}",
+                root_conversation_id,
+                conversation_id
+            );
+            conversation_id
+        } else {
+            let conversation = build_conversation_record(
+                "",
+                &assistant_agent_id,
+                &department_id,
+                "",
+                CONVERSATION_KIND_CHAT,
+                None,
+                None,
+            );
+            let conversation_id = conversation.id.clone();
+            state_schedule_conversation_persist(state, &conversation, true)?;
+            let mut runtime = state_read_runtime_state_cached(state)?;
+            runtime.main_conversation_id = Some(conversation_id.clone());
+            state_write_runtime_state_cached(state, &runtime)?;
+            eprintln!(
+                "[委托线程] 原始会话不可用，委托结果新建主会话: requested_conversation_id={}, fallback_conversation_id={}",
                 root_conversation_id,
                 conversation_id
             );
             conversation_id
         };
-        if data.conversations.len() != before_len || data.main_conversation_id != before_main_id {
-            persist_selected_conversations_and_runtime(
-                state,
-                &data,
-                std::slice::from_ref(&target_conversation_id),
-                "delegate_runtime.resolve_target_conversation",
-            )?;
-        }
         drop(guard);
         Ok(DelegateResultTargetConversationResolution {
             department_id,
@@ -138,8 +73,12 @@ impl ConversationService {
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
         let mut config = read_config(&app_state.config_path)?;
-        let mut data = state_read_app_data_cached(app_state)?;
-        merge_private_organization_into_runtime_data(&app_state.data_path, &mut config, &mut data)?;
+        let mut agents = state_read_agents_cached(app_state)?;
+        merge_private_organization_into_runtime(
+            &app_state.data_path,
+            &mut config,
+            &mut agents,
+        )?;
         let source_department = department_for_agent_id(&config, source_agent_id)
             .cloned()
             .ok_or_else(|| format!("未找到发起部门，agentId={source_agent_id}"))?;
@@ -162,8 +101,7 @@ impl ConversationService {
             drop(guard);
             return Err("该部门主管就是你自己，自己解决。".to_string());
         }
-        if !data
-            .agents
+        if !agents
             .iter()
             .any(|agent| agent.id == target_agent_id && !agent.is_built_in_user)
         {
@@ -182,20 +120,19 @@ impl ConversationService {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| "主代理缺少当前会话 ID，无法发起委托".to_string())?;
-            data.conversations
-                .iter()
-                .find(|item| {
-                    item.id == requested_conversation_id
-                        && item.summary.trim().is_empty()
-                        && !conversation_is_delegate(item)
+            state_read_conversation_cached(app_state, requested_conversation_id)
+                .ok()
+                .filter(|conversation| {
+                    conversation.summary.trim().is_empty()
+                        && !conversation_is_delegate(conversation)
                 })
-                .map(|item| item.id.clone())
+                .map(|conversation| conversation.id)
                 .ok_or_else(|| format!("未找到指定主会话，conversationId={requested_conversation_id}"))?
         };
         drop(guard);
         Ok(DelegateContextResolution {
             config,
-            data,
+            agents,
             source_department,
             target_department,
             target_agent_id,
@@ -204,29 +141,6 @@ impl ConversationService {
         })
     }
 
-
-    fn resolve_prompt_prepare_conversation_from_data(
-        &self,
-        data: &mut AppData,
-        data_path: &PathBuf,
-        runtime_conversation_id: Option<&str>,
-        runtime_conversation: &Conversation,
-        selected_api: &ApiConfig,
-        effective_agent_id: &str,
-        requested_conversation_id: Option<&str>,
-    ) -> Result<PromptPrepareConversationResolution, String> {
-        self.resolve_prompt_prepare_conversation_core(
-            data,
-            data_path,
-            runtime_conversation_id,
-            runtime_conversation,
-            selected_api,
-            effective_agent_id,
-            requested_conversation_id,
-            false,
-        )?
-        .ok_or_else(|| "指定会话不存在或不可用。".to_string())
-    }
 
     fn resolve_prompt_prepare_conversation_from_data_read_only(
         &self,

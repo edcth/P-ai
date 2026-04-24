@@ -42,15 +42,11 @@ async fn builtin_organize_context(
         if effective_agent_id.is_empty() {
             return Err("缺少人格 ID，无法整理上下文。".to_string());
         }
-        let source = with_app_data_cached_ref(app_state, |data, _detail| {
-            let source_idx =
-                latest_active_conversation_index(data, &selected_api.id, &effective_agent_id)
-                    .ok_or_else(|| "当前没有可整理的活动对话。".to_string())?;
-            data.conversations
-                .get(source_idx)
-                .cloned()
-                .ok_or_else(|| "当前没有可整理的活动对话。".to_string())
-        })?;
+        let conversation_id = conversation_service()
+            .resolve_latest_foreground_conversation_id(app_state, &effective_agent_id)?
+            .ok_or_else(|| "当前没有可整理的活动对话。".to_string())?;
+        let source = state_read_conversation_cached(app_state, &conversation_id)
+            .map_err(|err| format!("当前没有可整理的活动对话：{}", err))?;
         if source.messages.len() < 10 {
             return Ok(serde_json::json!({
                 "ok": false,

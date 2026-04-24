@@ -36,11 +36,6 @@ struct ToggleUnarchivedConversationPinMutationResult {
     pin_index: Option<usize>,
 }
 
-struct SendTargetConversationResolution {
-    conversation_id: String,
-    requested_reject_reason: Option<String>,
-}
-
 struct PromptPrepareConversationResolution {
     conversation_before: Conversation,
     last_archive_summary: Option<String>,
@@ -66,7 +61,7 @@ struct DelegateResultTargetConversationResolution {
 
 struct DelegateContextResolution {
     config: AppConfig,
-    data: AppData,
+    agents: Vec<AgentProfile>,
     source_department: DepartmentConfig,
     target_department: DepartmentConfig,
     target_agent_id: String,
@@ -107,6 +102,24 @@ struct ImportArchivesMutationResult {
     skipped_count: usize,
     total_count: usize,
     selected_archive_id: Option<String>,
+}
+
+struct ConversationBlockSummaryResult {
+    block_id: u32,
+    message_count: usize,
+    first_message_id: String,
+    last_message_id: String,
+    first_created_at: Option<String>,
+    last_created_at: Option<String>,
+    is_latest: bool,
+}
+
+struct ConversationBlockPageResult {
+    blocks: Vec<ConversationBlockSummaryResult>,
+    selected_block_id: u32,
+    messages: Vec<ChatMessage>,
+    has_prev_block: bool,
+    has_next_block: bool,
 }
 
 struct CompactionMessagePersistResult {

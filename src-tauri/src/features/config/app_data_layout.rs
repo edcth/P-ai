@@ -319,6 +319,7 @@ fn upsert_chat_index_conversation(index: &mut ChatIndexFile, conversation: &Conv
     }
 }
 
+#[cfg(test)]
 fn remove_chat_index_conversation(index: &mut ChatIndexFile, conversation_id: &str) {
     let conversation_id = conversation_id.trim();
     if conversation_id.is_empty() {

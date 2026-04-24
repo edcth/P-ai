@@ -272,12 +272,12 @@ fn agent_memory_scope_label(agent: &AgentProfile) -> String {
 fn load_importable_agent_scope_labels(
     state: &AppState,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let data = state_read_app_data_cached(state)?;
+    let agents = state_read_agents_cached(state)?;
     let base_config = read_config(&state.config_path)?;
     let (private_agent_ids, _) =
-        runtime_private_organization_ids(&state.data_path, &base_config, &data.agents)?;
+        runtime_private_organization_ids(&state.data_path, &base_config, &agents)?;
     let mut out = std::collections::HashMap::<String, String>::new();
-    for agent in &data.agents {
+    for agent in &agents {
         if agent.is_built_in_user || agent.is_built_in_system {
             continue;
         }

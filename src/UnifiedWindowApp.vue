@@ -156,16 +156,28 @@
       :default-create-conversation-department-id="defaultCreateConversationDepartmentId"
       :archives="archives"
       :selected-archive-id="selectedArchiveId"
+      :archive-blocks="archiveBlocks"
+      :selected-archive-block-id="selectedArchiveBlockId"
+      :archive-has-prev-block="archiveHasPrevBlock"
+      :archive-has-next-block="archiveHasNextBlock"
       :archive-messages="archiveMessages"
       :archive-summary-text="archiveSummaryText"
       :unarchived-conversations="unarchivedConversations"
+      :unarchived-blocks="unarchivedBlocks"
       :selected-unarchived-conversation-id="selectedUnarchivedConversationId"
+      :selected-unarchived-block-id="selectedUnarchivedBlockId"
+      :unarchived-has-prev-block="unarchivedHasPrevBlock"
+      :unarchived-has-next-block="unarchivedHasNextBlock"
       :unarchived-messages="unarchivedMessages"
       :delegate-conversations="delegateConversations"
       :selected-delegate-conversation-id="selectedDelegateConversationId"
       :delegate-messages="delegateMessages"
       :remote-im-contact-conversations="remoteImContactConversations"
+      :remote-im-contact-blocks="remoteImContactBlocks"
       :selected-remote-im-contact-id="selectedRemoteImContactId"
+      :selected-remote-im-contact-block-id="selectedRemoteImContactBlockId"
+      :remote-im-has-prev-block="remoteImHasPrevBlock"
+      :remote-im-has-next-block="remoteImHasNextBlock"
       :remote-im-contact-messages="remoteImContactMessages"
       :message-text="messageText"
       :extract-message-images="extractMessageImages"
@@ -258,9 +270,12 @@
       :on-open-skill-panel="openSkillPlaceholderDialog"
       :load-archives="loadArchives"
       :select-archive="selectArchive"
+      :select-archive-block="selectArchiveBlock"
       :select-unarchived-conversation="selectUnarchivedConversation"
+      :select-unarchived-conversation-block="selectUnarchivedConversationBlock"
       :select-delegate-conversation="selectDelegateConversation"
       :select-remote-im-contact-conversation="selectRemoteImContactConversation"
+      :select-remote-im-contact-conversation-block="selectRemoteImContactConversationBlock"
       :export-archive="exportArchive"
       :import-archive-file="prepareArchiveImport"
       :delete-archive="deleteArchive"
@@ -800,24 +815,39 @@ const {
 
 const {
   archives,
+  archiveBlocks,
   archiveMessages,
   archiveSummaryText,
   selectedArchiveId,
+  selectedArchiveBlockId,
+  archiveHasPrevBlock,
+  archiveHasNextBlock,
   unarchivedConversations,
+  unarchivedBlocks,
   unarchivedMessages,
   selectedUnarchivedConversationId,
+  selectedUnarchivedBlockId,
+  unarchivedHasPrevBlock,
+  unarchivedHasNextBlock,
   delegateConversations,
   delegateMessages,
   selectedDelegateConversationId,
   remoteImContactConversations,
+  remoteImContactBlocks,
   remoteImContactMessages,
   selectedRemoteImContactId,
+  selectedRemoteImContactBlockId,
+  remoteImHasPrevBlock,
+  remoteImHasNextBlock,
   loadArchives,
   loadDelegateConversations,
   selectArchive,
+  selectArchiveBlock,
   selectUnarchivedConversation,
+  selectUnarchivedConversationBlock,
   selectDelegateConversation,
   selectRemoteImContactConversation,
+  selectRemoteImContactConversationBlock,
   deleteUnarchivedConversation: deleteUnarchivedConversationFromArchivesRaw,
   deleteRemoteImContactConversation,
   deleteArchive,

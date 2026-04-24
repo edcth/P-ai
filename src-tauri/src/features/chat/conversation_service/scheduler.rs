@@ -10,15 +10,9 @@ impl ConversationService {
         seeded_profile_snapshot: Option<&str>,
     ) -> Result<SchedulerHistoryFlushCommitResult, String> {
         let _guard = lock_conversation_with_metrics(state, "scheduler_commit")?;
-        let mut data = state_read_app_data_cached(state)?;
-        let remote_im_runtime_before = serde_json::to_vec(&(
-            data.remote_im_contacts.clone(),
-            data.remote_im_contact_checkpoints.clone(),
-        ))
-        .ok();
-        let Some(conversation_idx) = data.conversations.iter().position(|conversation| {
-            conversation.id == conversation_id && conversation.summary.trim().is_empty()
-        }) else {
+        let mut conversation = match state_read_conversation_cached(state, conversation_id) {
+            Ok(conversation) if conversation.summary.trim().is_empty() => conversation,
+            _ => {
             let event_ids = events
                 .iter()
                 .map(|event| event.id.clone())
@@ -29,35 +23,40 @@ impl ConversationService {
                 &format!("目标会话不存在，conversationId={conversation_id}"),
             )?;
             return Err(format!("目标会话不存在，conversationId={conversation_id}"));
+            }
         };
+        let mut runtime = state_read_runtime_state_cached(state)?;
+        let remote_im_runtime_before = serde_json::to_vec(&(
+            runtime.remote_im_contacts.clone(),
+            runtime.remote_im_contact_checkpoints.clone(),
+        ))
+        .ok();
 
-        let last_archive_summary = scheduler_last_archive_summary(&data);
-        let persisted_batch_messages = {
-            let conversation = &mut data.conversations[conversation_idx];
-            write_persisted_message_batch(
-                conversation,
-                conversation_id,
-                events,
-                prepared_batches,
-                history_flush_time,
-                should_seed_summary_context,
-                seeded_profile_snapshot,
-                last_archive_summary.as_deref(),
-            )
-        };
+        let last_archive_summary = scheduler_last_archive_summary_cached(state)?;
+        let persisted_batch_messages = write_persisted_message_batch(
+            &mut conversation,
+            conversation_id,
+            events,
+            prepared_batches,
+            history_flush_time,
+            should_seed_summary_context,
+            seeded_profile_snapshot,
+            last_archive_summary.as_deref(),
+        );
         let (event_activate_flags, _activated_contacts) = handle_remote_im_activations(
             state,
-            &mut data,
-            conversation_id,
+            &runtime.remote_im_contacts,
+            &mut runtime.remote_im_contact_checkpoints,
+            &mut conversation,
             events,
             history_flush_time,
         )?;
-        data.conversations[conversation_idx].updated_at = history_flush_time.to_string();
+        conversation.updated_at = history_flush_time.to_string();
         persist_after_flush(
             self,
             state,
-            conversation_id,
-            &data,
+            &conversation,
+            &runtime,
             remote_im_runtime_before,
         )?;
         Ok(SchedulerHistoryFlushCommitResult {
@@ -67,14 +66,18 @@ impl ConversationService {
     }
 }
 
-fn scheduler_last_archive_summary(data: &AppData) -> Option<String> {
-    data.conversations
+fn scheduler_last_archive_summary_cached(state: &AppState) -> Result<Option<String>, String> {
+    let chat_index = state_read_chat_index_cached(state)?;
+    Ok(chat_index
+        .conversations
         .iter()
         .rev()
+        .filter(|item| !item.summary.trim().is_empty())
+        .filter_map(|item| state_read_conversation_cached(state, item.id.as_str()).ok())
         .find(|conversation| {
-            !conversation_is_delegate(conversation) && !conversation.summary.trim().is_empty()
+            !conversation_is_delegate(&conversation) && !conversation.summary.trim().is_empty()
         })
-        .map(|conversation| conversation.summary.clone())
+        .map(|conversation| conversation.summary))
 }
 
 fn write_persisted_message_batch(
@@ -164,8 +167,9 @@ fn append_prepared_messages_to_conversation(
 
 fn handle_remote_im_activations(
     state: &AppState,
-    data: &mut AppData,
-    conversation_id: &str,
+    contacts: &[RemoteImContact],
+    checkpoints: &mut Vec<RemoteImContactCheckpoint>,
+    conversation: &mut Conversation,
     events: &[ChatPendingEvent],
     history_flush_time: &str,
 ) -> Result<(Vec<bool>, std::collections::HashSet<String>), String> {
@@ -173,10 +177,11 @@ fn handle_remote_im_activations(
     let mut activated_contacts_in_batch = std::collections::HashSet::<String>::new();
     for event in events {
         let event_should_activate = if matches!(event.source, ChatEventSource::RemoteIm) {
-            remote_im_handle_persisted_event_after_history_flush(
+            remote_im_handle_persisted_event_after_history_flush_runtime(
                 state,
-                data,
-                conversation_id,
+                contacts,
+                checkpoints,
+                conversation,
                 event,
                 history_flush_time,
                 &mut activated_contacts_in_batch,
@@ -192,26 +197,19 @@ fn handle_remote_im_activations(
 fn persist_after_flush(
     service: &ConversationService,
     state: &AppState,
-    conversation_id: &str,
-    data: &AppData,
+    conversation: &Conversation,
+    runtime: &RuntimeStateFile,
     remote_im_runtime_before: Option<Vec<u8>>,
 ) -> Result<(), String> {
     let remote_im_runtime_changed = remote_im_runtime_before
         != serde_json::to_vec(&(
-            data.remote_im_contacts.clone(),
-            data.remote_im_contact_checkpoints.clone(),
+            runtime.remote_im_contacts.clone(),
+            runtime.remote_im_contact_checkpoints.clone(),
         ))
         .ok();
-    let persisted_conversation = data
-        .conversations
-        .iter()
-        .find(|conversation| {
-            conversation.id == conversation_id && conversation.summary.trim().is_empty()
-        })
-        .ok_or_else(|| format!("目标会话不存在，conversationId={conversation_id}"))?;
-    service.persist_conversation_with_chat_index(state, persisted_conversation)?;
+    service.persist_conversation_with_chat_index(state, conversation)?;
     if remote_im_runtime_changed {
-        state_write_runtime_state_cached(state, &build_runtime_state_file(data))?;
+        state_write_runtime_state_cached(state, runtime)?;
     }
     Ok(())
 }

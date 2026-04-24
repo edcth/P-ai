@@ -459,7 +459,7 @@ fn import_agent_memories(
         return Err("agentId is required".to_string());
     }
 
-    let data = state_read_app_data_cached(&state)?;
+    let data = state_read_agents_runtime_snapshot(&state)?;
     let base_config = read_config(&state.config_path)?;
     let (private_agent_ids, _) =
         runtime_private_organization_ids(&state.data_path, &base_config, &data.agents)?;
@@ -931,7 +931,7 @@ fn sync_tray_icon(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let data = state_read_app_data_cached(&state)?;
+    let data = state_read_agents_runtime_snapshot(&state)?;
     let target_agent_id = input
         .agent_id
         .as_deref()
@@ -1120,7 +1120,7 @@ fn set_department_primary_api_config(
     config.selected_api_config_id = api_config_id.to_string();
 
     state_write_config_cached(&state, &config)?;
-    let data = state_read_app_data_cached(&state)?;
+    let data = state_read_agents_runtime_snapshot(&state)?;
     let runtime_config = runtime_config_with_private_organization(&state, &config, &data)?;
 
     let _ = app.emit("easy-call:config-updated", &runtime_config);

@@ -122,9 +122,9 @@ fn resolve_archive_owner_context(
     source: &Conversation,
 ) -> Result<(AgentProfile, String, String), String> {
     let mut config = state_read_config_cached(state)?;
-    let (user_alias, mut agents) = with_app_data_cached_ref(state, |data, _detail| {
-        Ok((data.user_alias.clone(), data.agents.clone()))
-    })?;
+    let runtime = state_read_runtime_state_cached(state)?;
+    let user_alias = runtime.user_alias.clone();
+    let mut agents = state_read_agents_cached(state)?;
     merge_private_organization_into_runtime(&state.data_path, &mut config, &mut agents)?;
 
     let owner_agent_id = resolve_archive_owner_agent_id(&config, &agents, source)?;
@@ -375,26 +375,17 @@ fn append_archive_delivery_message_to_conversation(
         return Err("归档投放目标不能与来源会话相同".to_string());
     }
     let message = build_archive_delivery_message(source, archive_id, summary);
-    let mut data = state_read_app_data_cached(state)?;
-    {
-        let target = data
-            .conversations
-            .iter_mut()
-            .find(|conversation| {
-                conversation.id == target_conversation_id
-                    && conversation.summary.trim().is_empty()
-                    && conversation_visible_in_foreground_lists(conversation)
-            })
-            .ok_or_else(|| format!("归档投放目标会话不存在：{target_conversation_id}"))?;
-        target.messages.push(message.clone());
-        target.updated_at = message.created_at.clone();
-        target.last_assistant_at = Some(message.created_at.clone());
+    let mut target = state_read_conversation_cached(state, target_conversation_id)?
+        .clone();
+    if !target.summary.trim().is_empty() || !conversation_visible_in_foreground_lists(&target) {
+        return Err(format!(
+            "归档投放目标会话不符合投放条件：{target_conversation_id}"
+        ));
     }
-    conversation_service().persist_single_conversation_runtime_snapshot(
-        state,
-        &data,
-        target_conversation_id,
-    )?;
+    target.messages.push(message.clone());
+    target.updated_at = message.created_at.clone();
+    target.last_assistant_at = Some(message.created_at.clone());
+    state_schedule_conversation_persist(state, &target, true)?;
     emit_conversation_message_appended_event(state, target_conversation_id, &message);
     if let Err(err) = emit_unarchived_conversation_overview_updated_from_state(state) {
         runtime_log_warn(format!(
@@ -493,38 +484,37 @@ async fn summarize_archived_conversation_with_model_v2(
     let app_config = state_read_config_cached(state)?;
     let current_user_profile = build_user_profile_memory_board(&state.data_path, agent)?
         .unwrap_or_else(|| "（无）".to_string());
-    let mut prepared = with_app_data_cached_ref(state, |app_data, _detail| {
-        Ok(build_prepared_prompt_for_mode(
-            PromptBuildMode::SummaryContext,
-            source_conversation,
-            agent,
-            &app_data.agents,
-            &app_config.departments,
-            user_alias,
-            "",
-            "concise",
-            "zh-CN",
-            None,
-            None,
-            None,
-            Some(ChatPromptOverrides {
-                latest_user_intent: Some(LatestUserPayloadIntent::SummaryContext {
-                    scene,
-                    user_alias: user_alias.to_string(),
-                    current_user_profile: current_user_profile.clone(),
-                    include_todo_block: build_summary_context_todo_block(source_conversation)
-                        .is_some(),
-                }),
-                latest_images: Some(Vec::new()),
-                latest_audios: Some(Vec::new()),
-                ..ChatPromptOverrides::default()
+    let agents = state_read_agents_cached(state)?;
+    let mut prepared = build_prepared_prompt_for_mode(
+        PromptBuildMode::SummaryContext,
+        source_conversation,
+        agent,
+        &agents,
+        &app_config.departments,
+        user_alias,
+        "",
+        "concise",
+        "zh-CN",
+        None,
+        None,
+        None,
+        Some(ChatPromptOverrides {
+            latest_user_intent: Some(LatestUserPayloadIntent::SummaryContext {
+                scene,
+                user_alias: user_alias.to_string(),
+                current_user_profile: current_user_profile.clone(),
+                include_todo_block: build_summary_context_todo_block(source_conversation)
+                    .is_some(),
             }),
-            Some(state),
-            Some(selected_api),
-            Some(resolved_api),
-            None,
-        ))
-    })?;
+            latest_images: Some(Vec::new()),
+            latest_audios: Some(Vec::new()),
+            ..ChatPromptOverrides::default()
+        }),
+        Some(state),
+        Some(selected_api),
+        Some(resolved_api),
+        None,
+    );
     prepared.latest_images.clear();
     prepared.latest_audios.clear();
     let timeout_secs = 360u64;
@@ -1335,6 +1325,7 @@ async fn force_archive_current(
     let resolved_api_cloned = resolved_api.clone();
     let source_cloned = source.clone();
     let effective_agent_id_cloned = effective_agent_id.clone();
+    let active_conversation_id_for_background = active_conversation_id.clone();
     let target_conversation_id = input
         .target_conversation_id
         .as_deref()
@@ -1349,6 +1340,7 @@ async fn force_archive_current(
                 &resolved_api_cloned,
                 &source_cloned,
                 &effective_agent_id_cloned,
+                Some(active_conversation_id_for_background.as_str()),
                 target_conversation_id.as_deref(),
                 "manual_force_archive",
                 "ARCHIVE-FORCE",
@@ -1487,6 +1479,7 @@ pub(crate) async fn run_archive_pipeline(
     resolved_api: &ResolvedApiConfig,
     source: &Conversation,
     effective_agent_id: &str,
+    prepared_active_conversation_id: Option<&str>,
     target_conversation_id: Option<&str>,
     archive_reason: &str,
     trace_tag: &str,
@@ -1508,6 +1501,7 @@ pub(crate) async fn run_archive_pipeline(
         resolved_api,
         source,
         effective_agent_id,
+        prepared_active_conversation_id,
         target_conversation_id,
         archive_reason,
         trace_tag,
@@ -1761,15 +1755,19 @@ async fn run_archive_pipeline_inner(
     resolved_api: &ResolvedApiConfig,
     source: &Conversation,
     _effective_agent_id: &str,
+    prepared_active_conversation_id: Option<&str>,
     target_conversation_id: Option<&str>,
     archive_reason: &str,
     trace_tag: &str,
     started_at: std::time::Instant,
     trace_id: &str,
 ) -> Result<ForceArchiveResult, String> {
-    let is_main_conversation = with_app_data_cached_ref(state, |data, _detail| {
-        Ok(data.main_conversation_id.as_deref().map(str::trim) == Some(source.id.as_str()))
-    })?;
+    let runtime = state_read_runtime_state_cached(state)?;
+    let is_main_conversation = runtime
+        .main_conversation_id
+        .as_deref()
+        .map(str::trim)
+        == Some(source.id.as_str());
 
     if source.messages.is_empty() {
         if !is_main_conversation {
@@ -1897,51 +1895,47 @@ async fn run_archive_pipeline_inner(
         &summary_draft,
     )?;
 
-    let mut data = state_read_app_data_cached(&state)?;
-    let _source_conversation_idx = data
-        .conversations
-        .iter()
-        .position(|item| item.id == source.id && item.summary.trim().is_empty())
-        .ok_or_else(|| "归档前会话已变化，请重试归档。".to_string())?;
-    let archive_id = archive_conversation_now(
-        &mut data,
-        &source.id,
+    let mut archived_conversation = state_read_conversation_cached(state, &source.id)
+        .map_err(|_| "归档前会话已变化，请重试归档。".to_string())?;
+    if !archived_conversation.summary.trim().is_empty() {
+        return Err("归档前会话已变化，请重试归档。".to_string());
+    }
+    let previous_status = archived_conversation.status.clone();
+    let now = now_iso();
+    archived_conversation.status = "archived".to_string();
+    archived_conversation.summary = summary_draft.summary.clone();
+    archived_conversation.archived_at = Some(now.clone());
+    archived_conversation.updated_at = now;
+    let archive_id = archived_conversation.id.clone();
+    eprintln!(
+        "[会话] 已归档: conversation_id={}, previous_status={}, reason=\"{}\", summary=\"{}\"",
+        archived_conversation.id,
+        previous_status,
         archive_reason,
-        &summary_draft.summary,
-    )
-    .ok_or_else(|| "活动对话已变化，请重试归档。".to_string())?;
+        summary_draft.summary
+    );
+    clear_screenshot_artifact_cache();
     if !is_main_conversation {
         mark_tasks_as_session_lost(&state.data_path, &source.id);
     }
-    let active_idx = ensure_active_foreground_conversation_index_atomic(
-        &mut data,
-        &state.data_path,
-        &selected_api.id,
-        "",
-    );
-    let active_conversation_id = data
-        .conversations
-        .get(active_idx)
-        .map(|item| item.id.clone());
-    if active_conversation_id.is_none() {
-        eprintln!(
-            "[ARCHIVE-PIPELINE] ensure active conversation index invalid: api={}, agent={}, idx={}",
-            selected_api.id, source.agent_id, active_idx
-        );
-        return Err("Failed to ensure active conversation after archive.".to_string());
-    }
-    let mut target_conversation_ids = vec![source.id.clone()];
-    if let Some(active_conversation_id_value) = active_conversation_id.as_ref() {
-        if active_conversation_id_value.trim() != source.id {
-            target_conversation_ids.push(active_conversation_id_value.clone());
-        }
-    }
-    conversation_service().persist_selected_conversations_snapshot(
-        &state,
-        &data,
-        &target_conversation_ids,
-        "archive_conversation_pipeline",
-    )?;
+    let active_conversation_id = prepared_active_conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            match conversation_service().resolve_latest_foreground_conversation_id(state, "") {
+                Ok(value) => value,
+                Err(err) => {
+                    runtime_log_warn(format!(
+                        "[归档] 警告，任务=resolve_latest_foreground_conversation_id_after_archive，source_conversation_id={}，error={}",
+                        source.id, err
+                    ));
+                    None
+                }
+            }
+        })
+        .ok_or_else(|| "归档后未能确定当前前台会话。".to_string())?;
+    state_schedule_conversation_persist(state, &archived_conversation, true)?;
 
     // 清理PDF缓存
     if let Err(e) = cleanup_pdf_cache_for_conversation(&state, &source.id) {
@@ -1951,15 +1945,13 @@ async fn run_archive_pipeline_inner(
         );
     }
 
-    if let Some(active_conversation_id_value) = active_conversation_id.as_deref() {
-        emit_archive_history_flushed_event(
-            state,
-            &source.id,
-            active_conversation_id_value,
-            &archive_id,
-            archive_reason,
-        );
-    }
+    emit_archive_history_flushed_event(
+        state,
+        &source.id,
+        &active_conversation_id,
+        &archive_id,
+        archive_reason,
+    );
 
     if let Some(target_conversation_id) = target_conversation_id
         .map(str::trim)
@@ -2003,7 +1995,7 @@ async fn run_archive_pipeline_inner(
     Ok(ForceArchiveResult {
         archived: true,
         archive_id: Some(archive_id),
-        active_conversation_id,
+        active_conversation_id: Some(active_conversation_id),
         summary: summary_draft.summary,
         merged_memories: applied_report.merged_memories,
         warning: archive_warning,

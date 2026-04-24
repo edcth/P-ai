@@ -335,14 +335,14 @@ fn export_archive_to_file(
         _ => return Err("Unsupported export format. Use 'json' or 'markdown'.".to_string()),
     };
 
-    let data = state_read_app_data_cached(&state)?;
-
-    let archive = data
-        .conversations
-        .iter()
-        .find(|c| c.id == input.archive_id && !c.summary.trim().is_empty())
-        .cloned()
-        .ok_or_else(|| "Archive not found".to_string())?;
+    let archive = state_read_conversation_cached(&state, input.archive_id.trim())
+        .map_err(|err| format!("读取归档会话失败，archive_id={}，error={}", input.archive_id.trim(), err))?;
+    if archive.summary.trim().is_empty() {
+        return Err(format!(
+            "归档摘要为空，无法导出，archive_id={}",
+            input.archive_id.trim()
+        ));
+    }
     let mut archive = conversation_to_archive(&archive);
     if export_format == "json" {
         materialize_chat_message_parts_from_media_refs(

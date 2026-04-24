@@ -24,7 +24,7 @@ async fn get_prompt_preview(
         .ok_or_else(|| "No API config available".to_string())?;
     let mut resolved_api = resolve_api_config(&app_config, Some(&api_config.id))?;
 
-    let mut data = state_read_app_data_cached(&state)?;
+    let mut data = state_read_agents_runtime_snapshot(&state)?;
     merge_private_organization_into_runtime_data(&state.data_path, &mut app_config, &mut data)?;
     let requested_agent_id = input.agent_id.trim();
     let effective_agent_id = if !requested_agent_id.is_empty()
@@ -56,11 +56,50 @@ async fn get_prompt_preview(
         .ok_or_else(|| "Selected agent not found.".to_string())?;
     let preview_mode = parse_prompt_preview_mode(preview_mode.as_deref());
 
-    let mut conversation = conversation_service().resolve_prompt_preview_conversation(
-        &data,
-        input.conversation_id.as_deref(),
-        &effective_agent_id,
-    );
+    let mut conversation = input
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|conversation_id| state_read_conversation_cached(&state, conversation_id).ok())
+        .filter(|conversation| {
+            conversation.summary.trim().is_empty() && !conversation_is_delegate(conversation)
+        })
+        .or_else(|| {
+            conversation_service()
+                .resolve_latest_foreground_conversation_id(&state, &effective_agent_id)
+                .ok()
+                .flatten()
+                .and_then(|conversation_id| state_read_conversation_cached(&state, &conversation_id).ok())
+        })
+        .unwrap_or_else(|| Conversation {
+            id: "preview".to_string(),
+            title: "Preview".to_string(),
+            agent_id: effective_agent_id.to_string(),
+            department_id: ASSISTANT_DEPARTMENT_ID.to_string(),
+            bound_conversation_id: None,
+            parent_conversation_id: None,
+            child_conversation_ids: Vec::new(),
+            fork_message_cursor: None,
+            last_read_message_id: String::new(),
+            conversation_kind: CONVERSATION_KIND_CHAT.to_string(),
+            root_conversation_id: None,
+            delegate_id: None,
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            last_user_at: None,
+            last_assistant_at: None,
+            status: "active".to_string(),
+            summary: String::new(),
+            user_profile_snapshot: String::new(),
+            shell_workspace_path: None,
+            shell_workspaces: Vec::new(),
+            archived_at: None,
+            messages: Vec::new(),
+            current_todos: Vec::new(),
+            memory_recall_table: Vec::new(),
+            plan_mode_enabled: false,
+        });
     let latest_user_message = conversation.messages.iter().rev().find(|message| {
         prompt_role_for_message(message, &effective_agent_id).as_deref() == Some("user")
     });
@@ -100,10 +139,11 @@ async fn get_prompt_preview(
 
     let user_name = user_persona_name(&data);
     let user_intro = user_persona_intro(&data);
-    let last_archive_summary = data
+    let last_archive_summary = state_read_chat_index_cached(&state)?
         .conversations
         .iter()
         .rev()
+        .filter_map(|item| state_read_conversation_cached(&state, item.id.as_str()).ok())
         .find(|c| !conversation_is_delegate(c) && !c.summary.trim().is_empty())
         .map(|c| c.summary.clone());
     let mut prepared = match preview_mode {
@@ -293,17 +333,6 @@ fn conversation_to_archive(conversation: &Conversation) -> ConversationArchive {
     }
 }
 
-fn archived_conversations_from_data(data: &AppData) -> Vec<ConversationArchive> {
-    let mut out = data
-        .conversations
-        .iter()
-        .filter(|c| !c.summary.trim().is_empty())
-        .map(conversation_to_archive)
-        .collect::<Vec<_>>();
-    out.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
-    out
-}
-
 fn archive_to_conversation(archive: ConversationArchive) -> Conversation {
     let mut conversation = archive.source_conversation;
     if conversation.id.trim().is_empty() {
@@ -336,6 +365,73 @@ fn get_archive_messages(
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     conversation_service().read_archive_messages(state.inner(), &archive_id)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchiveBlockSummaryOutput {
+    block_id: u32,
+    message_count: usize,
+    first_message_id: String,
+    last_message_id: String,
+    #[serde(default)]
+    first_created_at: Option<String>,
+    #[serde(default)]
+    last_created_at: Option<String>,
+    is_latest: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetArchiveBlockPageInput {
+    archive_id: String,
+    #[serde(default)]
+    block_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchiveBlockPageOutput {
+    blocks: Vec<ArchiveBlockSummaryOutput>,
+    selected_block_id: u32,
+    messages: Vec<ChatMessage>,
+    has_prev_block: bool,
+    has_next_block: bool,
+}
+
+#[tauri::command]
+fn get_archive_block_page(
+    input: GetArchiveBlockPageInput,
+    state: State<'_, AppState>,
+) -> Result<ArchiveBlockPageOutput, String> {
+    let archive_id = input.archive_id.trim();
+    if archive_id.is_empty() {
+        return Err("archiveId 是必填项".to_string());
+    }
+    let page = conversation_service().read_archive_block_page(
+        state.inner(),
+        archive_id,
+        input.block_id,
+    )?;
+    Ok(ArchiveBlockPageOutput {
+        blocks: page
+            .blocks
+            .into_iter()
+            .map(|item| ArchiveBlockSummaryOutput {
+                block_id: item.block_id,
+                message_count: item.message_count,
+                first_message_id: item.first_message_id,
+                last_message_id: item.last_message_id,
+                first_created_at: item.first_created_at,
+                last_created_at: item.last_created_at,
+                is_latest: item.is_latest,
+            })
+            .collect(),
+        selected_block_id: page.selected_block_id,
+        messages: page.messages,
+        has_prev_block: page.has_prev_block,
+        has_next_block: page.has_next_block,
+    })
 }
 
 #[tauri::command]

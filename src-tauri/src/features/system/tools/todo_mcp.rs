@@ -190,10 +190,8 @@ fn conversation_todo_list(state: &AppState, conversation_id: &str) -> Result<Vec
     if let Some(conversation) = delegate_runtime_thread_conversation_get(state, conversation_id)? {
         return Ok(conversation.current_todos);
     }
-    let data = state_read_app_data_cached(state)?;
-    data.conversations
-        .iter()
-        .find(|conversation| conversation.id == conversation_id.trim())
+    state_read_conversation_cached(state, conversation_id.trim())
+        .ok()
         .map(|conversation| conversation.current_todos.clone())
         .ok_or_else(|| format!("未找到会话，conversation_id={conversation_id}"))
 }

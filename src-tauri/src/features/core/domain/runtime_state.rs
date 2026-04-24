@@ -72,6 +72,8 @@ struct AppState {
         Arc<Mutex<std::collections::HashSet<String>>>,
     provider_request_gates:
         Arc<tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    conversation_index_repair_gates:
+        Arc<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>>,
     remote_im_contact_runtime_states:
         Arc<Mutex<std::collections::HashMap<String, RemoteImContactRuntimeState>>>,
     hidden_skill_snapshot_cache: Arc<Mutex<String>>,
@@ -290,6 +292,9 @@ impl AppState {
                 std::collections::HashSet::new(),
             )),
             provider_request_gates: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            conversation_index_repair_gates: Arc::new(Mutex::new(
                 std::collections::HashMap::new(),
             )),
             remote_im_contact_runtime_states: Arc::new(Mutex::new(

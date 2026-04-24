@@ -759,14 +759,9 @@ pub(crate) fn get_conversation_plan_mode_enabled(
             return Ok(slot.plan_mode_enabled);
         }
     }
-    with_app_data_cached_ref(state, |data, _detail| {
-        Ok(data
-            .conversations
-            .iter()
-            .find(|conversation| conversation.id.trim() == normalized_conversation_id)
-            .map(|conversation| conversation.plan_mode_enabled)
-            .unwrap_or(false))
-    })
+    Ok(state_read_conversation_cached(state, normalized_conversation_id)
+        .map(|conversation| conversation.plan_mode_enabled)
+        .unwrap_or(false))
 }
 
 fn collect_activated_remote_im_sources(
@@ -967,51 +962,34 @@ async fn process_conversation_batch(
     // 这里统一覆盖 created_at 为 history_flush_time，
     // 目的是把“正式进入历史的时间”作为消息的业务生效时间。
     // 入队时间只用于队列观察，不用于正式会话排序和轮次判断。
-    let scheduler_context = with_app_data_cached_ref(state, |scheduler_data, _detail| {
-        let Some(conversation_idx) = scheduler_data
-            .conversations
+    let conversation = match state_read_conversation_cached(state, conversation_id) {
+        Ok(conversation) if conversation.summary.trim().is_empty() => conversation,
+        _ => {
+            complete_pending_chat_events_with_error(
+                state,
+                &event_ids,
+                &format!("目标会话不存在，conversationId={conversation_id}"),
+            )?;
+            return Err(format!("目标会话不存在，conversationId={conversation_id}"));
+        }
+    };
+    let scheduler_agents = state_read_agents_cached(state)?;
+    let has_summary_context = conversation
+        .messages
+        .iter()
+        .any(|message| is_context_compaction_message(message, message.role.trim()));
+    let should_seed_summary_context = !has_summary_context
+        && !conversation_is_delegate(&conversation)
+        && !conversation_is_remote_im_contact(&conversation);
+    let summary_seed_agent = if should_seed_summary_context
+        && conversation.user_profile_snapshot.trim().is_empty()
+    {
+        scheduler_agents
             .iter()
-            .position(|c| c.id == conversation_id && c.summary.trim().is_empty())
-        else {
-            return Ok(None);
-        };
-        let conversation = scheduler_data
-            .conversations
-            .get(conversation_idx)
-            .ok_or_else(|| format!("目标会话不存在，conversationId={conversation_id}"))?;
-        let has_summary_context = conversation
-            .messages
-            .iter()
-            .any(|message| is_context_compaction_message(message, message.role.trim()));
-        let should_seed_summary_context = !has_summary_context
-            && !conversation_is_delegate(conversation)
-            && !conversation_is_remote_im_contact(conversation);
-        let summary_seed_agent = if should_seed_summary_context
-            && conversation.user_profile_snapshot.trim().is_empty()
-        {
-            scheduler_data
-                .agents
-                .iter()
-                .find(|item| item.id == conversation.agent_id)
-                .cloned()
-        } else {
-            None
-        };
-        Ok(Some((
-            summary_seed_agent,
-            should_seed_summary_context,
-            scheduler_data.agents.clone(),
-        )))
-    })?;
-    let Some((summary_seed_agent, should_seed_summary_context, scheduler_agents)) =
-        scheduler_context
-    else {
-        complete_pending_chat_events_with_error(
-            state,
-            &event_ids,
-            &format!("目标会话不存在，conversationId={conversation_id}"),
-        )?;
-        return Err(format!("目标会话不存在，conversationId={conversation_id}"));
+            .find(|item| item.id == conversation.agent_id)
+            .cloned()
+    } else {
+        None
     };
     let seeded_profile_snapshot = if let Some(agent) = summary_seed_agent.as_ref() {
         match with_memory_lock(state, "scheduler_profile_snapshot", || {

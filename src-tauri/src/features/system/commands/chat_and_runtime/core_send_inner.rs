@@ -166,6 +166,49 @@ fn append_user_message_to_conversation(
     conversation
 }
 
+fn prompt_request_message_business_day_key(created_at: &str) -> Option<String> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(created_at.trim()).ok()?;
+    let local = parsed.with_timezone(&chrono::Local);
+    let day = if local.time() < chrono::NaiveTime::from_hms_opt(4, 0, 0)? {
+        local.date_naive().pred_opt()?
+    } else {
+        local.date_naive()
+    };
+    Some(day.format("%Y-%m-%d").to_string())
+}
+
+fn trim_conversation_for_prompt_request(conversation: &Conversation) -> Conversation {
+    let mut trimmed = conversation.clone();
+    if trimmed.messages.is_empty() {
+        return trimmed;
+    }
+    let mut start_idx = 0usize;
+    let allow_remote_im_day_blocks = conversation_is_remote_im_contact(conversation);
+    let mut current_day = String::new();
+    for (idx, message) in conversation.messages.iter().enumerate() {
+        let next_day = prompt_request_message_business_day_key(&message.created_at)
+            .or_else(|| {
+                message
+                    .created_at
+                    .split('T')
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let should_start_new = idx > 0
+            && (is_context_compaction_message(message, message.role.trim())
+                || (allow_remote_im_day_blocks && next_day != current_day));
+        if should_start_new {
+            start_idx = idx;
+        }
+        current_day = next_day;
+    }
+    trimmed.messages = conversation.messages[start_idx..].to_vec();
+    trimmed
+}
+
 fn find_runtime_image_text_cache(
     runtime: &RuntimeStateFile,
     hash: &str,
@@ -387,8 +430,8 @@ async fn resolve_image_description_with_vision_fallback(
 ) -> Result<Option<String>, String> {
     let hash = compute_image_hash_hex(image)?;
     let cached = {
-        let data = state_read_app_data_cached(state)?;
-        find_image_text_cache(&data, &hash, &vision_api.id)
+        let runtime = state_read_runtime_state_cached(state)?;
+        find_runtime_image_text_cache(&runtime, &hash, &vision_api.id)
     };
     if let Some(text) = cached {
         let trimmed = text.trim().to_string();
@@ -515,8 +558,8 @@ async fn remote_im_auto_send_assistant_reply_to_source(
     if !channel.enabled {
         return Err(format!("远程IM渠道未启用: {}", source.channel_id));
     }
-    let data = state_read_app_data_cached(state)?;
-    let contact = data
+    let runtime = state_read_runtime_state_cached(state)?;
+    let contact = runtime
         .remote_im_contacts
         .iter()
         .find(|item| {
@@ -1102,6 +1145,7 @@ async fn send_chat_message_inner(
         user_name: String,
         user_intro: String,
         last_archive_summary: Option<String>,
+        storage_conversation_before: Conversation,
         prompt_conversation_before: Conversation,
         is_remote_im_contact_conversation: bool,
         remote_im_contact_processing_mode: String,
@@ -1153,44 +1197,9 @@ async fn send_chat_message_inner(
         }
     };
     let requested_conversation_id_for_prepare = requested_conversation_id.clone();
+    let requested_conversation_id_for_build = requested_conversation_id_for_prepare.clone();
     let runtime_conversation_id_for_prepare = runtime_conversation_id.clone();
     let runtime_conversation_for_prepare = runtime_conversation.clone();
-    let build_prepare_snapshot = |
-        data: &mut AppData,
-        runtime_agents: &[AgentProfile],
-        selected_api: &ApiConfig,
-        effective_agent_id: &str,
-    | -> Result<ConversationPrepareSnapshot, String> {
-        let current_agent = runtime_agents
-            .iter()
-            .find(|a| a.id == effective_agent_id)
-            .cloned()
-            .ok_or_else(|| "Selected agent not found.".to_string())?;
-        let resolved = conversation_service().resolve_prompt_prepare_conversation_from_data(
-            data,
-            &state.data_path,
-            runtime_conversation_id_for_prepare.as_deref(),
-            &runtime_conversation_for_prepare,
-            selected_api,
-            effective_agent_id,
-            requested_conversation_id_for_prepare.as_deref(),
-        )?;
-
-        Ok(ConversationPrepareSnapshot {
-            current_agent,
-            agents: runtime_agents.to_vec(),
-            response_style_id: resolved.response_style_id,
-            user_name: resolved.user_name,
-            user_intro: resolved.user_intro,
-            last_archive_summary: resolved.last_archive_summary,
-            prompt_conversation_before: resolved.conversation_before,
-            is_remote_im_contact_conversation: resolved.is_remote_im_contact_conversation,
-            remote_im_contact_processing_mode: resolved.remote_im_contact_processing_mode,
-            enable_pdf_images: resolved.enable_pdf_images,
-            is_runtime_conversation: resolved.is_runtime_conversation,
-            runtime_conversation_id: runtime_conversation_id_for_prepare.clone(),
-        })
-    };
     let build_prepare_snapshot_read_only = |
         data: &AppData,
         runtime_agents: &[AgentProfile],
@@ -1210,7 +1219,7 @@ async fn send_chat_message_inner(
                 &runtime_conversation_for_prepare,
                 selected_api,
                 effective_agent_id,
-                requested_conversation_id_for_prepare.as_deref(),
+                requested_conversation_id_for_build.as_deref(),
             )?
         else {
             return Ok(None);
@@ -1222,7 +1231,10 @@ async fn send_chat_message_inner(
             user_name: resolved.user_name,
             user_intro: resolved.user_intro,
             last_archive_summary: resolved.last_archive_summary,
-            prompt_conversation_before: resolved.conversation_before,
+            storage_conversation_before: resolved.conversation_before.clone(),
+            prompt_conversation_before: trim_conversation_for_prompt_request(
+                &resolved.conversation_before,
+            ),
             is_remote_im_contact_conversation: resolved.is_remote_im_contact_conversation,
             remote_im_contact_processing_mode: resolved.remote_im_contact_processing_mode,
             enable_pdf_images: resolved.enable_pdf_images,
@@ -1230,8 +1242,102 @@ async fn send_chat_message_inner(
             runtime_conversation_id: runtime_conversation_id_for_prepare.clone(),
         }))
     };
+    let build_prepare_snapshot_for_requested_conversation_read_only = |
+        requested_conversation_id: &str,
+        runtime_agents: &[AgentProfile],
+        selected_api: &ApiConfig,
+        effective_agent_id: &str,
+    | -> Result<Option<ConversationPrepareSnapshot>, String> {
+        let requested_conversation = state_read_conversation_cached(state, requested_conversation_id)?;
+        if !requested_conversation.summary.trim().is_empty() {
+            return Ok(None);
+        }
+        let runtime_state = state_read_runtime_state_cached(state)?;
+        let chat_index = state_read_chat_index_cached(state)?;
+        let mut data = AppData::default();
+        data.agents = runtime_agents.to_vec();
+        data.assistant_department_agent_id = runtime_state.assistant_department_agent_id.clone();
+        data.user_alias = runtime_state.user_alias.clone();
+        data.response_style_id = runtime_state.response_style_id.clone();
+        data.pdf_read_mode = runtime_state.pdf_read_mode.clone();
+        data.background_voice_screenshot_keywords =
+            runtime_state.background_voice_screenshot_keywords.clone();
+        data.background_voice_screenshot_mode =
+            runtime_state.background_voice_screenshot_mode.clone();
+        data.instruction_presets = runtime_state.instruction_presets.clone();
+        data.main_conversation_id = runtime_state.main_conversation_id.clone();
+        data.pinned_conversation_ids = runtime_state.pinned_conversation_ids.clone();
+        data.remote_im_contacts = runtime_state.remote_im_contacts.clone();
+        data.remote_im_contact_checkpoints = runtime_state.remote_im_contact_checkpoints.clone();
+        data.conversations.push(requested_conversation);
+        if let Some(summary_item) = chat_index
+            .conversations
+            .iter()
+            .rev()
+            .find(|item| !item.summary.trim().is_empty())
+        {
+            data.conversations.push(Conversation {
+                id: summary_item.id.clone(),
+                title: String::new(),
+                agent_id: String::new(),
+                department_id: String::new(),
+                bound_conversation_id: None,
+                parent_conversation_id: None,
+                child_conversation_ids: Vec::new(),
+                fork_message_cursor: None,
+                last_read_message_id: String::new(),
+                conversation_kind: String::new(),
+                root_conversation_id: None,
+                delegate_id: None,
+                created_at: summary_item.updated_at.clone(),
+                updated_at: summary_item.updated_at.clone(),
+                last_user_at: None,
+                last_assistant_at: None,
+                status: summary_item.status.clone(),
+                summary: summary_item.summary.clone(),
+                user_profile_snapshot: String::new(),
+                shell_workspace_path: None,
+                shell_workspaces: Vec::new(),
+                archived_at: summary_item.archived_at.clone(),
+                messages: Vec::new(),
+                current_todos: Vec::new(),
+                memory_recall_table: Vec::new(),
+                plan_mode_enabled: false,
+            });
+        }
+        build_prepare_snapshot_read_only(&data, runtime_agents, selected_api, effective_agent_id)
+    };
+    let build_prepare_snapshot_for_main_conversation_read_only = |
+        main_conversation_id: &str,
+        runtime_agents: &[AgentProfile],
+        selected_api: &ApiConfig,
+        effective_agent_id: &str,
+    | -> Result<Option<ConversationPrepareSnapshot>, String> {
+        let main_conversation = state_read_conversation_cached(state, main_conversation_id)?;
+        if !main_conversation.summary.trim().is_empty()
+            || !conversation_visible_in_foreground_lists(&main_conversation)
+        {
+            return Ok(None);
+        }
+        build_prepare_snapshot_for_requested_conversation_read_only(
+            main_conversation_id,
+            runtime_agents,
+            selected_api,
+            effective_agent_id,
+        )
+    };
 
-    let (app_config, selected_api, resolved_api, _effective_department_id, effective_agent_id, candidate_api_ids, preloaded_prepare_snapshot) = {
+    let (
+        app_config,
+        selected_api,
+        resolved_api,
+        _effective_department_id,
+        effective_agent_id,
+        candidate_api_ids,
+        runtime_main_conversation_id,
+        runtime_agents,
+        preloaded_prepare_snapshot,
+    ) = {
         let prepare_started = std::time::Instant::now();
         let mut prepare_detail_parts = Vec::<String>::new();
         let lock_wait_started = std::time::Instant::now();
@@ -1261,34 +1367,22 @@ async fn send_chat_message_inner(
         ));
         log_chat_stage("runtime_and_session_ready.config_read_done");
         let app_data_started = std::time::Instant::now();
-        let (assistant_department_agent_id, mut runtime_agents, app_data_read_detail) = with_app_data_cached_ref(
-            state,
-            |cached_data, detail| {
-                Ok((
-                    cached_data.assistant_department_agent_id.clone(),
-                    cached_data.agents.clone(),
-                    detail.clone(),
-                ))
-            },
-        )?;
+        let runtime_state = state_read_runtime_state_cached(state)?;
+        let assistant_department_agent_id = runtime_state.assistant_department_agent_id.clone();
+        let runtime_main_conversation_id = runtime_state.main_conversation_id.clone();
+        let mut runtime_agents = state_read_agents_cached(state)?;
         let app_data_read_ms = app_data_started
             .elapsed()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
         prepare_detail_parts.push(format!(
-            "应用数据读取={}ms(source={}, dirty_fast_path={}, mtime_before={}ms, cache_lookup={}ms, disk_read={}ms, mtime_after={}ms, cache_write={}ms, total={}ms)",
+            "运行时分片读取={}ms(agents={}, assistant_department_agent_id={})",
             app_data_read_ms,
-            app_data_read_detail.source,
-            app_data_read_detail.dirty_fast_path,
-            app_data_read_detail.mtime_before_ms,
-            app_data_read_detail.cache_lookup_ms,
-            app_data_read_detail.disk_read_ms,
-            app_data_read_detail.mtime_after_ms,
-            app_data_read_detail.cache_write_ms,
-            app_data_read_detail.total_ms,
+            runtime_agents.len(),
+            assistant_department_agent_id
         ));
         log_chat_stage("runtime_and_session_ready.app_data_read_done");
-        prepare_detail_parts.push(format!("运行时人格列表克隆=0ms(count={})", runtime_agents.len()));
+        prepare_detail_parts.push(format!("运行时人格列表就绪=0ms(count={})", runtime_agents.len()));
         log_chat_stage("runtime_and_session_ready.runtime_data_cloned");
         let private_org_started = std::time::Instant::now();
         merge_private_organization_into_runtime(
@@ -1419,27 +1513,36 @@ async fn send_chat_message_inner(
             prepare_detail_parts.join(" | ")
         ));
         log_chat_stage("runtime_and_session_ready.candidate_models_ready");
-        let preloaded_prepare_snapshot = match with_app_data_cached_ref(state, |cached_data, _detail| {
-            build_prepare_snapshot_read_only(
-                cached_data,
-                &runtime_agents,
-                &selected_api,
-                &effective_agent_id,
-            )
-        })? {
-            Some(snapshot) => Some(snapshot),
-            None => {
-                let mut snapshot_data = with_app_data_cached_ref(state, |cached_data, _detail| {
-                    Ok(cached_data.clone())
-                })?;
-                Some(build_prepare_snapshot(
-                    &mut snapshot_data,
+        let preloaded_prepare_snapshot_candidate = match requested_conversation_id_for_prepare
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(requested_conversation_id) => {
+                build_prepare_snapshot_for_requested_conversation_read_only(
+                    requested_conversation_id,
                     &runtime_agents,
                     &selected_api,
                     &effective_agent_id,
-                )?)
+                )?
+            }
+            None => {
+                if let Some(main_conversation_id) = runtime_main_conversation_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    build_prepare_snapshot_for_main_conversation_read_only(
+                        main_conversation_id,
+                        &runtime_agents,
+                        &selected_api,
+                        &effective_agent_id,
+                    )?
+                } else {
+                    None
+                }
             }
         };
+        let preloaded_prepare_snapshot = preloaded_prepare_snapshot_candidate;
         (
             app_config,
             selected_api,
@@ -1447,6 +1550,8 @@ async fn send_chat_message_inner(
             effective_department_id,
             effective_agent_id,
             candidate_api_ids,
+            runtime_main_conversation_id,
+            runtime_agents,
             preloaded_prepare_snapshot,
         )
     };
@@ -1568,8 +1673,8 @@ async fn send_chat_message_inner(
                 for (idx, image) in images.iter().enumerate() {
                     let hash = compute_image_hash_hex(image)?;
                     let cached = {
-                        let data = state_read_app_data_cached(&state)?;
-                        find_image_text_cache(&data, &hash, &vision_api.id)
+                        let runtime = state_read_runtime_state_cached(&state)?;
+                        find_runtime_image_text_cache(&runtime, &hash, &vision_api.id)
                     };
 
                     if let Some(text) = cached {
@@ -1720,25 +1825,38 @@ async fn send_chat_message_inner(
         let snapshot = if let Some(snapshot) = preloaded_prepare_snapshot.take() {
             log_run_stage("prepare_context.foreground_conversation_ready");
             snapshot
-        } else {
-            log_run_stage("prepare_context.conversation_lock_wait_done");
-            let mut data = state_read_app_data_cached(&state)?;
-            log_run_stage("prepare_context.app_data_read_done");
-            let mut runtime_agents = data.agents.clone();
-            let mut runtime_config = app_config.clone();
-            merge_private_organization_into_runtime(
-                &state.data_path,
-                &mut runtime_config,
-                &mut runtime_agents,
-            )?;
-            let snapshot = build_prepare_snapshot(
-                &mut data,
+        } else if let Some(requested_conversation_id) = requested_conversation_id_for_prepare
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            let snapshot = build_prepare_snapshot_for_requested_conversation_read_only(
+                requested_conversation_id,
                 &runtime_agents,
                 &selected_api,
                 &effective_agent_id,
-            )?;
+            )?
+            .ok_or_else(|| format!("指定会话不存在或不可用：{requested_conversation_id}"))?;
             log_run_stage("prepare_context.foreground_conversation_ready");
             snapshot
+        } else if let Some(main_conversation_id) = runtime_main_conversation_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let snapshot = build_prepare_snapshot_for_main_conversation_read_only(
+                main_conversation_id,
+                &runtime_agents,
+                &selected_api,
+                &effective_agent_id,
+            )?
+            .ok_or_else(|| format!("主会话不存在或不可用：{main_conversation_id}"))?;
+            log_run_stage("prepare_context.foreground_conversation_ready");
+            snapshot
+        } else {
+            eprintln!(
+                "[聊天发送] 缺少 conversation_id 且未找到 runtime 主会话，拒绝构建请求上下文"
+            );
+            return Err("缺少 conversation_id".to_string());
         };
         log_run_stage("prepare_context.conversation_snapshot_ready");
         log_run_stage("prepare_context.archive_summary_ready");
@@ -1751,9 +1869,9 @@ async fn send_chat_message_inner(
             &snapshot.prompt_conversation_before.id,
         )
         .unwrap_or(snapshot.prompt_conversation_before.plan_mode_enabled);
-        let conversation = if trigger_only {
+        let storage_conversation = if trigger_only {
             let latest_message = snapshot
-                .prompt_conversation_before
+                .storage_conversation_before
                 .messages
                 .last()
                 .ok_or_else(|| "当前对话没有可供继续处理的消息。".to_string())?;
@@ -1765,9 +1883,9 @@ async fn send_chat_message_inner(
             {
                 return Err("当前最后一条消息来自助理自身，无需重复激活。".to_string());
             }
-            snapshot.prompt_conversation_before.clone()
+            snapshot.storage_conversation_before.clone()
         } else if !persist_user_message {
-            snapshot.prompt_conversation_before.clone()
+            snapshot.storage_conversation_before.clone()
         } else {
             let mut storage_api = selected_api.clone();
             storage_api.enable_image = true;
@@ -1818,7 +1936,7 @@ async fn send_chat_message_inner(
             if let Some(record) = tauri::async_runtime::block_on(
                 git_ghost_snapshot::create_main_workspace_git_ghost_snapshot_record(
                     &state,
-                    &snapshot.prompt_conversation_before,
+                    &snapshot.storage_conversation_before,
                     &user_message_id,
                 ),
             ) {
@@ -1829,7 +1947,7 @@ async fn send_chat_message_inner(
                 {
                     runtime_log_error(format!(
                         "[Git幽灵快照] 失败，conversation_id={}，message_id={}，stage=write_provider_meta，error={}",
-                        snapshot.prompt_conversation_before.id, user_message_id, err
+                        snapshot.storage_conversation_before.id, user_message_id, err
                     ));
                 }
             }
@@ -1845,7 +1963,7 @@ async fn send_chat_message_inner(
                 mcp_call: None,
             };
             let updated_conversation = append_user_message_to_conversation(
-                snapshot.prompt_conversation_before.clone(),
+                snapshot.storage_conversation_before.clone(),
                 user_message,
                 &now,
             );
@@ -1885,6 +2003,7 @@ async fn send_chat_message_inner(
                 updated_conversation
             }
         };
+        let conversation = trim_conversation_for_prompt_request(&storage_conversation);
         let latest_user_text = if trigger_only {
             conversation
                 .messages

@@ -287,6 +287,7 @@ fn collect_selected_messages_for_branch(
     (selected_messages, first_selected_ordinal)
 }
 
+#[cfg(test)]
 fn branch_conversation_settings_agent_id(
     data: &AppData,
     department: &DepartmentConfig,
@@ -309,6 +310,7 @@ fn branch_conversation_settings_agent_id(
         .unwrap_or_else(|| data.assistant_department_agent_id.trim().to_string())
 }
 
+#[cfg(test)]
 fn build_branch_conversation_record_from_selection(
     data_path: &PathBuf,
     data: &AppData,
@@ -614,6 +616,89 @@ fn get_unarchived_conversation_messages(
         return Err("conversationId is required.".to_string());
     }
     conversation_service().read_unarchived_messages(state.inner(), conversation_id)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetUnarchivedConversationRecentBlockMessagesInput {
+    conversation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetConversationBlockPageInput {
+    conversation_id: String,
+    #[serde(default)]
+    block_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationBlockSummaryOutput {
+    block_id: u32,
+    message_count: usize,
+    first_message_id: String,
+    last_message_id: String,
+    first_created_at: Option<String>,
+    last_created_at: Option<String>,
+    is_latest: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationBlockPageOutput {
+    blocks: Vec<ConversationBlockSummaryOutput>,
+    selected_block_id: u32,
+    messages: Vec<ChatMessage>,
+    has_prev_block: bool,
+    has_next_block: bool,
+}
+
+#[tauri::command]
+fn get_unarchived_conversation_recent_block_messages(
+    input: GetUnarchivedConversationRecentBlockMessagesInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<ChatMessage>, String> {
+    let conversation_id = input.conversation_id.trim();
+    if conversation_id.is_empty() {
+        return Err("conversationId is required.".to_string());
+    }
+    conversation_service().read_recent_unarchived_block_messages(state.inner(), conversation_id)
+}
+
+#[tauri::command]
+fn get_unarchived_conversation_block_page(
+    input: GetConversationBlockPageInput,
+    state: State<'_, AppState>,
+) -> Result<ConversationBlockPageOutput, String> {
+    let conversation_id = input.conversation_id.trim();
+    if conversation_id.is_empty() {
+        return Err("conversationId is required.".to_string());
+    }
+    let page = conversation_service().read_unarchived_block_page(
+        state.inner(),
+        conversation_id,
+        input.block_id,
+    )?;
+    Ok(ConversationBlockPageOutput {
+        blocks: page
+            .blocks
+            .into_iter()
+            .map(|item| ConversationBlockSummaryOutput {
+                block_id: item.block_id,
+                message_count: item.message_count,
+                first_message_id: item.first_message_id,
+                last_message_id: item.last_message_id,
+                first_created_at: item.first_created_at,
+                last_created_at: item.last_created_at,
+                is_latest: item.is_latest,
+            })
+            .collect(),
+        selected_block_id: page.selected_block_id,
+        messages: page.messages,
+        has_prev_block: page.has_prev_block,
+        has_next_block: page.has_next_block,
+    })
 }
 
 #[tauri::command]

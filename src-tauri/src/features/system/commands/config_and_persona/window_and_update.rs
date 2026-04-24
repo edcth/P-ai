@@ -60,8 +60,8 @@ fn detach_current_conversation_to_window(
         );
         return Err("当前会话正在整理上下文，暂时不能独立出去。".to_string());
     }
-    let data = state_read_app_data_cached(&state)?;
-    let main_conversation_id = data
+    let runtime = state_read_runtime_state_cached(&state)?;
+    let main_conversation_id = runtime
         .main_conversation_id
         .as_deref()
         .map(str::trim)
@@ -264,8 +264,7 @@ fn load_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
     if workspace_changed {
         state_write_config_cached(&state, &result)?;
     }
-    let data = state_read_app_data_cached(&state)?;
-    let mut runtime_data = data.clone();
+    let mut runtime_data = state_read_agents_runtime_snapshot(&state)?;
     merge_private_organization_into_runtime_data(&state.data_path, &mut result, &mut runtime_data)?;
     Ok(result)
 }
@@ -342,7 +341,7 @@ fn save_config(
     let _ = ensure_default_shell_workspace_in_config(&mut config, &state);
     set_record_hotkey_probe_background_wake_enabled(config.record_background_wake_enabled);
 
-    let mut data = state_read_app_data_cached(&state)?;
+    let mut data = state_read_agents_runtime_snapshot(&state)?;
     let base_config = state_read_config_cached(&state)?;
     let departments_changed = {
         let old_by_id = base_config

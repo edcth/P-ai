@@ -1,4 +1,128 @@
 impl ConversationService {
+    fn remote_im_runtime_state_should_cache_blocks(
+        &self,
+        runtime_state: &RemoteImContactRuntimeState,
+    ) -> bool {
+        runtime_state.presence_state == RemoteImPresenceState::Present
+            || runtime_state.work_state == RemoteImWorkState::Busy
+            || runtime_state.has_pending
+    }
+
+    fn collect_block_cache_whitelist_conversation_ids(
+        &self,
+        state: &AppState,
+    ) -> Result<std::collections::HashSet<String>, String> {
+        let mut ids = std::collections::HashSet::<String>::new();
+        if let Ok(bindings) = state.active_chat_view_bindings.lock() {
+            for binding in bindings.values() {
+                let conversation_id = binding.conversation_id.trim();
+                if !conversation_id.is_empty() {
+                    ids.insert(conversation_id.to_string());
+                }
+            }
+        }
+        let active_contact_ids = state
+            .remote_im_contact_runtime_states
+            .lock()
+            .map(|runtime_states| {
+                runtime_states
+                    .iter()
+                    .filter(|(_, runtime_state)| {
+                        self.remote_im_runtime_state_should_cache_blocks(runtime_state)
+                    })
+                    .map(|(contact_id, _)| contact_id.trim().to_string())
+                    .filter(|contact_id| !contact_id.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !active_contact_ids.is_empty() {
+            let contact_ids = active_contact_ids
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>();
+            let runtime = state_read_runtime_state_cached(state)?;
+            let mut unresolved_contact_ids = std::collections::HashSet::<String>::new();
+            for contact in runtime
+                .remote_im_contacts
+                .iter()
+                .filter(|contact| contact_ids.contains(contact.id.trim()))
+            {
+                if let Some(bound_conversation_id) = contact
+                    .bound_conversation_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    ids.insert(bound_conversation_id.to_string());
+                } else {
+                    unresolved_contact_ids.insert(contact.id.trim().to_string());
+                }
+            }
+            if !unresolved_contact_ids.is_empty() {
+                let chat_index = state_read_chat_index_cached(state)?;
+                let conversation_key_map = runtime
+                    .remote_im_contacts
+                    .iter()
+                    .filter(|contact| unresolved_contact_ids.contains(contact.id.trim()))
+                    .map(|contact| {
+                        (
+                            remote_im_contact_conversation_key(contact),
+                            contact.id.trim().to_string(),
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>();
+                let mapped_ids = chat_index
+                    .conversations
+                    .iter()
+                    .filter_map(|item| {
+                        let conversation =
+                            match state_read_conversation_cached(state, item.id.as_str()) {
+                                Ok(conversation) => conversation,
+                                Err(err) => {
+                                    eprintln!(
+                                        "[会话索引读取] 状态=失败，任务=collect_block_cache_whitelist_conversation_ids，conversation_id={}，error={}",
+                                        item.id, err
+                                    );
+                                    return None;
+                                }
+                            };
+                        let root_key = conversation
+                            .root_conversation_id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())?;
+                        if !conversation.summary.trim().is_empty()
+                            || !conversation_is_remote_im_contact(&conversation)
+                            || !conversation_key_map.contains_key(root_key)
+                        {
+                            return None;
+                        }
+                        Some(conversation.id)
+                    })
+                    .collect::<Vec<_>>();
+                ids.extend(mapped_ids);
+            }
+        }
+        Ok(ids)
+    }
+
+    fn retain_message_store_block_cache_whitelist(
+        &self,
+        state: &AppState,
+    ) -> Result<(), String> {
+        let conversation_ids = self.collect_block_cache_whitelist_conversation_ids(state)?;
+        let mut allowed_paths = std::collections::HashSet::<PathBuf>::new();
+        for conversation_id in conversation_ids {
+            let paths = message_store::message_store_paths(&state.data_path, &conversation_id)?;
+            if let Some(block_paths) =
+                message_store::read_ready_message_store_latest_block_paths(&paths, 2)?
+            {
+                allowed_paths.extend(block_paths);
+            }
+        }
+        message_store::retain_message_store_block_file_cache_paths(&allowed_paths);
+        Ok(())
+    }
+
     fn with_unarchived_conversation_by_id_fast<T>(
         &self,
         state: &AppState,
@@ -13,53 +137,16 @@ impl ConversationService {
             .conversation_lock
             .lock()
             .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
-        let result = with_app_data_cached_ref(state, |data, _detail| {
-            let conversation = data
-                .conversations
-                .iter()
-                .find(|item| {
-                    item.id == normalized_conversation_id
-                        && item.summary.trim().is_empty()
-                        && conversation_visible_in_foreground_lists(item)
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "Unarchived conversation not found: {normalized_conversation_id}"
-                    )
-                })?;
-            self.ensure_unarchived_foreground_conversation(
-                conversation,
-                normalized_conversation_id,
-            )?;
-            reader(conversation)
-        })?;
+        let conversation = state_read_conversation_cached(state, normalized_conversation_id)
+            .map_err(|err| {
+                format!(
+                    "Unarchived conversation not found: {normalized_conversation_id}: {err}"
+                )
+            })?;
+        self.ensure_unarchived_foreground_conversation(&conversation, normalized_conversation_id)?;
+        let result = reader(&conversation)?;
         drop(guard);
         Ok(result)
-    }
-
-    fn get_or_ensure_cached_app_data(&self, state: &AppState) -> Result<AppData, String> {
-        {
-            let cached = state
-                .cached_app_data
-                .lock()
-                .map_err(|err| format!("Failed to lock cached app data: {:?}", err))?;
-            if let Some(data) = cached.as_ref() {
-                return Ok(data.clone());
-            }
-        }
-
-        let loaded = state_read_app_data_cached(state)?;
-        let mut cached = state
-            .cached_app_data
-            .lock()
-            .map_err(|err| format!("Failed to lock cached app data: {:?}", err))?;
-        if cached.is_none() {
-            *cached = Some(loaded);
-        }
-        cached
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "Cached app data is unexpectedly missing".to_string())
     }
 
     fn ensure_unarchived_foreground_conversation(
@@ -76,23 +163,6 @@ impl ConversationService {
             ));
         }
         Ok(())
-    }
-
-    fn find_remote_im_contact_conversation_id_in_data(
-        &self,
-        data: &AppData,
-        contact: &RemoteImContact,
-    ) -> Option<String> {
-        let key = remote_im_contact_conversation_key(contact);
-        data.conversations
-            .iter()
-            .find(|conversation| {
-                conversation.summary.trim().is_empty()
-                    && conversation_is_remote_im_contact(conversation)
-                    && conversation.root_conversation_id.as_deref().map(str::trim)
-                        == Some(key.as_str())
-            })
-            .map(|conversation| conversation.id.clone())
     }
 
     fn find_remote_im_contact_by_conversation_in_data<'a>(
@@ -125,80 +195,6 @@ impl ConversationService {
         })
     }
 
-    fn conversation_has_remote_im_platform_message_in_data(
-        &self,
-        data: &AppData,
-        conversation_id: &str,
-        channel_id: &str,
-        remote_contact_type: &str,
-        remote_contact_id: &str,
-        platform_message_id: &str,
-    ) -> bool {
-        data.conversations.iter().any(|conversation| {
-            conversation.id == conversation_id
-                && conversation_has_remote_im_platform_message(
-                    conversation,
-                    channel_id,
-                    remote_contact_type,
-                    remote_contact_id,
-                    platform_message_id,
-                )
-        })
-    }
-
-    fn resolve_prompt_preview_conversation(
-        &self,
-        data: &AppData,
-        requested_conversation_id: Option<&str>,
-        effective_agent_id: &str,
-    ) -> Conversation {
-        requested_conversation_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(|conversation_id| {
-                data.conversations
-                    .iter()
-                    .find(|conversation| {
-                        conversation.id == conversation_id
-                            && conversation.summary.trim().is_empty()
-                            && !conversation_is_delegate(conversation)
-                    })
-                    .cloned()
-            })
-            .or_else(|| {
-                latest_active_conversation_index(data, "", effective_agent_id)
-                    .and_then(|idx| data.conversations.get(idx).cloned())
-            })
-            .unwrap_or_else(|| Conversation {
-                id: "preview".to_string(),
-                title: "Preview".to_string(),
-                agent_id: effective_agent_id.to_string(),
-                department_id: ASSISTANT_DEPARTMENT_ID.to_string(),
-                bound_conversation_id: None,
-                parent_conversation_id: None,
-                child_conversation_ids: Vec::new(),
-                fork_message_cursor: None,
-                last_read_message_id: String::new(),
-                conversation_kind: CONVERSATION_KIND_CHAT.to_string(),
-                root_conversation_id: None,
-                delegate_id: None,
-                created_at: now_iso(),
-                updated_at: now_iso(),
-                last_user_at: None,
-                last_assistant_at: None,
-                status: "active".to_string(),
-                summary: String::new(),
-                user_profile_snapshot: String::new(),
-                shell_workspace_path: None,
-                shell_workspaces: Vec::new(),
-                archived_at: None,
-                messages: Vec::new(),
-                current_todos: Vec::new(),
-                memory_recall_table: Vec::new(),
-                plan_mode_enabled: false,
-            })
-    }
-
     fn with_unarchived_conversation_by_id<T>(
         &self,
         state: &AppState,
@@ -213,23 +209,14 @@ impl ConversationService {
             .conversation_lock
             .lock()
             .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
-        let data = self.get_or_ensure_cached_app_data(state)?;
-        let result = {
-            let conversation = data
-                .conversations
-                .iter()
-                .find(|item| {
-                    item.id == normalized_conversation_id
-                        && item.summary.trim().is_empty()
-                        && conversation_visible_in_foreground_lists(item)
-                })
-                .ok_or_else(|| format!("Unarchived conversation not found: {normalized_conversation_id}"))?;
-            self.ensure_unarchived_foreground_conversation(
-                conversation,
-                normalized_conversation_id,
-            )?;
-            reader(conversation)?
-        };
+        let conversation = state_read_conversation_cached(state, normalized_conversation_id)
+            .map_err(|err| {
+                format!(
+                    "Unarchived conversation not found: {normalized_conversation_id}: {err}"
+                )
+            })?;
+        self.ensure_unarchived_foreground_conversation(&conversation, normalized_conversation_id)?;
+        let result = reader(&conversation)?;
         drop(guard);
         Ok(result)
     }
@@ -277,18 +264,44 @@ impl ConversationService {
         state: &AppState,
         agent_id: &str,
     ) -> Result<Option<String>, String> {
-        let data = state_read_app_data_cached(state)?;
         let normalized_agent_id = agent_id.trim();
-        Ok(data
+        if normalized_agent_id.is_empty() {
+            let runtime = state_read_runtime_state_cached(state)?;
+            if let Some(main_conversation_id) = runtime
+                .main_conversation_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if let Some(conversation) =
+                    self.try_read_unarchived_conversation(state, main_conversation_id)?
+                {
+                    if conversation_visible_in_foreground_lists(&conversation) {
+                        return Ok(Some(conversation.id));
+                    }
+                }
+            }
+        }
+        let chat_index = state_read_chat_index_cached(state)?;
+        Ok(chat_index
             .conversations
             .iter()
             .rev()
-            .find(|item| {
-                item.summary.trim().is_empty()
-                    && !conversation_is_delegate(item)
-                    && (normalized_agent_id.is_empty() || item.agent_id.trim() == normalized_agent_id)
-            })
-            .map(|conversation| conversation.id.clone()))
+            .find_map(|item| {
+                if !item.summary.trim().is_empty() {
+                    return None;
+                }
+                let conversation = state_read_conversation_cached(state, &item.id).ok()?;
+                if !conversation_visible_in_foreground_lists(&conversation) {
+                    return None;
+                }
+                if !normalized_agent_id.is_empty()
+                    && conversation.agent_id.trim() != normalized_agent_id
+                {
+                    return None;
+                }
+                Some(conversation.id)
+            }))
     }
 
     fn update_persisted_conversation_shell_workspace(
@@ -351,9 +364,27 @@ impl ConversationService {
         if !conversation_is_remote_im_contact(&conversation) {
             return Err("联系人专用工具仅可用于联系人会话".to_string());
         }
-        let data = state_read_app_data_cached(state)?;
-        let contact = self
-            .find_remote_im_contact_by_conversation_in_data(&data, normalized_conversation_id)
+        let runtime = state_read_runtime_state_cached(state)?;
+        let contact_conversation_key = conversation
+            .root_conversation_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let contact = runtime
+            .remote_im_contacts
+            .iter()
+            .find(|contact| {
+                if let Some(key) = contact_conversation_key {
+                    remote_im_contact_conversation_key(contact) == key
+                } else {
+                    contact
+                        .bound_conversation_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        == Some(normalized_conversation_id)
+                }
+            })
             .cloned()
             .ok_or_else(|| format!("未找到当前会话绑定的联系人: conversation_id={normalized_conversation_id}"))?;
         let channel = remote_im_channel_by_id(&config, &contact.channel_id)

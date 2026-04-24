@@ -219,24 +219,39 @@
       v-else
       :archives="archives"
       :selected-archive-id="selectedArchiveId"
+      :archive-blocks="archiveBlocks"
+      :selected-archive-block-id="selectedArchiveBlockId"
+      :archive-has-prev-block="archiveHasPrevBlock"
+      :archive-has-next-block="archiveHasNextBlock"
       :archive-messages="archiveMessages"
       :archive-summary-text="archiveSummaryText"
       :unarchived-conversations="unarchivedConversations"
+      :unarchived-blocks="unarchivedBlocks"
       :selected-unarchived-conversation-id="selectedUnarchivedConversationId"
+      :selected-unarchived-block-id="selectedUnarchivedBlockId"
+      :unarchived-has-prev-block="unarchivedHasPrevBlock"
+      :unarchived-has-next-block="unarchivedHasNextBlock"
       :unarchived-messages="unarchivedMessages"
       :delegate-conversations="delegateConversations"
       :selected-delegate-conversation-id="selectedDelegateConversationId"
       :delegate-messages="delegateMessages"
       :remote-im-contact-conversations="remoteImContactConversations"
+      :remote-im-contact-blocks="remoteImContactBlocks"
       :selected-remote-im-contact-id="selectedRemoteImContactId"
+      :selected-remote-im-contact-block-id="selectedRemoteImContactBlockId"
+      :remote-im-has-prev-block="remoteImHasPrevBlock"
+      :remote-im-has-next-block="remoteImHasNextBlock"
       :remote-im-contact-messages="remoteImContactMessages"
       :user-alias="userAlias"
       :persona-name-map="chatPersonaNameMap"
       @load-archives="loadArchives"
       @select-archive="selectArchive"
+      @select-archive-block="selectArchiveBlock"
       @select-unarchived-conversation="selectUnarchivedConversation"
+      @select-unarchived-block="selectUnarchivedConversationBlock"
       @select-delegate-conversation="selectDelegateConversation"
       @select-remote-im-contact-conversation="selectRemoteImContactConversation"
+      @select-remote-im-contact-block="selectRemoteImContactConversationBlock"
       @export-archive="exportArchive"
       @import-archive-file="importArchiveFile"
       @delete-archive="deleteArchive"
@@ -477,16 +492,28 @@ const props = defineProps<{
   defaultCreateConversationDepartmentId: string;
   archives: ArchiveSummary[];
   selectedArchiveId: string;
+  archiveBlocks: import("../../../types/app").ConversationBlockSummary[];
+  selectedArchiveBlockId?: number | null;
+  archiveHasPrevBlock?: boolean;
+  archiveHasNextBlock?: boolean;
   archiveMessages: ChatMessage[];
   archiveSummaryText: string;
   unarchivedConversations: UnarchivedConversationSummary[];
+  unarchivedBlocks: import("../../../types/app").ConversationBlockSummary[];
   selectedUnarchivedConversationId: string;
+  selectedUnarchivedBlockId?: number | null;
+  unarchivedHasPrevBlock?: boolean;
+  unarchivedHasNextBlock?: boolean;
   unarchivedMessages: ChatMessage[];
   delegateConversations: DelegateConversationSummary[];
   selectedDelegateConversationId: string;
   delegateMessages: ChatMessage[];
   remoteImContactConversations: RemoteImContactConversationSummary[];
+  remoteImContactBlocks: import("../../../types/app").ConversationBlockSummary[];
   selectedRemoteImContactId: string;
+  selectedRemoteImContactBlockId?: number | null;
+  remoteImHasPrevBlock?: boolean;
+  remoteImHasNextBlock?: boolean;
   remoteImContactMessages: ChatMessage[];
   messageText: (message: ChatMessage) => string;
   extractMessageImages: (message?: ChatMessage) => Array<{ mime: string; bytesBase64?: string; mediaRef?: string }>;
@@ -579,9 +606,12 @@ const props = defineProps<{
   onForwardConversationFromSelection: (payload: { count: number; messageIds: string[]; targetConversationId: string }) => void;
   loadArchives: () => void;
   selectArchive: (id: string) => void;
+  selectArchiveBlock: (blockId?: number | null) => void;
   selectUnarchivedConversation: (id: string) => void;
+  selectUnarchivedConversationBlock: (blockId?: number | null) => void;
   selectDelegateConversation: (id: string) => void;
   selectRemoteImContactConversation: (id: string) => void;
+  selectRemoteImContactConversationBlock: (blockId?: number | null) => void;
   exportArchive: (payload: { format: "markdown" | "json" }) => void;
   importArchiveFile: (file: File) => void;
   deleteArchive: (id: string) => void;

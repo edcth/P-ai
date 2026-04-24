@@ -130,6 +130,145 @@ fn sync_cached_app_data_signature(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+fn conversation_index_repair_gate(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<Arc<Mutex<()>>, String> {
+    let mut gates = state
+        .conversation_index_repair_gates
+        .lock()
+        .map_err(|err| format!("Failed to lock conversation index repair gates: {err}"))?;
+    Ok(gates
+        .entry(conversation_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone())
+}
+
+fn format_chat_index_item_log(item: Option<&ChatIndexConversationItem>) -> String {
+    let Some(item) = item else {
+        return "missing".to_string();
+    };
+    format!(
+        "id={} updated_at={} status={} summary_len={} archived_at={}",
+        item.id,
+        item.updated_at,
+        item.status,
+        item.summary.chars().count(),
+        item.archived_at.as_deref().unwrap_or("")
+    )
+}
+
+fn chat_index_item_mismatch_fields(
+    existing: &ChatIndexConversationItem,
+    expected: &ChatIndexConversationItem,
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if existing.updated_at != expected.updated_at {
+        fields.push("updated_at");
+    }
+    if existing.status != expected.status {
+        fields.push("status");
+    }
+    if existing.summary != expected.summary {
+        fields.push("summary");
+    }
+    if existing.archived_at != expected.archived_at {
+        fields.push("archived_at");
+    }
+    fields
+}
+
+fn ensure_conversation_chat_index_item_consistent(
+    state: &AppState,
+    conversation: &Conversation,
+    trigger_reason: &str,
+) -> Result<(), String> {
+    let expected = build_chat_index_item(conversation);
+    let chat_index = state_read_chat_index_cached(state)?;
+    let initial_existing = chat_index
+        .conversations
+        .iter()
+        .find(|item| item.id == conversation.id);
+    let initial_mismatch_fields = initial_existing
+        .map(|existing| chat_index_item_mismatch_fields(existing, &expected))
+        .unwrap_or_else(Vec::new);
+    if initial_existing.is_some() && initial_mismatch_fields.is_empty() {
+        return Ok(());
+    }
+
+    let repair_reason = if initial_existing.is_none() {
+        "chat_index_missing_item".to_string()
+    } else {
+        format!(
+            "chat_index_field_mismatch:{}",
+            initial_mismatch_fields.join("|")
+        )
+    };
+    let before_log = format_chat_index_item_log(initial_existing);
+    let started = std::time::Instant::now();
+    eprintln!(
+        "[会话索引自愈] 状态=开始，conversation_id={}，触发原因={}，修复原因={}，修复前={}",
+        conversation.id, trigger_reason, repair_reason, before_log
+    );
+
+    let repair_gate = conversation_index_repair_gate(state, &conversation.id)?;
+    let _repair_guard = repair_gate
+        .lock()
+        .map_err(|err| format!("Failed to lock conversation index repair gate: {err}"))?;
+
+    let mut chat_index = state_read_chat_index_cached(state)?;
+    let existing_after_lock = chat_index
+        .conversations
+        .iter()
+        .find(|item| item.id == conversation.id)
+        .cloned();
+    if existing_after_lock
+        .as_ref()
+        .map(|item| chat_index_item_mismatch_fields(item, &expected).is_empty())
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "[会话索引自愈] 状态=跳过，conversation_id={}，触发原因={}，修复原因={}，修复前={}，修复后={}，duration_ms={}",
+            conversation.id,
+            trigger_reason,
+            repair_reason,
+            before_log,
+            format_chat_index_item_log(existing_after_lock.as_ref()),
+            started.elapsed().as_millis()
+        );
+        return Ok(());
+    }
+
+    upsert_chat_index_conversation(&mut chat_index, conversation);
+    if let Err(err) = state_write_chat_index_cached(state, &chat_index) {
+        eprintln!(
+            "[会话索引自愈] 状态=失败，conversation_id={}，触发原因={}，修复原因={}，修复前={}，修复后={}，duration_ms={}，error={}",
+            conversation.id,
+            trigger_reason,
+            repair_reason,
+            before_log,
+            format_chat_index_item_log(Some(&expected)),
+            started.elapsed().as_millis(),
+            err
+        );
+        return Err(format!(
+            "修复会话索引项失败，conversation_id={}，trigger={}，reason={}，error={}",
+            conversation.id, trigger_reason, repair_reason, err
+        ));
+    }
+
+    eprintln!(
+        "[会话索引自愈] 状态=完成，conversation_id={}，触发原因={}，修复原因={}，修复前={}，修复后={}，duration_ms={}",
+        conversation.id,
+        trigger_reason,
+        repair_reason,
+        before_log,
+        format_chat_index_item_log(Some(&expected)),
+        started.elapsed().as_millis()
+    );
+    Ok(())
+}
+
 fn sync_cached_app_data_agents(state: &AppState, agents: &[AgentProfile]) -> Result<(), String> {
     let mut cached = state
         .cached_app_data
@@ -285,6 +424,11 @@ fn state_read_conversation_cached(
         )
         {
             if *cached_mtime == Some(disk_time) {
+                ensure_conversation_chat_index_item_consistent(
+                    state,
+                    conversation,
+                    "state_read_conversation_cached.cache_hit",
+                )?;
                 return Ok(conversation.clone());
             }
         }
@@ -304,6 +448,11 @@ fn state_read_conversation_cached(
             .map_err(|_| "Failed to lock cached conversation mtimes".to_string())?;
         cached_mtimes.insert(conversation_id.to_string(), disk_mtime);
     }
+    ensure_conversation_chat_index_item_consistent(
+        state,
+        &conversation,
+        "state_read_conversation_cached.disk_read",
+    )?;
     Ok(conversation)
 }
 
@@ -634,6 +783,7 @@ fn state_read_agents_runtime_snapshot(state: &AppState) -> Result<AppData, Strin
     Ok(data)
 }
 
+#[cfg(test)]
 fn state_read_app_data_cached_with_detail(
     state: &AppState,
 ) -> Result<(AppData, CacheReadDetail), String> {
@@ -642,15 +792,18 @@ fn state_read_app_data_cached_with_detail(
     Ok((data, detail))
 }
 
+#[cfg(test)]
 fn state_read_app_data_cached(state: &AppState) -> Result<AppData, String> {
     state_read_app_data_cached_with_detail(state).map(|(data, _detail)| data)
 }
 
+#[cfg(test)]
 fn ensure_app_data_cache_ready_with_detail(state: &AppState) -> Result<CacheReadDetail, String> {
     let (_data, detail) = ensure_app_data_cache_ready_inner(state, false)?;
     Ok(detail)
 }
 
+#[cfg(test)]
 fn ensure_app_data_cache_ready_inner(
     state: &AppState,
     return_data: bool,
@@ -786,21 +939,6 @@ fn ensure_app_data_cache_ready_inner(
                 .min(u128::from(u64::MAX)) as u64,
         },
     ))
-}
-
-fn with_app_data_cached_ref<T>(
-    state: &AppState,
-    f: impl FnOnce(&AppData, &CacheReadDetail) -> Result<T, String>,
-) -> Result<T, String> {
-    let detail = ensure_app_data_cache_ready_with_detail(state)?;
-    let cached = state
-        .cached_app_data
-        .lock()
-        .map_err(|_| "Failed to lock cached app data".to_string())?;
-    let data = cached
-        .as_ref()
-        .ok_or_else(|| "Cached app data is unexpectedly missing".to_string())?;
-    f(data, &detail)
 }
 
 // ==================== AppData 全量兼容入口（测试专用） ====================

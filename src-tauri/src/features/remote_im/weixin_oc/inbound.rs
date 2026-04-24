@@ -20,17 +20,13 @@ fn weixin_oc_message_text(item_list: &[WeixinOcMessageItem]) -> String {
 }
 
 fn weixin_oc_contact_display_name(
-    data: &AppData,
+    runtime: &RuntimeStateFile,
     channel: &RemoteImChannelConfig,
     user_id: &str,
 ) -> String {
-    let user_alias = data.user_alias.trim();
+    let user_alias = runtime.user_alias.trim();
     if !user_alias.is_empty() {
         return user_alias.to_string();
-    }
-    let persona_name = user_persona_name(data);
-    if !persona_name.trim().is_empty() {
-        return persona_name.trim().to_string();
     }
     let channel_name = channel.name.trim();
     if !channel_name.is_empty() {
@@ -71,8 +67,8 @@ async fn handle_weixin_oc_inbound_message(
     let creds = WeixinOcCredentials::from_value(&channel.credentials);
     let client = build_weixin_oc_http_client(creds.normalized_api_timeout_ms())?;
     let media = weixin_oc_collect_media(state, &client, &creds, &item_list).await?;
-    let data = state_read_app_data_cached(state)?;
-    let display_name = weixin_oc_contact_display_name(&data, channel, from_user_id);
+    let runtime = state_read_runtime_state_cached(state)?;
+    let display_name = weixin_oc_contact_display_name(&runtime, channel, from_user_id);
     let message_id = msg
         .message_id
         .or(msg.msg_id)
@@ -213,13 +209,13 @@ async fn run_single_weixin_oc_poll_cycle(
 }
 
 fn upsert_weixin_oc_contact(
-    data: &mut AppData,
+    runtime: &mut RuntimeStateFile,
     channel: &RemoteImChannelConfig,
     user_id: &str,
 ) -> (String, bool) {
     let normalized_user_id = user_id.trim();
-    let display_name = weixin_oc_contact_display_name(data, channel, normalized_user_id);
-    if let Some(contact) = data.remote_im_contacts.iter_mut().find(|item| {
+    let display_name = weixin_oc_contact_display_name(runtime, channel, normalized_user_id);
+    if let Some(contact) = runtime.remote_im_contacts.iter_mut().find(|item| {
         item.channel_id == channel.id
             && item.remote_contact_type == "private"
             && item.remote_contact_id == normalized_user_id
@@ -232,7 +228,7 @@ fn upsert_weixin_oc_contact(
     }
 
     let contact_id = Uuid::new_v4().to_string();
-    data.remote_im_contacts.push(RemoteImContact {
+    runtime.remote_im_contacts.push(RemoteImContact {
         id: contact_id.clone(),
         channel_id: channel.id.clone(),
         platform: RemoteImPlatform::WeixinOc,
@@ -265,8 +261,8 @@ mod weixin_oc_inbound_tests {
 
     #[test]
     fn weixin_oc_contact_display_name_prefers_user_alias() {
-        let mut data = AppData::default();
-        data.user_alias = "派蒙".to_string();
+        let mut runtime = RuntimeStateFile::default();
+        runtime.user_alias = "派蒙".to_string();
         let channel = RemoteImChannelConfig {
             id: "channel-1".to_string(),
             name: "我的微信".to_string(),
@@ -280,7 +276,7 @@ mod weixin_oc_inbound_tests {
             allow_send_files: false,
         };
 
-        let display_name = weixin_oc_contact_display_name(&data, &channel, "wxid_123");
+        let display_name = weixin_oc_contact_display_name(&runtime, &channel, "wxid_123");
 
         assert_eq!(display_name, "派蒙".to_string());
     }
@@ -295,9 +291,9 @@ fn sync_weixin_oc_contact_from_user_id(
     if normalized_user_id.is_empty() {
         return Err("当前登录状态没有返回联系人 user_id，暂时无法补录联系人".to_string());
     }
-    let mut data = state_read_app_data_cached(state)?;
-    let result = upsert_weixin_oc_contact(&mut data, channel, normalized_user_id);
-    persist_runtime_state_only(state, &data, "sync_weixin_oc_contact_from_user_id")?;
+    let mut runtime = state_read_runtime_state_cached(state)?;
+    let result = upsert_weixin_oc_contact(&mut runtime, channel, normalized_user_id);
+    state_write_runtime_state_cached(state, &runtime)?;
     Ok(result)
 }
 

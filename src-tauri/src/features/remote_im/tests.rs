@@ -713,6 +713,9 @@
             provider_request_gates: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            conversation_index_repair_gates: Arc::new(Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             remote_im_contact_runtime_states: Arc::new(Mutex::new(std::collections::HashMap::new())),
             hidden_skill_snapshot_cache: Arc::new(Mutex::new(String::new())),
             preferred_release_source: Arc::new(Mutex::new("github".to_string())),
@@ -1161,4 +1164,3 @@
         assert_eq!(runtime.work_state, RemoteImWorkState::Busy);
         assert!(!runtime.needs_boundary);
     }
-

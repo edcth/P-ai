@@ -18,10 +18,8 @@ fn delegate_parent_shell_workspace_path(
             }
         }
     }
-    let data = state_read_app_data_cached(app_state).ok()?;
-    data.conversations
-        .iter()
-        .find(|item| item.id == root_conversation_id)
+    state_read_conversation_cached(app_state, root_conversation_id)
+        .ok()
         .and_then(|conversation| conversation.shell_workspace_path.clone())
         .filter(|value| !value.trim().is_empty())
 }

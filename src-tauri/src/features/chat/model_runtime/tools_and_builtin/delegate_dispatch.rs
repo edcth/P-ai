@@ -6,7 +6,7 @@ fn delegate_resolve_context(
 ) -> Result<
     (
         AppConfig,
-        AppData,
+        Vec<AgentProfile>,
         DepartmentConfig,
         DepartmentConfig,
         String,
@@ -23,7 +23,7 @@ fn delegate_resolve_context(
     )?;
     Ok((
         resolved.config,
-        resolved.data,
+        resolved.agents,
         resolved.source_department,
         resolved.target_department,
         resolved.target_agent_id,
@@ -144,7 +144,7 @@ fn check_and_push_call_stack(
 #[derive(Debug, Clone)]
 struct DelegatePreflight {
     config: AppConfig,
-    data: AppData,
+    agents: Vec<AgentProfile>,
     source_department: DepartmentConfig,
     target_department: DepartmentConfig,
     target_agent_id: String,
@@ -158,7 +158,7 @@ fn common_delegate_preflight(
     source_conversation_id: Option<&str>,
     target_department_id: &str,
 ) -> Result<DelegatePreflight, String> {
-    let (config, data, source_department, target_department, target_agent_id, root_conversation_id, current_thread) =
+    let (config, agents, source_department, target_department, target_agent_id, root_conversation_id, current_thread) =
         delegate_resolve_context(
             app_state,
             source_agent_id,
@@ -167,7 +167,7 @@ fn common_delegate_preflight(
         )?;
     Ok(DelegatePreflight {
         config,
-        data,
+        agents,
         source_department,
         target_department,
         target_agent_id,
@@ -354,7 +354,6 @@ async fn builtin_delegate(
     )?;
 
     let target_name = preflight
-        .data
         .agents
         .iter()
         .find(|agent| agent.id == preflight.target_agent_id)

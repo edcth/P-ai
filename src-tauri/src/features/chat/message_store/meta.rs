@@ -104,6 +104,18 @@ impl ConversationShardMeta {
         self.title.as_str()
     }
 
+    pub(super) fn updated_at(&self) -> &str {
+        self.updated_at.as_str()
+    }
+
+    pub(super) fn last_user_at(&self) -> Option<&str> {
+        self.last_user_at.as_deref()
+    }
+
+    pub(super) fn last_assistant_at(&self) -> Option<&str> {
+        self.last_assistant_at.as_deref()
+    }
+
     fn from_conversation(conversation: &Conversation) -> Self {
         Self {
             id: conversation.id.clone(),

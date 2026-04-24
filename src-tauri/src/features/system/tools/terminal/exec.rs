@@ -1309,6 +1309,7 @@ mod terminal_exec_tests {
             provider_streaming_disabled_keys: Arc::new(Mutex::new(HashMap::new())),
             provider_system_message_user_fallback_keys: Arc::new(Mutex::new(HashSet::new())),
             provider_request_gates: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            conversation_index_repair_gates: Arc::new(Mutex::new(HashMap::new())),
             remote_im_contact_runtime_states: Arc::new(Mutex::new(HashMap::new())),
             hidden_skill_snapshot_cache: Arc::new(Mutex::new(String::new())),
             preferred_release_source: Arc::new(Mutex::new("github".to_string())),
