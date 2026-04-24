@@ -385,7 +385,7 @@ fn terminal_plan_result(
     })
 }
 
-fn tool_history_without_organize_context(events: &[Value]) -> Vec<Value> {
+fn tool_history_without_organize_context(events: Vec<Value>) -> Vec<Value> {
     let mut filtered = Vec::<Value>::new();
     let mut skip_next_tool = false;
     for event in events {
@@ -414,7 +414,7 @@ fn tool_history_without_organize_context(events: &[Value]) -> Vec<Value> {
             continue;
         }
         skip_next_tool = false;
-        filtered.push(event.clone());
+        filtered.push(event);
     }
     filtered
 }
@@ -917,10 +917,14 @@ async fn run_genai_tool_loop(
         messages.push(assistant_message);
 
         for tool_call in turn_tool_calls {
-            let tool_name = tool_call.fn_name.clone();
-            let tool_call_id = tool_call.call_id.clone();
-            let tool_args = match &tool_call.fn_arguments {
-                Value::String(raw) => raw.clone(),
+            let genai::chat::ToolCall {
+                call_id: tool_call_id,
+                fn_name: tool_name,
+                fn_arguments,
+                ..
+            } = tool_call;
+            let tool_args = match fn_arguments {
+                Value::String(raw) => raw,
                 other => other.to_string(),
             };
             let repeat_streak =
@@ -998,11 +1002,11 @@ async fn run_genai_tool_loop(
                     }
                 }
             };
-            let tool_result_text = tool_result.display_text.clone();
+            let tool_result_text = tool_result.display_text.as_str();
 
             let tc_json = serde_json::json!({
                 "id": tool_call_id,
-                "call_id": tool_call.call_id,
+                "call_id": tool_call_id,
                 "type": "function",
                 "function": {
                     "name": tool_name,
@@ -1032,7 +1036,7 @@ async fn run_genai_tool_loop(
                     reasoning_standard: full_reasoning_standard,
                     reasoning_inline: String::new(),
                     assistant_provider_meta: None,
-                    tool_history_events: tool_history_without_organize_context(&tool_history_events),
+                    tool_history_events: tool_history_without_organize_context(tool_history_events),
                     suppress_assistant_message: true,
                     trusted_input_tokens: None,
                 });
@@ -1068,7 +1072,7 @@ async fn run_genai_tool_loop(
             let (tool_result_for_model, screenshot_forward) =
                 enrich_screenshot_tool_result_with_cache(&tool_name, &tool_result_text);
             messages.push(genai::chat::ChatMessage::from(
-                genai::chat::ToolResponse::new(tool_call.call_id, tool_result_for_model),
+                genai::chat::ToolResponse::new(tool_call_id, tool_result_for_model),
             ));
             if let Some(message) = runtime_tool_result_followup_message(&tool_name, &tool_result) {
                 messages.push(message);
@@ -1357,10 +1361,14 @@ async fn run_genai_tool_loop_non_stream(
         messages.push(assistant_message);
 
         for tool_call in turn_tool_calls {
-            let tool_name = tool_call.fn_name.clone();
-            let tool_call_id = tool_call.call_id.clone();
-            let tool_args = match &tool_call.fn_arguments {
-                Value::String(raw) => raw.clone(),
+            let genai::chat::ToolCall {
+                call_id: tool_call_id,
+                fn_name: tool_name,
+                fn_arguments,
+                ..
+            } = tool_call;
+            let tool_args = match fn_arguments {
+                Value::String(raw) => raw,
                 other => other.to_string(),
             };
             let repeat_streak =
@@ -1438,10 +1446,10 @@ async fn run_genai_tool_loop_non_stream(
                     }
                 }
             };
-            let tool_result_text = tool_result.display_text.clone();
+            let tool_result_text = tool_result.display_text.as_str();
             let tc_json = serde_json::json!({
                 "id": tool_call_id,
-                "call_id": tool_call.call_id,
+                "call_id": tool_call_id,
                 "type": "function",
                 "function": {
                     "name": tool_name,
@@ -1466,7 +1474,7 @@ async fn run_genai_tool_loop_non_stream(
                     reasoning_standard: full_reasoning_standard,
                     reasoning_inline: String::new(),
                     assistant_provider_meta: None,
-                    tool_history_events: tool_history_without_organize_context(&tool_history_events),
+                    tool_history_events: tool_history_without_organize_context(tool_history_events),
                     suppress_assistant_message: true,
                     trusted_input_tokens: None,
                 });
@@ -1502,7 +1510,7 @@ async fn run_genai_tool_loop_non_stream(
             let (tool_result_for_model, screenshot_forward) =
                 enrich_screenshot_tool_result_with_cache(&tool_name, &tool_result_text);
             messages.push(genai::chat::ChatMessage::from(
-                genai::chat::ToolResponse::new(tool_call.call_id, tool_result_for_model),
+                genai::chat::ToolResponse::new(tool_call_id, tool_result_for_model),
             ));
             if let Some(message) = runtime_tool_result_followup_message(&tool_name, &tool_result) {
                 messages.push(message);
