@@ -34,28 +34,7 @@
         <span class="opacity-70">显示 {{ filteredLogs.length }} / {{ logs.length }}</span>
       </div>
       <div v-if="errorText" class="text-error text-sm mt-2">{{ errorText }}</div>
-      <div
-        ref="viewportRef"
-        class="mt-3 flex-1 overflow-auto rounded-box border border-base-300 bg-base-100 p-2 font-mono text-xs"
-        @scroll="onScroll"
-      >
-        <div :style="{ height: `${totalHeight}px`, position: 'relative' }">
-          <div :style="{ transform: `translateY(${offsetTop}px)` }">
-            <div
-              v-for="item in visibleLogs"
-              :key="item.id"
-              class="leading-6 whitespace-pre-wrap break-all border-b border-base-300/40"
-            >
-              <span class="opacity-60">[{{ formatLogTime(item.createdAt) }}]</span>
-              <span class="ml-2" :class="item.level === 'error' ? 'text-error' : 'text-base-content'">
-                {{ item.level.toUpperCase() }}
-              </span>
-              <span class="ml-2">{{ item.message }}</span>
-              <span v-if="item.repeat > 1" class="ml-2 badge badge-ghost badge-xs">x{{ item.repeat }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <pre class="mt-3 flex-1 overflow-auto rounded-box border border-base-300 bg-base-100 p-3 font-mono text-xs leading-5 whitespace-pre-wrap break-words"><code>{{ runtimeLogCode }}</code></pre>
     </div>
     <form method="dialog" class="modal-backdrop">
       <button @click.prevent="$emit('close')">close</button>
@@ -80,34 +59,10 @@ defineEmits<{
   (e: "clear"): void;
 }>();
 
-const ITEM_HEIGHT = 24;
-const OVERSCAN = 12;
 const levelOptions = ["info", "warn", "error", "debug", "trace"] as const;
-const viewportRef = ref<HTMLElement | null>(null);
-const scrollTop = ref(0);
-const viewportHeight = ref(400);
 const selectedLevel = ref<"all" | (typeof levelOptions)[number]>("info");
 const selectedModule = ref("all");
 const copyStatus = ref("");
-
-function onScroll() {
-  const el = viewportRef.value;
-  if (!el) return;
-  scrollTop.value = el.scrollTop;
-  viewportHeight.value = el.clientHeight;
-}
-
-watch(
-  () => props.open,
-  (open) => {
-    if (!open) return;
-    requestAnimationFrame(() => {
-      const el = viewportRef.value;
-      if (!el) return;
-      viewportHeight.value = el.clientHeight;
-    });
-  },
-);
 
 const moduleOptions = computed(() => {
   const moduleSet = new Set<string>();
@@ -134,24 +89,15 @@ const filteredLogs = computed(() =>
 watch(
   () => [selectedLevel.value, selectedModule.value, filteredLogs.value.length],
   () => {
-    scrollTop.value = 0;
-    const el = viewportRef.value;
-    if (el) {
-      el.scrollTop = 0;
-    }
+    copyStatus.value = "";
   },
 );
 
-const totalHeight = computed(() => filteredLogs.value.length * ITEM_HEIGHT);
-const startIndex = computed(() => Math.max(0, Math.floor(scrollTop.value / ITEM_HEIGHT) - OVERSCAN));
-const endIndex = computed(() =>
-  Math.min(
-    filteredLogs.value.length,
-    Math.ceil((scrollTop.value + viewportHeight.value) / ITEM_HEIGHT) + OVERSCAN,
-  ),
-);
-const offsetTop = computed(() => startIndex.value * ITEM_HEIGHT);
-const visibleLogs = computed(() => filteredLogs.value.slice(startIndex.value, endIndex.value));
+const runtimeLogCode = computed(() => {
+  if (props.loading) return "正在加载运行日志...";
+  if (filteredLogs.value.length === 0) return "暂无日志";
+  return filteredLogs.value.map(formatLogLine).join("\n");
+});
 
 function formatLogLine(item: RuntimeLogEntry): string {
   const segments = [

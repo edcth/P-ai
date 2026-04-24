@@ -262,6 +262,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       recordBackgroundWakeEnabled: !!options.config.recordBackgroundWakeEnabled,
       minRecordSeconds: options.config.minRecordSeconds,
       maxRecordSeconds: options.config.maxRecordSeconds,
+      llmRoundLogCapacity: normalizeLlmRoundLogCapacity(options.config.llmRoundLogCapacity),
       selectedApiConfigId: options.config.selectedApiConfigId,
       assistantDepartmentApiConfigId: options.config.assistantDepartmentApiConfigId,
       ...(options.config.visionApiConfigId ? { visionApiConfigId: options.config.visionApiConfigId } : {}),
@@ -372,6 +373,7 @@ export function useConfigCore(options: UseConfigCoreOptions) {
       recordBackgroundWakeEnabled: !!options.config.recordBackgroundWakeEnabled,
       minRecordSeconds: options.config.minRecordSeconds,
       maxRecordSeconds: options.config.maxRecordSeconds,
+      llmRoundLogCapacity: normalizeLlmRoundLogCapacity(options.config.llmRoundLogCapacity),
       selectedApiConfigId: options.config.selectedApiConfigId,
       assistantDepartmentApiConfigId: options.config.assistantDepartmentApiConfigId,
       visionApiConfigId: options.config.visionApiConfigId,
@@ -423,4 +425,13 @@ export function useConfigCore(options: UseConfigCoreOptions) {
     buildConfigPayload,
     buildConfigSnapshotJson,
   };
+}
+
+function normalizeLlmRoundLogCapacity(value: unknown): 1 | 3 | 10 {
+  const numeric = Math.round(Number(value));
+  if (numeric === 1 || numeric === 3 || numeric === 10) return numeric;
+  if (!Number.isFinite(numeric) || numeric <= 0) return 3;
+  if (numeric < 3) return 1;
+  if (numeric < 10) return 3;
+  return 10;
 }

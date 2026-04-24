@@ -40,6 +40,7 @@
             min_record_seconds: 0,
             max_record_seconds: 0,
             tool_max_iterations: 0,
+            llm_round_log_capacity: 9,
             selected_api_config_id: "a1".to_string(),
             assistant_department_api_config_id: "a1".to_string(),
             vision_api_config_id: None,
@@ -107,6 +108,7 @@
         assert_eq!(cfg.min_record_seconds, 1);
         assert!(cfg.max_record_seconds >= cfg.min_record_seconds);
         assert_eq!(cfg.tool_max_iterations, 1);
+        assert_eq!(cfg.llm_round_log_capacity, 3);
         assert_eq!(cfg.api_configs[0].failure_retry_count, 20);
         assert!(!cfg.stt_auto_send);
     }
@@ -122,6 +124,7 @@
             min_record_seconds: 1,
             max_record_seconds: 60,
             tool_max_iterations: 10,
+            llm_round_log_capacity: default_llm_round_log_capacity(),
             selected_api_config_id: "edit-b".to_string(),
             assistant_department_api_config_id: "chat-a".to_string(),
             vision_api_config_id: None,
@@ -203,6 +206,7 @@
             min_record_seconds: 1,
             max_record_seconds: 60,
             tool_max_iterations: 10,
+            llm_round_log_capacity: default_llm_round_log_capacity(),
             selected_api_config_id: "tts-a".to_string(),
             assistant_department_api_config_id: "tts-a".to_string(),
             vision_api_config_id: Some("tts-a".to_string()),
@@ -261,6 +265,7 @@
             min_record_seconds: 1,
             max_record_seconds: 60,
             tool_max_iterations: 10,
+            llm_round_log_capacity: default_llm_round_log_capacity(),
             selected_api_config_id: "embed-a".to_string(),
             assistant_department_api_config_id: "chat-a".to_string(),
             vision_api_config_id: None,
@@ -410,6 +415,7 @@
             min_record_seconds: 1,
             max_record_seconds: 60,
             tool_max_iterations: 10,
+            llm_round_log_capacity: default_llm_round_log_capacity(),
             selected_api_config_id: "chat-a".to_string(),
             assistant_department_api_config_id: String::new(),
             vision_api_config_id: None,

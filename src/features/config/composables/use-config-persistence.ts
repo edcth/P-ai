@@ -97,6 +97,15 @@ function mapDepartmentConfig(item: unknown): AppConfig["departments"][number] {
   };
 }
 
+function normalizeLlmRoundLogCapacity(value: unknown): 1 | 3 | 10 {
+  const numeric = Math.round(Number(value));
+  if (numeric === 1 || numeric === 3 || numeric === 10) return numeric;
+  if (!Number.isFinite(numeric) || numeric <= 0) return 3;
+  if (numeric < 3) return 1;
+  if (numeric < 10) return 3;
+  return 10;
+}
+
 function mapRemoteImChannel(item: unknown): RemoteImChannelConfig {
   const platformRaw = String((item as { platform?: unknown })?.platform || "").trim().toLowerCase();
   const platform =
@@ -231,6 +240,7 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
     );
     options.config.minRecordSeconds = normalizedConfigNumbers.minRecordSeconds;
     options.config.maxRecordSeconds = normalizedConfigNumbers.maxRecordSeconds;
+    options.config.llmRoundLogCapacity = normalizeLlmRoundLogCapacity((cfg as AppConfig).llmRoundLogCapacity);
     options.config.selectedApiConfigId = cfg.selectedApiConfigId;
     options.config.assistantDepartmentApiConfigId = cfg.assistantDepartmentApiConfigId;
     options.config.visionApiConfigId = cfg.visionApiConfigId ?? undefined;
@@ -432,6 +442,7 @@ export function useConfigPersistence(options: UseConfigPersistenceOptions) {
       );
       options.config.minRecordSeconds = normalizedConfigNumbers.minRecordSeconds;
       options.config.maxRecordSeconds = normalizedConfigNumbers.maxRecordSeconds;
+      options.config.llmRoundLogCapacity = normalizeLlmRoundLogCapacity((saved as AppConfig).llmRoundLogCapacity);
       options.config.selectedApiConfigId = saved.selectedApiConfigId;
       options.config.assistantDepartmentApiConfigId = saved.assistantDepartmentApiConfigId;
       options.config.visionApiConfigId = saved.visionApiConfigId ?? undefined;

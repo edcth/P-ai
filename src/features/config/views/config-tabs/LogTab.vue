@@ -21,8 +21,23 @@
               </button>
             </div>
           </div>
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <span class="opacity-70">缓存数量</span>
+            <div class="join">
+              <button
+                v-for="option in logCapacityOptions"
+                :key="option"
+                class="btn btn-xs join-item"
+                :class="props.config.llmRoundLogCapacity === option ? 'btn-primary' : 'bg-base-200'"
+                type="button"
+                @click="setLogCapacity(option)"
+              >
+                {{ option }} 次
+              </button>
+            </div>
+          </div>
           <div class="text-sm opacity-60">
-            仅保留最近 10 次调度日志；单次调度内的多轮 chat 会聚合到所属 pipeline 中，进程退出后自动清空。
+            仅保留最近 {{ props.config.llmRoundLogCapacity }} 次调度日志；单次调度内的多轮 chat 会聚合到所属 pipeline 中，进程退出后自动清空。
           </div>
         </div>
       </div>
@@ -266,15 +281,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { invokeTauri } from "../../../../services/tauri-api";
-import type { LlmRoundLogEntry } from "../../../../types/app";
+import type { AppConfig, LlmRoundLogEntry } from "../../../../types/app";
 import { toErrorMessage } from "../../../../utils/error";
 
 const props = defineProps<{
+  config: AppConfig;
   openRuntimeLogs: () => void;
 }>();
 
 const loading = ref(false);
 const logs = ref<LlmRoundLogEntry[]>([]);
+const logCapacityOptions = [1, 3, 10] as const;
 const selectedRound = ref<{
   pipeline: LlmRoundLogEntry;
   round: LlmRoundLogEntry;
@@ -295,6 +312,10 @@ const pipelineLogs = computed(() =>
 const otherLogs = computed(() =>
   logs.value.filter((entry) => entry.scene !== "chat_pipeline"),
 );
+
+function setLogCapacity(value: 1 | 3 | 10) {
+  props.config.llmRoundLogCapacity = value;
+}
 
 function toPretty(input: unknown): string {
   try {

@@ -1,5 +1,5 @@
-const LLM_ROUND_LOG_CAPACITY: usize = 10;
 const RUNTIME_LOG_MAX_BYTES: usize = 10 * 1024 * 1024;
+const DEFAULT_LLM_ROUND_LOG_CAPACITY: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -515,19 +515,40 @@ fn log_entry_tool_call_count(entry: &LlmRoundLogEntry) -> usize {
         .sum()
 }
 
-fn push_display_llm_log(logs: &mut std::collections::VecDeque<LlmRoundLogEntry>, entry: LlmRoundLogEntry) {
-    logs.push_back(entry);
-    while logs
-        .iter()
-        .filter(|item| item.scene == "chat_pipeline")
-        .count()
-        > LLM_ROUND_LOG_CAPACITY
-    {
-        let Some(idx) = logs.iter().position(|item| item.scene == "chat_pipeline") else {
-            break;
-        };
-        let _ = logs.remove(idx);
+fn normalize_llm_round_log_capacity(value: u32) -> usize {
+    match value {
+        1 => 1,
+        3 => 3,
+        10 => 10,
+        0 => DEFAULT_LLM_ROUND_LOG_CAPACITY,
+        value if value < 3 => 1,
+        value if value < 10 => 3,
+        _ => 10,
     }
+}
+
+fn llm_round_log_capacity_for_state(state: &AppState) -> usize {
+    state_read_config_cached(state)
+        .map(|config| normalize_llm_round_log_capacity(config.llm_round_log_capacity))
+        .unwrap_or(DEFAULT_LLM_ROUND_LOG_CAPACITY)
+}
+
+fn trim_display_llm_logs(
+    logs: &mut std::collections::VecDeque<LlmRoundLogEntry>,
+    capacity: usize,
+) {
+    while logs.len() > capacity {
+        let _ = logs.pop_front();
+    }
+}
+
+fn push_display_llm_log(
+    logs: &mut std::collections::VecDeque<LlmRoundLogEntry>,
+    entry: LlmRoundLogEntry,
+    capacity: usize,
+) {
+    logs.push_back(entry);
+    trim_display_llm_logs(logs, capacity);
 }
 
 fn push_llm_round_log(
@@ -596,16 +617,18 @@ fn push_llm_round_log(
         if !rounds.is_empty() {
             pipeline_entry.rounds = Some(rounds);
         }
+        let capacity = llm_round_log_capacity_for_state(app_state);
         let Ok(mut logs) = app_state.llm_round_logs.lock() else {
             return;
         };
-        push_display_llm_log(&mut logs, pipeline_entry);
+        push_display_llm_log(&mut logs, pipeline_entry, capacity);
         return;
     }
+    let capacity = llm_round_log_capacity_for_state(app_state);
     let Ok(mut logs) = app_state.llm_round_logs.lock() else {
         return;
     };
-    push_display_llm_log(&mut logs, entry);
+    push_display_llm_log(&mut logs, entry, capacity);
 }
 
 fn latest_chat_round_headers_and_tools(
@@ -651,11 +674,16 @@ fn latest_chat_round_headers_and_tools(
 
 #[tauri::command]
 fn list_recent_llm_round_logs(state: State<'_, AppState>) -> Result<Vec<LlmRoundLogEntry>, String> {
+    let capacity = llm_round_log_capacity_for_state(&state);
     let logs = state
         .llm_round_logs
         .lock()
         .map_err(|_| "Failed to lock llm round logs".to_string())?;
-    Ok(logs.iter().cloned().collect::<Vec<_>>())
+    Ok(logs
+        .iter()
+        .skip(logs.len().saturating_sub(capacity))
+        .cloned()
+        .collect::<Vec<_>>())
 }
 
 #[tauri::command]

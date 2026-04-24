@@ -1,6 +1,8 @@
 # 变更日志
 
 ## 进行中
+- 优化（runtime-log-code-block-view）：后台运行日志窗口从逐条虚拟列表改为单个 `pre/code` 日志块展示，保留级别/模块过滤与复制能力，提高日志扫描与复制的连续性
+- 优化（llm-round-log-capacity-setting）：调用日志缓存数量改为可配置三档 `1 / 3 / 10`，默认保留最近 3 条；后端按当前配置裁剪内存中的调用日志展示缓存，设置页日志页可直接切换档位
 - 优化（workspace-agents-md-size-guard）：会话主工作目录的 `AGENTS.md` 自动注入新增 32KiB 大小上限；超过上限时仅记录带路径与字节数的跳过日志，不再读取正文，避免超大项目说明进入提示词上下文
 - 优化（welcome-completion-progress-theme-color）：设置首页欢迎卡的配置完成度圆环改为跟随主题主色，保留 DaisyUI `radial-progress` 默认结构，避免中性色在自定义深色主题下显得脏灰或与背景层级冲突
 - 优化（generated-dark-theme-base-swap）：自定义深色主题保持现有色阶生成算法不变，仅在生成后对调 `base-100` 与 `base-300`，让最深背景落到 `base-300`，同时保留亮色自定义主题与预设主题行为

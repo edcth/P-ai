@@ -482,6 +482,10 @@ fn default_tool_max_iterations() -> u32 {
     10
 }
 
+fn default_llm_round_log_capacity() -> u32 {
+    3
+}
+
 fn default_failure_retry_count() -> u32 {
     0
 }
@@ -646,6 +650,8 @@ struct AppConfig {
     max_record_seconds: u32,
     #[serde(default = "default_tool_max_iterations")]
     tool_max_iterations: u32,
+    #[serde(default = "default_llm_round_log_capacity")]
+    llm_round_log_capacity: u32,
     selected_api_config_id: String,
     #[serde(default, alias = "chatApiConfigId")]
     assistant_department_api_config_id: String,
@@ -687,6 +693,7 @@ impl Default for AppConfig {
             min_record_seconds: default_min_record_seconds(),
             max_record_seconds: default_max_record_seconds(),
             tool_max_iterations: default_tool_max_iterations(),
+            llm_round_log_capacity: default_llm_round_log_capacity(),
             selected_api_config_id: api_config.id.clone(),
             assistant_department_api_config_id: api_config.id.clone(),
             vision_api_config_id: None,

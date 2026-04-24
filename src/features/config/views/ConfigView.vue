@@ -197,6 +197,7 @@
 
         <LogTab
           v-else-if="props.configTab === 'logs'"
+          :config="config"
           :open-runtime-logs="() => $emit('openRuntimeLogs')"
         />
 

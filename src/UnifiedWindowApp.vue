@@ -489,6 +489,7 @@ const config = reactive<AppConfig>({
   recordBackgroundWakeEnabled: true,
   minRecordSeconds: 1,
   maxRecordSeconds: 60,
+  llmRoundLogCapacity: 3,
   selectedApiConfigId: "",
   assistantDepartmentApiConfigId: "",
   visionApiConfigId: undefined,

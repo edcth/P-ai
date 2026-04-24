@@ -1011,6 +1011,13 @@ fn normalize_app_config(config: &mut AppConfig) {
         config.max_record_seconds = default_max_record_seconds().max(config.min_record_seconds);
     }
     config.tool_max_iterations = config.tool_max_iterations.clamp(1, 100);
+    config.llm_round_log_capacity = match config.llm_round_log_capacity {
+        1 | 3 | 10 => config.llm_round_log_capacity,
+        0 => default_llm_round_log_capacity(),
+        value if value < 3 => 1,
+        value if value < 10 => 3,
+        _ => 10,
+    };
 
     config.vision_api_config_id = config
         .vision_api_config_id
