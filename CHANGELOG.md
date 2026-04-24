@@ -1,6 +1,9 @@
 # 变更日志
 
 ## 进行中
+
+## 发布：v0.9.41
+
 - 优化（department-deputy-permission-and-reset-polish）：部门页收紧副手与权限配置交互，主部门隐藏副手开关，顶部回转按钮改为还原未保存部门草稿；副手部门默认只暴露调查型内置工具并隐藏预设 Skill，保留用户自建 Skill 与 MCP 按配置可用，同时统一人格下拉的用户/预设/普通排序与副手人格候选过滤
 - 功能（explicit-deputy-department-delegation）：部门新增“副手部门”显式开关；只有副手部门会出现在委托候选并能通过后端委托校验，副手部门人格与非副手部门互斥，内置不可删除的副手人格作为默认兜底，避免普通部门人格被误用为委托执行者
 - 优化（runtime-log-code-block-view）：后台运行日志窗口从逐条虚拟列表改为单个 `pre/code` 日志块展示，保留级别/模块过滤与复制能力，提高日志扫描与复制的连续性
@@ -26,6 +29,8 @@
 - 修复（prompt-usage-source-unification-and-conversation-cache-removal）：提示词服务的上下文占用查询现在统一以最近一条 assistant 消息的 `providerMeta` 为真实真源，找不到时才回退到本地估算；同时移除 `Conversation.last_context_usage_ratio` 与 `Conversation.last_effective_prompt_tokens` 这组伪状态字段，避免前后端围绕“会话级缓存”和“消息级真实值”继续分叉，强制压缩判断、手动整理上下文预览与相关测试夹具也同步切到同一套真源语义
 - 重构（conversation-prompt-service-phase-1）：引入会话提示词服务第一阶段骨架，先收口提示词 owner 与只读 snapshot，不替换 `Conversation.messages` 作为持久化真源；系统提示词最终合成与对话消息投影入口开始统一经过服务层，并新增缓存命中稳定性与 `prompt_revision` 边界测试，确保 `todo/task` 与 `memory_recall` 不会误触发系统提示词 revision
 - 重构（conversation-prompt-service-phase-2）：继续收口提示词服务 owner，系统侧块生成统一改为由服务内部发起，并把主聊天、`SummaryContext`、工具安全审查、工具审查提交、vision 描述这几条高频真实业务入口的 latest user / prepared prompt 生成动作收进服务内部；外部主链只再传原始条件与场景意图，不再手搓系统块或 latest user 文本
+
+- 发布（release-0.9.41）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.41`，作为本轮消息 JSONL 外置与压缩段分页重构继续推进前的新版本基线
 
 ## 发布：v0.9.40
 
