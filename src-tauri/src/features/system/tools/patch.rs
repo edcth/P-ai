@@ -1017,7 +1017,7 @@ async fn builtin_apply_patch(
     let mut smart_review_unavailable_notice = None::<String>;
     let mut smart_review_handled = false;
     let mut smart_review_history = None::<Value>;
-    if !matches!(safety, ApplyPatchSafetyCheck::Reject { .. }) {
+    if matches!(safety, ApplyPatchSafetyCheck::AskUser { .. }) {
         if let Some(review_api_config_id) = current_tool_review_api_config_id(state)? {
             let context = serde_json::json!({
                 "cwd": terminal_path_for_user(&cwd),
