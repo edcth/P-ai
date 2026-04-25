@@ -282,7 +282,7 @@ fn is_streaming_request_payload_format_error(err: &str) -> bool {
 }
 
 fn request_format_supports_non_stream_fallback(format: RequestFormat) -> bool {
-    matches!(format, RequestFormat::OpenAI)
+    matches!(format, RequestFormat::OpenAI | RequestFormat::DeepSeekKimi)
 }
 
 async fn invoke_model_by_format(
@@ -292,7 +292,7 @@ async fn invoke_model_by_format(
     app_state: Option<&AppState>,
 ) -> Result<ModelReply, String> {
     match resolved_api.request_format {
-        RequestFormat::OpenAI => {
+        RequestFormat::OpenAI | RequestFormat::DeepSeekKimi => {
             call_model_openai_stream(resolved_api, model_name, prepared, app_state).await
         }
         RequestFormat::OpenAIResponses | RequestFormat::Codex => {
@@ -320,7 +320,7 @@ async fn invoke_model_non_stream_by_format(
     app_state: Option<&AppState>,
 ) -> Result<ModelReply, String> {
     match resolved_api.request_format {
-        RequestFormat::OpenAI => {
+        RequestFormat::OpenAI | RequestFormat::DeepSeekKimi => {
             call_model_openai_non_stream(resolved_api, model_name, prepared, app_state).await
         }
         RequestFormat::OpenAIResponses | RequestFormat::Codex => {

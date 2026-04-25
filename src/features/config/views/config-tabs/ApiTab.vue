@@ -207,6 +207,11 @@
                             <ChevronDown class="h-3.5 w-3.5" />
                           </button>
                         </div>
+                        <div v-if="shouldWarnDeepSeekKimiProtocol(modelCard)"
+                          class="alert alert-warning mt-2 py-2 text-xs">
+                          <AlertTriangle class="h-4 w-4 shrink-0" />
+                          <span>{{ t("config.api.deepSeekKimiProtocolHint") }}</span>
+                        </div>
                       </label>
                       <div v-if="activeModelPickerId === modelCard.id"
                         class="rounded-box border border-base-300 bg-base-200/50 p-3">
@@ -318,7 +323,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { ChevronDown, ExternalLink, Eye, EyeOff, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
+import { AlertTriangle, ChevronDown, ExternalLink, Eye, EyeOff, Plus, RefreshCw, Save, Trash2, WandSparkles } from "lucide-vue-next";
 import type { ApiModelConfigItem, ApiProviderConfigItem, ApiRequestFormat, AppConfig, CodexAuthMode, CodexAuthStatus } from "../../../../types/app";
 import SettingsStickyLayout from "../../components/SettingsStickyLayout.vue";
 import { invokeTauri } from "../../../../services/tauri-api";
@@ -393,6 +398,7 @@ const capabilityTabs: Array<{ id: ApiCapability; label: string }> = [
 const protocolOptionsByCapability: Record<ApiCapability, ProtocolOption[]> = {
   text: [
     { value: "openai", label: "OpenAI Compatible" },
+    { value: "deepseek/kimi", label: "DeepSeek / Kimi" },
     { value: "openai_responses", label: "OpenAI Responses" },
     { value: "codex", label: "OpenAI Codex" },
     { value: "gemini", label: "Google Gemini" },
@@ -419,8 +425,8 @@ const providerPresets: ProviderPreset[] = [
   { id: "openai-codex", name: "OpenAI Codex", urls: { codex: DEFAULT_CODEX_BASE_URL }, docsUrl: "https://chatgpt.com" },
   { id: "anthropic-official", name: "Anthropic", urls: { anthropic: "https://api.anthropic.com" }, docsUrl: "https://docs.anthropic.com/en/api/overview" },
   { id: "google-gemini", name: "Google Gemini", urls: { gemini: "https://generativelanguage.googleapis.com", gemini_embedding: "https://generativelanguage.googleapis.com" }, docsUrl: "https://ai.google.dev/gemini-api/docs", hasFreeQuota: true },
-  { id: "deepseek", name: "DeepSeek", urls: { anthropic: "https://api.deepseek.com/anthropic", openai: "https://api.deepseek.com/v1", openai_responses: "https://api.deepseek.com/v1" }, docsUrl: "https://api-docs.deepseek.com/" },
-  { id: "moonshot-kimi", name: "Moonshot/Kimi", urls: { openai: "https://api.moonshot.cn/v1", openai_responses: "https://api.moonshot.cn/v1" }, docsUrl: "https://platform.moonshot.cn/docs/api-reference" },
+  { id: "deepseek", name: "DeepSeek", urls: { anthropic: "https://api.deepseek.com/anthropic", openai: "https://api.deepseek.com/v1", "deepseek/kimi": "https://api.deepseek.com/v1", openai_responses: "https://api.deepseek.com/v1" }, docsUrl: "https://api-docs.deepseek.com/" },
+  { id: "moonshot-kimi", name: "Moonshot/Kimi", urls: { openai: "https://api.moonshot.cn/v1", "deepseek/kimi": "https://api.moonshot.cn/v1", openai_responses: "https://api.moonshot.cn/v1" }, docsUrl: "https://platform.moonshot.cn/docs/api-reference" },
   { id: "aliyun-bailian-coding", name: "百炼编程", urls: { anthropic: "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1", openai: "https://coding.dashscope.aliyuncs.com/v1", openai_responses: "https://coding.dashscope.aliyuncs.com/v1" }, docsUrl: "https://help.aliyun.com/zh/model-studio/" },
   { id: "aliyun-bailian", name: "百炼通用", urls: { openai: "https://dashscope.aliyuncs.com/compatible-mode/v1", openai_responses: "https://dashscope.aliyuncs.com/compatible-mode/v1" }, docsUrl: "https://help.aliyun.com/zh/model-studio/" },
   { id: "zhipu-glm", name: "Zhipu GLM", urls: { anthropic: "https://open.bigmodel.cn/api/anthropic", openai: "https://open.bigmodel.cn/api/paas/v4", openai_responses: "https://open.bigmodel.cn/api/paas/v4" }, docsUrl: "https://open.bigmodel.cn/dev/api", hasFreeQuota: true },
@@ -875,6 +881,12 @@ function maxOutputTokensMax(modelCard: ApiModelConfigItem): number {
   const raw = Number(modelCapabilityById.value[modelCard.id]?.maxOutputTokensMax ?? 128_000);
   if (!Number.isFinite(raw)) return 128_000;
   return Math.max(256, Math.min(128_000, Math.round(raw)));
+}
+
+function shouldWarnDeepSeekKimiProtocol(modelCard: ApiModelConfigItem): boolean {
+  if (selectedProtocol.value === "deepseek/kimi") return false;
+  const modelName = String(modelCard.model || "").toLowerCase();
+  return modelName.includes("deepseek") || modelName.includes("kimi");
 }
 
 function clampModelCardValues(modelCard: ApiModelConfigItem) {

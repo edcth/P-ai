@@ -16,7 +16,7 @@ async fn describe_image_with_vision_api(
             &vision_api.model,
         );
     let reply = match vision_resolved.request_format {
-        RequestFormat::OpenAI => {
+        RequestFormat::OpenAI | RequestFormat::DeepSeekKimi => {
             if prefer_non_stream {
                 call_model_openai_non_stream(vision_resolved, &vision_api.model, prepared, Some(state)).await?
             } else {

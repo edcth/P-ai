@@ -2,6 +2,12 @@
 
 ## 进行中
 
+## 发布：v0.9.45
+
+- 功能（deepseek-kimi-protocol-and-reasoning-roundtrip）：API 供应商新增 `DeepSeek / Kimi` 协议选项与常见供应商预设，按 OpenAI-compatible 链路接入聊天、工具调用、视觉描述、模型列表刷新、推理网关与部门模型过滤；DeepSeek/Kimi 工具调用续轮会捕获并回传 assistant `reasoning_content`，即使为空也保留字段，避免工具调用后的 thinking-mode 上下文丢失
+- 优化（deepseek-kimi-protocol-warning）：模型卡片在非 `DeepSeek / Kimi` 协议下检测到模型名包含 DeepSeek/Kimi 时显示警告提示，避免用户误用普通 OpenAI 协议；不自构造 DeepSeek thinking 请求体，也不在 UI 暴露 genai 当前未支持的 DeepSeek thinking 等级，降低后续维护风险
+- 发布（release-0.9.45）：同步前端 `package.json`、Tauri `tauri.conf.json` 与 Rust `Cargo.toml` / `Cargo.lock` 版本号到 `0.9.45`，纳入本轮 DeepSeek/Kimi 协议与 reasoning 回传收口
+
 ## 发布：v0.9.43
 
 - 优化（chat-tool-running-indicator）：聊天消息工具摘要行在工具执行中时改用成功色 DaisyUI loading 指示器覆盖原绿点展示，完成后恢复普通成功色圆点，避免执行中与已完成状态观感混淆且不撑开布局

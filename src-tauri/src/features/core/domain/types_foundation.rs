@@ -129,6 +129,8 @@ struct ApiToolConfig {
 enum RequestFormat {
     #[serde(rename = "openai")]
     OpenAI,
+    #[serde(rename = "deepseek/kimi")]
+    DeepSeekKimi,
     #[serde(rename = "openai_responses")]
     OpenAIResponses,
     #[serde(rename = "codex")]
@@ -153,6 +155,7 @@ impl RequestFormat {
     fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "openai" => Some(Self::OpenAI),
+            "deepseek/kimi" => Some(Self::DeepSeekKimi),
             "openai_responses" => Some(Self::OpenAIResponses),
             "codex" => Some(Self::Codex),
             "openai_tts" => Some(Self::OpenAITts),
@@ -161,7 +164,6 @@ impl RequestFormat {
             "openai_rerank" => Some(Self::OpenAIRerank),
             "gemini" => Some(Self::Gemini),
             "gemini_embedding" => Some(Self::GeminiEmbedding),
-            "deepseek/kimi" => Some(Self::OpenAI),
             "anthropic" => Some(Self::Anthropic),
             _ => None,
         }
@@ -170,6 +172,7 @@ impl RequestFormat {
     fn as_str(self) -> &'static str {
         match self {
             Self::OpenAI => "openai",
+            Self::DeepSeekKimi => "deepseek/kimi",
             Self::OpenAIResponses => "openai_responses",
             Self::Codex => "codex",
             Self::OpenAITts => "openai_tts",
@@ -195,7 +198,10 @@ impl RequestFormat {
     }
 
     fn is_openai_style(self) -> bool {
-        matches!(self, Self::OpenAI | Self::OpenAIResponses | Self::Codex)
+        matches!(
+            self,
+            Self::OpenAI | Self::DeepSeekKimi | Self::OpenAIResponses | Self::Codex
+        )
     }
 
     fn is_openai_responses_family(self) -> bool {
@@ -210,6 +216,7 @@ impl RequestFormat {
         matches!(
             self,
             Self::OpenAI
+                | Self::DeepSeekKimi
                 | Self::OpenAIResponses
                 | Self::Codex
                 | Self::Gemini

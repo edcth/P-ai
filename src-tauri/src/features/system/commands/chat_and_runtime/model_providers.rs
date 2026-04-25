@@ -392,7 +392,7 @@ async fn refresh_models(
     }
 
     match input.request_format {
-        RequestFormat::OpenAI | RequestFormat::OpenAIResponses => {
+        RequestFormat::OpenAI | RequestFormat::DeepSeekKimi | RequestFormat::OpenAIResponses => {
             fetch_models_openai(&input).await
         }
         RequestFormat::Codex => Ok(vec![
@@ -427,4 +427,3 @@ async fn refresh_models(
         ),
     }
 }
-

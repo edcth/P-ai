@@ -1,5 +1,6 @@
 export type ApiRequestFormat =
   | "openai"
+  | "deepseek/kimi"
   | "openai_responses"
   | "codex"
   | "openai_tts"

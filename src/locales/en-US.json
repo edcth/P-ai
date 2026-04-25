@@ -109,6 +109,7 @@
       "noModelFound": "No matching models",
       "refreshModels": "Refresh Model List",
       "temperature": "Temperature",
+      "deepSeekKimiProtocolHint": "This model name contains DeepSeek/Kimi. Use the DeepSeek / Kimi protocol.",
       "useCustomTemperature": "Custom temperature",
       "contextWindow": "Context Window",
       "maxOutputTokens": "Max Output",

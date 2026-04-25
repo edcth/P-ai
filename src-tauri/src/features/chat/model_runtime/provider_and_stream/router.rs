@@ -151,7 +151,21 @@ async fn dispatch_openai_style_call(
     auto_compaction_context: Option<&ToolLoopAutoCompactionContext>,
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
-    if selected_api.request_format.is_openai_responses_family() {
+    if matches!(selected_api.request_format, RequestFormat::DeepSeekKimi) {
+        call_model_deepseek_kimi_with_tools(
+            api_config,
+            selected_api,
+            model_name,
+            prepared,
+            tool_assembly,
+            on_delta,
+            max_tool_iterations,
+            app_state,
+            auto_compaction_context,
+            chat_session_key,
+        )
+        .await
+    } else if selected_api.request_format.is_openai_responses_family() {
         call_model_openai_responses_with_tools(
             api_config,
             selected_api,
@@ -229,6 +243,21 @@ async fn execute_openai_style_request(
                 match selected_api.request_format {
                     RequestFormat::OpenAI => {
                         call_model_openai_non_stream_with_tools(
+                            api_config,
+                            selected_api,
+                            model_name,
+                            prepared,
+                            tool_assembly,
+                            on_delta,
+                            max_tool_iterations,
+                            app_state,
+                            auto_compaction_context,
+                            chat_session_key,
+                        )
+                        .await
+                    }
+                    RequestFormat::DeepSeekKimi => {
+                        call_model_deepseek_kimi_non_stream_with_tools(
                             api_config,
                             selected_api,
                             model_name,

@@ -732,7 +732,7 @@ async fn run_genai_tool_loop(
     let mut options = genai::chat::ChatOptions::default()
         .with_capture_usage(true)
         .with_capture_content(true)
-        .with_capture_reasoning_content(false)
+        .with_capture_reasoning_content(include_reasoning_before_tool_calls)
         .with_capture_tool_calls(true)
         .with_extra_headers(provider_genai_headers(&api_config));
     if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
@@ -907,12 +907,8 @@ async fn run_genai_tool_loop(
             genai::chat::MessageContent::from_parts(assistant_parts),
         );
         if include_reasoning_before_tool_calls {
-            let reasoning_for_history = turn_reasoning.trim();
-            if !reasoning_for_history.is_empty() {
-                assistant_message = assistant_message.with_reasoning_content(Some(
-                    reasoning_for_history.to_string(),
-                ));
-            }
+            assistant_message =
+                assistant_message.with_reasoning_content(Some(turn_reasoning.trim().to_string()));
         }
         messages.push(assistant_message);
 
@@ -1256,7 +1252,7 @@ async fn run_genai_tool_loop_non_stream(
     let mut options = genai::chat::ChatOptions::default()
         .with_capture_usage(true)
         .with_capture_content(true)
-        .with_capture_reasoning_content(false)
+        .with_capture_reasoning_content(include_reasoning_before_tool_calls)
         .with_capture_tool_calls(true)
         .with_extra_headers(provider_genai_headers(&api_config));
     if let Some(reasoning_effort) = provider_genai_reasoning_effort(&api_config) {
@@ -1351,12 +1347,8 @@ async fn run_genai_tool_loop_non_stream(
             genai::chat::MessageContent::from_parts(assistant_parts),
         );
         if include_reasoning_before_tool_calls {
-            let reasoning_for_history = turn_reasoning.trim();
-            if !reasoning_for_history.is_empty() {
-                assistant_message = assistant_message.with_reasoning_content(Some(
-                    reasoning_for_history.to_string(),
-                ));
-            }
+            assistant_message =
+                assistant_message.with_reasoning_content(Some(turn_reasoning.trim().to_string()));
         }
         messages.push(assistant_message);
 
