@@ -1139,11 +1139,17 @@ async fn stop_chat_message(
         &completed_tool_history,
     )?;
     clear_inflight_completed_tool_history(state.inner(), &chat_key)?;
-    Ok(build_stop_result(
+    let result = build_stop_result(
         persist_result.persisted,
-        persist_result.conversation_id,
+        persist_result.conversation_id.clone(),
         persist_result.assistant_message,
-    ))
+    );
+    if result.persisted {
+        if let Some(conversation_id) = result.conversation_id.as_deref() {
+            emit_stop_chat_round_completed_event(state.inner(), conversation_id, &result);
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]

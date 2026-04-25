@@ -1405,6 +1405,23 @@ async fn process_conversation_batch(
                     }
                 }
                 Err(err) => {
+                    if err == CHAT_ABORTED_BY_USER_ERROR {
+                        complete_pending_chat_events_with_error(state, &event_ids, &err)?;
+                        if let Err(finalize_err) = remote_im_finalize_round_completion(
+                            state,
+                            &activated_remote_im_sources,
+                            None,
+                            None,
+                            None,
+                            &history_flush_time,
+                        ) {
+                            runtime_log_warn(format!(
+                                "[聊天调度] 远程联系人轮次收尾失败（停止分支），conversation_id={}，error={}",
+                                conversation_id, finalize_err
+                            ));
+                        }
+                        return Ok(());
+                    }
                     emit_round_failed_event(state, conversation_id, &err);
                     complete_pending_chat_events_with_error(state, &event_ids, &err)?;
                     if let Err(finalize_err) = remote_im_finalize_round_completion(
@@ -1749,6 +1766,39 @@ fn emit_round_completed_event(state: &AppState, conversation_id: &str, result: &
         Ok(_) => {}
         Err(err) => eprintln!(
             "[聊天推送] emit round_completed 失败: conversation_id={}, error={}",
+            conversation_id, err
+        ),
+    }
+}
+
+fn emit_stop_chat_round_completed_event(
+    state: &AppState,
+    conversation_id: &str,
+    result: &StopChatResult,
+) {
+    let app_handle = match state.app_handle.lock() {
+        Ok(guard) => guard.as_ref().cloned(),
+        Err(_) => None,
+    };
+    let Some(app_handle) = app_handle else {
+        eprintln!(
+            "[聊天推送] emit stop round_completed 失败: app_handle unavailable, conversation_id={}",
+            conversation_id
+        );
+        return;
+    };
+    let payload = serde_json::json!({
+        "conversationId": conversation_id,
+        "assistantText": result.assistant_text,
+        "reasoningStandard": result.reasoning_standard,
+        "reasoningInline": result.reasoning_inline,
+        "archivedBeforeSend": false,
+        "assistantMessage": result.assistant_message,
+    });
+    match app_handle.emit(CHAT_ROUND_COMPLETED_EVENT, payload) {
+        Ok(_) => {}
+        Err(err) => eprintln!(
+            "[聊天推送] emit stop round_completed 失败: conversation_id={}, error={}",
             conversation_id, err
         ),
     }

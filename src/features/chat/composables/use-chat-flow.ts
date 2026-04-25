@@ -212,6 +212,15 @@ export function useChatFlow(options: UseChatFlowOptions) {
     round = next;
     frontendRoundPhase.value = frontendPhase ?? next.phase;
   }
+
+  function isChatAbortedByUser(error: unknown): boolean {
+    const normalized = String(
+      typeof error === "string"
+        ? error
+        : (error as { message?: unknown } | null)?.message ?? error ?? "",
+    ).trim();
+    return normalized === "CHAT_ABORTED_BY_USER";
+  }
   const reasoningStartedAtMs = ref(0);
   let pendingUserDraftId = "";
 
@@ -1290,6 +1299,14 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
   async function handleRoundFailed(gen: number, error: unknown) {
     sendStartedAtMsByGen.delete(gen);
+    if (isChatAbortedByUser(error)) {
+      if ((round.phase === "streaming" || round.phase === "queued") && round.gen === gen) {
+        setRound({ phase: "idle" });
+        options.chatting.value = false;
+        reasoningStartedAtMs.value = 0;
+      }
+      return;
+    }
     if (round.phase === "queued" && round.gen === gen) {
       await failQueuedRoundWithoutDraft(gen, error);
       return;
@@ -1597,7 +1614,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
       return;
     }
     if (round.phase !== "streaming") {
-      resetDisplayState();
       options.chatting.value = false;
       reasoningStartedAtMs.value = 0;
       await options.onReloadMessages();
@@ -1829,36 +1845,20 @@ export function useChatFlow(options: UseChatFlowOptions) {
         });
       }
     } catch (error) {
-      console.error("[聊天] 聊天流程请求失败", {
-        action: "sendChat", apiConfigId: sendSession.apiConfigId, agentId: sendSession.agentId,
-        gen, message: String((error as { message?: string })?.message ?? error ?? ""),
-      });
-
-      const shouldPreserveVisibleStreamingDraft =
-        round.phase === "streaming"
-        && round.gen === gen
-        && hasAssistantDraftInMessages()
-        && (
-          !!String(options.latestAssistantText.value || "").trim()
-          || !!String(options.latestReasoningStandardText.value || "").trim()
-          || !!String(options.latestReasoningInlineText.value || "").trim()
-          || !!String(options.toolStatusText.value || "").trim()
-          || (options.streamToolCalls?.value.length || 0) > 0
-        );
-
-      if (shouldPreserveVisibleStreamingDraft) {
-        options.chatErrorText.value = options.formatRequestFailed(error);
-        if (!options.toolStatusText.value) {
-          options.toolStatusState.value = "failed";
-          options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallFailed");
-        }
-        syncCurrentDisplayStateToConversationStreamCache(options.getConversationId ? options.getConversationId() : "");
+      if (isChatAbortedByUser(error)) {
         sendStartedAtMsByGen.delete(gen);
-        setRound({ phase: "idle" });
+        options.chatErrorText.value = "";
+        if ((round.phase === "streaming" || round.phase === "queued") && round.gen === gen) {
+          setRound({ phase: "idle" });
+        }
         options.chatting.value = false;
         reasoningStartedAtMs.value = 0;
         return;
       }
+      console.error("[聊天] 聊天流程请求失败", {
+        action: "sendChat", apiConfigId: sendSession.apiConfigId, agentId: sendSession.agentId,
+        gen, message: String((error as { message?: string })?.message ?? error ?? ""),
+      });
 
       if (round.phase === "idle" || round.gen !== gen) {
         if (pendingUserDraftId === `${DRAFT_USER_ID_PREFIX}${gen}`) {
@@ -1918,9 +1918,16 @@ export function useChatFlow(options: UseChatFlowOptions) {
     if (!options.chatting.value && round.phase !== "queued") return;
     const stopSession = options.getSession();
     const cid = options.getConversationId ? options.getConversationId() : "";
-    const partialAssistantText = options.latestAssistantText.value;
-    const partialReasoningStandard = options.latestReasoningStandardText.value;
-    const partialReasoningInline = options.latestReasoningInlineText.value;
+    const activeDraftId = round.phase === "streaming" ? round.draftId : "";
+    const activeDraft = activeDraftId
+      ? options.allMessages.value.find((message) => String(message?.id || "") === activeDraftId)
+      : undefined;
+    const activeDraftMeta = ((activeDraft?.providerMeta || {}) as Record<string, unknown>);
+    const partialAssistantText = options.latestAssistantText.value || readMessagePlainText(activeDraft);
+    const partialReasoningStandard =
+      options.latestReasoningStandardText.value || String(activeDraftMeta.reasoningStandard || "");
+    const partialReasoningInline =
+      options.latestReasoningInlineText.value || String(activeDraftMeta.reasoningInline || "");
 
     // queued 阶段：尚未进入流式，直接本地中断，不请求后端 stop。
     if (round.phase === "queued") {
@@ -1960,30 +1967,12 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
     if (stopSession && options.invokeStopChatMessage) {
       try {
-        const stopResult = await options.invokeStopChatMessage({
+        await options.invokeStopChatMessage({
           session: cid ? { ...stopSession, conversationId: cid } : stopSession,
           partialAssistantText,
           partialReasoningStandard,
           partialReasoningInline,
         });
-        const activeGen = round.phase === "streaming" ? round.gen : 0;
-        if (activeGen > 0) {
-          await handleRoundCompleted(activeGen, {
-            assistantText: String(stopResult?.assistantText || partialAssistantText),
-            reasoningStandard:
-              typeof stopResult?.reasoningStandard === "string"
-                ? stopResult.reasoningStandard
-                : partialReasoningStandard,
-            reasoningInline:
-              typeof stopResult?.reasoningInline === "string"
-                ? stopResult.reasoningInline
-                : partialReasoningInline,
-            assistantMessage: stopResult?.assistantMessage,
-          });
-        }
-        // stop 成功后也要刷新一次历史，确保本地草稿态与后端持久化结果一致。
-        // 对应测试期望：history_flushed 一次 + stop 成功后二次 reload。
-        await options.onReloadMessages();
         return;
       } catch (error) {
         const et = error instanceof Error
