@@ -747,6 +747,7 @@ const CHAT_WINDOW_MIC_PREWARM_DEBOUNCE_MS = 260;
 const lastSavedConfigJson = ref("");
 const lastSavedPersonasJson = ref("");
 const PERF_DEBUG = import.meta.env.DEV;
+const CHAT_STREAM_DEBUG = false;
 const { perfNow, perfLog, setStatus, setStatusError, localeOptions, applyUiLanguage } = useAppCore({
   t: tr,
   config,
@@ -3826,10 +3827,12 @@ onMounted(() => {
       });
     void listen<unknown>("easy-call:assistant-delta", (event) => {
       const conversationId = readConversationIdFromPayload(event.payload);
-      console.info("[聊天流式重绑][前端] 收到助手增量普通事件", {
-        conversationId,
-        currentConversationId: String(currentChatConversationId.value || "").trim(),
-      });
+      if (CHAT_STREAM_DEBUG) {
+        console.debug("[聊天流式重绑][前端] 收到助手增量普通事件", {
+          conversationId,
+          currentConversationId: String(currentChatConversationId.value || "").trim(),
+        });
+      }
       void chatFlow.handleExternalAssistantDelta(event.payload);
     })
       .then((unlisten) => {
@@ -3840,11 +3843,13 @@ onMounted(() => {
       });
     void listen<unknown>("easy-call:stream-rebind-required", (event) => {
       const conversationId = readConversationIdFromPayload(event.payload);
-      console.info("[聊天流式重绑][前端] 收到重绑普通事件", {
-        conversationId,
-        currentConversationId: String(currentChatConversationId.value || "").trim(),
-        payload: event.payload,
-      });
+      if (CHAT_STREAM_DEBUG) {
+        console.debug("[聊天流式重绑][前端] 收到重绑普通事件", {
+          conversationId,
+          currentConversationId: String(currentChatConversationId.value || "").trim(),
+          payload: event.payload,
+        });
+      }
       void chatFlow.handleExternalStreamRebindRequired(event.payload).catch((error) => {
         console.error("[聊天追踪][流重绑] 处理失败", {
           conversationId,

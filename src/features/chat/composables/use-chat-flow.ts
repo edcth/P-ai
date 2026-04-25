@@ -2,6 +2,8 @@ import { Channel } from "@tauri-apps/api/core";
 import { ref, type Ref } from "vue";
 import type { ChatMentionTarget, ChatMessage, PromptCommandPreset } from "../../../types/app";
 
+const CHAT_STREAM_DEBUG = false;
+
 // ---------------------------------------------------------------------------
 // 1. 类型声明
 // ---------------------------------------------------------------------------
@@ -1496,31 +1498,37 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const requestId = String(raw?.requestId || "").trim();
     const phaseId = String(raw?.phaseId || "").trim();
     const reason = String(raw?.reason || "").trim();
-    console.info("[聊天] 流式通道重绑 开始", {
-      conversationId: currentConversationId,
-      requestId,
-      phaseId,
-      reason,
-      roundPhase: round.phase,
-    });
-    try {
-      await bindActiveConversationStream(currentConversationId, true);
-      if (round.phase !== "streaming") {
-        console.info("[聊天流式重绑][前端] 重绑事件触发恢复草稿", {
-          conversationId: currentConversationId,
-          requestId,
-          phaseId,
-          reason,
-          roundPhase: round.phase,
-        });
-        ensureForegroundStreamingRound();
-      }
-      console.info("[聊天] 流式通道重绑 完成", {
+    if (CHAT_STREAM_DEBUG) {
+      console.debug("[聊天] 流式通道重绑 开始", {
         conversationId: currentConversationId,
         requestId,
         phaseId,
         reason,
+        roundPhase: round.phase,
       });
+    }
+    try {
+      await bindActiveConversationStream(currentConversationId, true);
+      if (round.phase !== "streaming") {
+        if (CHAT_STREAM_DEBUG) {
+          console.debug("[聊天流式重绑][前端] 重绑事件触发恢复草稿", {
+            conversationId: currentConversationId,
+            requestId,
+            phaseId,
+            reason,
+            roundPhase: round.phase,
+          });
+        }
+        ensureForegroundStreamingRound();
+      }
+      if (CHAT_STREAM_DEBUG) {
+        console.debug("[聊天] 流式通道重绑 完成", {
+          conversationId: currentConversationId,
+          requestId,
+          phaseId,
+          reason,
+        });
+      }
     } catch (error) {
       console.error("[聊天] 流式通道重绑 失败", {
         conversationId: currentConversationId,
@@ -1676,11 +1684,13 @@ export function useChatFlow(options: UseChatFlowOptions) {
       shouldProjectFromAppEvent
       && assistantEventHasVisibleProgress(parsed);
     if (shouldResumeForegroundRound) {
-      console.info("[聊天流式重绑][前端] 普通事件触发恢复前景流式", {
-        currentConversationId,
-        payloadConversationId,
-        kind: parsed.kind || "delta",
-      });
+      if (CHAT_STREAM_DEBUG) {
+        console.debug("[聊天流式重绑][前端] 普通事件触发恢复前景流式", {
+          currentConversationId,
+          payloadConversationId,
+          kind: parsed.kind || "delta",
+        });
+      }
     }
     if (!shouldProjectFromAppEvent) {
       return;

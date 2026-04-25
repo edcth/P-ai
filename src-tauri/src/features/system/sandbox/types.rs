@@ -13,6 +13,8 @@ struct SandboxExecutionResult {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     duration_ms: u64,
+    #[allow(dead_code)]
     shell_kind: String,
+    #[allow(dead_code)]
     shell_path: String,
 }

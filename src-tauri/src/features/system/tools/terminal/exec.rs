@@ -681,9 +681,7 @@ async fn builtin_shell_exec(
         .collect::<Vec<_>>();
     let session_root = terminal_session_root_canonical(state, &normalized_session)?;
     let session_root_text = terminal_path_for_user(&session_root);
-    let workspace_path_text = configured_workspace_root_path(state)
-        .map(|path| terminal_path_for_user(&path))
-        .unwrap_or_else(|_| terminal_path_for_user(&state.llm_workspace_path));
+    let workspace_path_text = session_root_text.clone();
     let cwd = match resolve_terminal_cwd(state, &normalized_session, None) {
         Ok(path) => path,
         Err(err) if err.contains("Call shell_switch_workspace first.") => {
@@ -896,7 +894,7 @@ async fn builtin_shell_exec(
 
     let mut smart_review_unavailable_notice = None::<String>;
     let mut smart_review_handled = false;
-    let mut smart_review_history = None::<Value>;
+    let mut smart_review_history: Option<Value>;
     let effective_review_access = if is_write_command {
         effective_write_access.as_str()
     } else {
@@ -1214,15 +1212,6 @@ async fn builtin_shell_exec(
         Err(err) if terminal_is_timeout_error(&err) => {
             return Ok(serde_json::json!({
                 "ok": false,
-                "shellKind": runtime_shell.kind,
-                "shellPath": runtime_shell.path,
-                "toolReview": smart_review_history,
-                "sessionId": normalized_session,
-                "rootPath": session_root_text,
-                "workspacePath": workspace_path_text,
-                "allowedProjectRoots": allowed_project_roots,
-                "cwd": terminal_path_for_user(&cwd),
-                "command": cmd,
                 "exitCode": -1,
                 "stdout": "",
                 "stderr": err,
@@ -1240,21 +1229,11 @@ async fn builtin_shell_exec(
 
     Ok(serde_json::json!({
         "ok": execution.ok,
-        "shellKind": execution.shell_kind,
-        "shellPath": execution.shell_path,
-        "toolReview": smart_review_history,
-        "sessionId": normalized_session,
-        "rootPath": session_root_text,
-        "workspacePath": workspace_path_text,
-        "allowedProjectRoots": allowed_project_roots,
-        "cwd": terminal_path_for_user(&cwd),
-        "command": cmd,
         "exitCode": execution.exit_code,
         "stdout": stdout,
         "stderr": stderr,
         "durationMs": execution.duration_ms,
         "timedOut": false,
-        "sessionManaged": terminal_live_session_supported(&runtime_shell),
         "truncated": stdout_truncated || stderr_truncated,
         "stdoutTruncated": stdout_truncated,
         "stderrTruncated": stderr_truncated
