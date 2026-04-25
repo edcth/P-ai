@@ -28,6 +28,10 @@ type HistoryFlushedPayload = {
   compactionApplied?: boolean;
 };
 
+type RoundStartedPayload = {
+  conversationId: string;
+};
+
 type RoundCompletedPayload = {
   conversationId: string;
   assistantText: string;
@@ -122,12 +126,14 @@ const DRAFT_USER_ID_PREFIX = "__draft_user__:";
 // 3. 状态机
 //
 //   idle ──sendChat()──→ queued
-//   queued ──history_flushed──→ streaming（清屏 + reload + 插 draft）
+//   queued ──history_flushed──→ queued（只合并正式历史）
+//   queued ──round_started──→ waiting
 //   queued ──promise settled(无 history_flushed)──→ idle
 //   streaming ──round_completed──→ idle
 //   streaming ──stopChat()──→ idle
 //
-//   核心不变量：history_flushed 之后只允许更新 draft 气泡文字，
+//   核心不变量：history_flushed 只表达“历史已落库”，不再表达“助理已启动”；
+//   round_started 才表达“助理轮次开始”。history_flushed 之后只允许更新 draft 气泡文字，
 //   不对 allMessages 做任何其他读写。
 // ---------------------------------------------------------------------------
 
@@ -213,6 +219,21 @@ export function useChatFlow(options: UseChatFlowOptions) {
     frontendRoundPhase.value = frontendPhase ?? next.phase;
   }
 
+  function readRoundStartedPayload(raw: string | undefined): RoundStartedPayload | null {
+    const text = String(raw || "").trim();
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      return {
+        conversationId: String(parsed.conversationId || "").trim(),
+      };
+    } catch {
+      return {
+        conversationId: text,
+      };
+    }
+  }
+
   function isChatAbortedByUser(error: unknown): boolean {
     const normalized = String(
       typeof error === "string"
@@ -243,6 +264,21 @@ export function useChatFlow(options: UseChatFlowOptions) {
       streamToolCallCount: 0,
       streamLastToolName: "",
     };
+  }
+
+  function stringifyExternalEventPayload(payload: unknown, eventName: string): string {
+    if (typeof payload === "string") return payload;
+    if (payload && typeof payload === "object") {
+      try {
+        return JSON.stringify(payload);
+      } catch (error) {
+        console.warn("[聊天事件] 外部事件 payload 序列化失败", {
+          eventName,
+          error,
+        });
+      }
+    }
+    return "";
   }
 
   function readConversationStreamCache(conversationId?: string | null): ConversationStreamCache | null {
@@ -1124,8 +1160,8 @@ export function useChatFlow(options: UseChatFlowOptions) {
 
   /**
  * history_flushed：唯一做 allMessages 大规模合并的地方。
- * 1. 移除旧 draft   2. reload / onHistoryFlushed   3. 保持 queued，等待真正流式进展后再插 draft
- * 之后不再碰 allMessages（除了 updateDraftText）。
+ * 只表达“消息已落入正式历史”，不再推进助理轮次状态。
+ * 助理是否已启动由 round_started 表达。
    */
   async function handleHistoryFlushed(
     gen: number,
@@ -1135,14 +1171,14 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const flushed = readHistoryFlushedPayload(parsed.message);
     const startedAtMs = sendStartedAtMsByGen.get(gen) || 0;
     const elapsedMs = startedAtMs > 0 ? Math.max(0, Date.now() - startedAtMs) : -1;
-    const shouldActivate = source === "sendChat" || !!flushed?.activateAssistant;
+    const wasQueuedForActivation = !!flushed?.activateAssistant;
     const shouldForceReset = !!flushed?.compactionApplied;
     console.warn("[聊天前端耗时] history_flushed 到达", {
       source,
       gen,
       elapsedMs,
       conversationId: String(flushed?.conversationId || "").trim(),
-      shouldActivate,
+      wasQueuedForActivation,
       shouldForceReset,
       messageCount: Math.max(0, Math.round(Number(flushed?.messageCount || 0))),
     });
@@ -1150,27 +1186,15 @@ export function useChatFlow(options: UseChatFlowOptions) {
       source,
       gen,
       sendChatActiveGen,
-      shouldActivate,
+      wasQueuedForActivation,
       shouldForceReset,
       payloadConversationId: String(flushed?.conversationId || "").trim(),
     });
-    // sendChat 活跃时，仅拦截“会激活助理”的 bound 批次，避免抢占当前轮次；
-    // 非激活批次只做历史追加，不应被阻塞。
-    if (source === "bound" && sendChatActiveGen > 0 && shouldActivate) {
-      console.info("[CHAT_TRACE][history_flushed] 跳过", {
-        source,
-        gen,
-        sendChatActiveGen,
-        shouldActivate,
-        shouldForceReset,
-      });
-      return;
-    }
     const replayMessages = Array.isArray(flushed?.messages) ? flushed!.messages : [];
     console.info("[CHAT_TRACE][history_flushed] 完成", {
       source,
       gen,
-      shouldActivate,
+      wasQueuedForActivation,
       shouldForceReset,
       payloadConversationId: String(flushed?.conversationId || "").trim(),
       replayCount: replayMessages.length,
@@ -1184,7 +1208,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
     const batchVisibleCount = Math.max(1, replayMessages.length, payloadMessageCount);
     activeHistoryMessageCount = batchVisibleCount;
     const shouldPreserveStreamingState =
-      shouldActivate && round.phase === "streaming" && round.gen === gen;
+      round.phase === "streaming" && round.gen === gen;
     const preservedStreamingState = shouldPreserveStreamingState ? {
       assistantText: options.latestAssistantText.value,
       reasoningStandard: options.latestReasoningStandardText.value,
@@ -1196,21 +1220,20 @@ export function useChatFlow(options: UseChatFlowOptions) {
       streamLastToolName,
     } : null;
     const shouldKeepStreamingDraft =
-      shouldActivate
-      && !shouldForceReset
+      !shouldForceReset
       && round.phase === "streaming"
       && hasAssistantDraftInMessages()
       && (
         options.toolStatusState.value === "running"
         || (options.streamToolCalls?.value.length || 0) > 0
       );
-    if (shouldActivate || shouldForceReset) {
-      // 激活助理或上下文整理改写消息序列时，先强制收口当前显示态。
+    if (shouldForceReset) {
+      // 上下文整理改写消息序列时，先强制收口当前显示态。
       if (!shouldKeepStreamingDraft) {
         const oldDraftId = round.phase === "streaming" ? round.draftId : "";
         resetDisplayState();
         if (oldDraftId) removeDraft(oldDraftId);
-        setRound(shouldActivate ? { phase: "queued", gen } : { phase: "idle" });
+        setRound({ phase: "idle" });
       }
       queuedStreamingState = preservedStreamingState;
     }
@@ -1220,7 +1243,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
       console.info("[CHAT_TRACE][history_flushed] apply_start", {
         source,
         gen,
-        shouldActivate,
+        wasQueuedForActivation,
         shouldForceReset,
         batchVisibleCount,
       });
@@ -1228,12 +1251,12 @@ export function useChatFlow(options: UseChatFlowOptions) {
         conversationId: String(flushed?.conversationId || "").trim(),
         messageCount: batchVisibleCount,
         pendingMessages: replayMessages,
-        activateAssistant: shouldActivate,
+        activateAssistant: wasQueuedForActivation,
       });
       console.info("[CHAT_TRACE][history_flushed] apply_done", {
         source,
         gen,
-        shouldActivate,
+        wasQueuedForActivation,
         shouldForceReset,
         batchVisibleCount,
       });
@@ -1241,11 +1264,14 @@ export function useChatFlow(options: UseChatFlowOptions) {
       await options.onReloadMessages();
     }
 
-    if (!shouldActivate) {
-      // await 期间可能有新的 sendChat/轮次启动，避免回写旧状态覆盖新轮次
+    if (!wasQueuedForActivation || shouldForceReset) {
+      // await 期间可能有新的 sendChat/轮次启动，避免回写旧状态覆盖新轮次。
+      // 对 sendChat 的激活批次，history_flushed 只完成历史合并，不收回 queued；等待 round_started。
       if (gen !== generation) return;
-      setRound({ phase: "idle" });
-      options.chatting.value = false;
+      if (!wasQueuedForActivation || shouldForceReset) {
+        setRound({ phase: "idle" });
+        options.chatting.value = false;
+      }
       console.info("[CHAT_TRACE][history_flushed] non_activate_finish", {
         source,
         gen,
@@ -1253,12 +1279,10 @@ export function useChatFlow(options: UseChatFlowOptions) {
       });
       return;
     }
+  }
 
-    // await 后校验：可能已被新 sendChat 抢占
+  async function markRoundStarted(gen: number) {
     if (round.phase !== "queued" || round.gen !== gen) return;
-
-    // queued 阶段不提前创建草稿，等待真正的思维链/工具/正文流式事件到达。
-    // 若终态已先到达，则直接收口，不再制造一闪而过的空草稿。
     if (pendingTerminalEvent && pendingTerminalEvent.gen === gen) {
       const pending = pendingTerminalEvent;
       pendingTerminalEvent = null;
@@ -1559,17 +1583,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
   }
 
   async function handleExternalHistoryFlushed(payload: unknown) {
-    const raw = (() => {
-      if (typeof payload === "string") return payload;
-      if (payload && typeof payload === "object") {
-        try {
-          return JSON.stringify(payload);
-        } catch {
-          return "";
-        }
-      }
-      return "";
-    })();
+    const raw = stringifyExternalEventPayload(payload, "history_flushed");
     const parsed = readHistoryFlushedPayload(raw);
     if (!parsed) return;
     const currentConversationId = String(options.getConversationId ? options.getConversationId() : "").trim();
@@ -1593,18 +1607,22 @@ export function useChatFlow(options: UseChatFlowOptions) {
     );
   }
 
+  async function handleExternalRoundStarted(payload: unknown) {
+    const raw = stringifyExternalEventPayload(payload, "round_started");
+    const parsed = readRoundStartedPayload(raw);
+    if (!parsed) return;
+    const currentConversationId = String(options.getConversationId ? options.getConversationId() : "").trim();
+    const payloadConversationId = String(parsed.conversationId || "").trim();
+    if (currentConversationId && payloadConversationId && currentConversationId !== payloadConversationId) {
+      return;
+    }
+    const gen = round.phase === "queued" ? round.gen : sendChatActiveGen;
+    if (!gen) return;
+    await markRoundStarted(gen);
+  }
+
   async function handleExternalRoundCompleted(payload: unknown) {
-    const raw = (() => {
-      if (typeof payload === "string") return payload;
-      if (payload && typeof payload === "object") {
-        try {
-          return JSON.stringify(payload);
-        } catch {
-          return "";
-        }
-      }
-      return "";
-    })();
+    const raw = stringifyExternalEventPayload(payload, "round_completed");
     const parsed = readRoundCompletedPayload(raw);
     if (!parsed) return;
     const currentConversationId = String(options.getConversationId ? options.getConversationId() : "").trim();
@@ -1628,17 +1646,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
   }
 
   async function handleExternalRoundFailed(payload: unknown) {
-    const raw = (() => {
-      if (typeof payload === "string") return payload;
-      if (payload && typeof payload === "object") {
-        try {
-          return JSON.stringify(payload);
-        } catch {
-          return "";
-        }
-      }
-      return "";
-    })();
+    const raw = stringifyExternalEventPayload(payload, "round_failed");
     const parsed = readRoundFailedPayload(raw);
     const currentConversationId = String(options.getConversationId ? options.getConversationId() : "").trim();
     const payloadConversationId = String(parsed?.conversationId || "").trim();
@@ -2010,6 +2018,7 @@ export function useChatFlow(options: UseChatFlowOptions) {
     bindActiveConversationStream,
     handleExternalStreamRebindRequired,
     handleExternalHistoryFlushed,
+    handleExternalRoundStarted,
     handleExternalRoundCompleted,
     handleExternalRoundFailed,
     handleExternalAssistantDelta,

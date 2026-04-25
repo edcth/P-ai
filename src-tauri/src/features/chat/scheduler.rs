@@ -138,6 +138,7 @@ struct ChatQueueSnapshotPush {
 
 const CHAT_QUEUE_SNAPSHOT_EVENT: &str = "easy-call:chat-queue-snapshot";
 const CHAT_HISTORY_FLUSHED_EVENT: &str = "easy-call:history-flushed";
+const CHAT_ROUND_STARTED_EVENT: &str = "easy-call:round-started";
 const CHAT_ROUND_COMPLETED_EVENT: &str = "easy-call:round-completed";
 const CHAT_ROUND_FAILED_EVENT: &str = "easy-call:round-failed";
 const CHAT_ASSISTANT_DELTA_EVENT: &str = "easy-call:assistant-delta";
@@ -1309,6 +1310,7 @@ async fn process_conversation_batch(
             // 同一批里可能有多个激活请求，但前台主助理轮次只能有一个。
             // 因此这里只保留最后一个激活请求作为实际流式绑定对象。
             let activation = activations.pop();
+            emit_round_started_event(state, conversation_id);
             match activate_main_assistant(
                 state,
                 &first_event.session_info,
@@ -1739,6 +1741,30 @@ fn emit_history_flushed_event(
                 conversation_id, event_ids, err
             );
         }
+    }
+}
+
+fn emit_round_started_event(state: &AppState, conversation_id: &str) {
+    let app_handle = match state.app_handle.lock() {
+        Ok(guard) => guard.as_ref().cloned(),
+        Err(_) => None,
+    };
+    let Some(app_handle) = app_handle else {
+        eprintln!(
+            "[聊天推送] emit round_started 失败: app_handle unavailable, conversation_id={}",
+            conversation_id
+        );
+        return;
+    };
+    let payload = serde_json::json!({
+        "conversationId": conversation_id,
+    });
+    match app_handle.emit(CHAT_ROUND_STARTED_EVENT, payload) {
+        Ok(_) => {}
+        Err(err) => eprintln!(
+            "[聊天推送] emit round_started 失败: conversation_id={}, error={}",
+            conversation_id, err
+        ),
     }
 }
 

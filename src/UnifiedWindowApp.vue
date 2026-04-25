@@ -592,6 +592,7 @@ const WEBVIEW_ZOOM_MIN = 0.8;
 const WEBVIEW_ZOOM_MAX = 2.0;
 const WEBVIEW_ZOOM_STEP = 0.1;
 let chatHistoryFlushedUnlisten: UnlistenFn | null = null;
+let chatRoundStartedUnlisten: UnlistenFn | null = null;
 let chatRoundCompletedUnlisten: UnlistenFn | null = null;
 let chatRoundFailedUnlisten: UnlistenFn | null = null;
 let chatAssistantDeltaUnlisten: UnlistenFn | null = null;
@@ -3805,6 +3806,17 @@ onMounted(() => {
       .catch((error) => {
         console.error("[聊天追踪][轮次完成] 监听器注册失败", error);
       });
+    void listen<unknown>("easy-call:round-started", (event) => {
+      const payloadConversationId = readConversationIdFromPayload(event.payload);
+      if (!matchesForegroundConversation(payloadConversationId)) return;
+      void chatFlow.handleExternalRoundStarted(event.payload);
+    })
+      .then((unlisten) => {
+        chatRoundStartedUnlisten = unlisten;
+      })
+      .catch((error) => {
+        console.error("[聊天追踪][轮次开始] 监听器注册失败", error);
+      });
     void listen<unknown>("easy-call:round-failed", (event) => {
       const payloadConversationId = readConversationIdFromPayload(event.payload);
       const currentConversationId = String(currentChatConversationId.value || "").trim();
@@ -3919,6 +3931,10 @@ onBeforeUnmount(() => {
   if (chatRoundCompletedUnlisten) {
     chatRoundCompletedUnlisten();
     chatRoundCompletedUnlisten = null;
+  }
+  if (chatRoundStartedUnlisten) {
+    chatRoundStartedUnlisten();
+    chatRoundStartedUnlisten = null;
   }
   if (chatRoundFailedUnlisten) {
     chatRoundFailedUnlisten();

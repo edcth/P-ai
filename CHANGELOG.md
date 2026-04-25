@@ -2,6 +2,8 @@
 
 ## 进行中
 
+- 优化（chat-round-started-event-boundary）：聊天流式事件新增 `round_started` 作为助理轮次启动信号，`history_flushed` 收口为只表达“消息已落入正式历史”，前端不再依赖历史刷写事件推进等待态；同时抽取外部聊天事件 payload 序列化辅助函数并补充失败日志，避免 JSON 序列化异常被静默吞掉
+
 ## 发布：v0.9.48
 
 - 修复（manual-compaction-should-not-switch-foreground-conversation）：手动压缩沿用对话维护链路时，不再误消费归档语义下的 `activeConversationId` 切换前台会话；压缩完成后的消息刷新固定回到发起压缩的原会话，避免手动压缩后被错误跳回主会话
