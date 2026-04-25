@@ -720,12 +720,6 @@ async fn run_genai_tool_loop(
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
     let api_config = resolve_request_api_config(api_config).await?;
-    let _provider_serial_guard = maybe_acquire_provider_serial_guard(
-        tool_abort_state,
-        &api_config,
-        model_name,
-    )
-    .await?;
     let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
@@ -780,107 +774,131 @@ async fn run_genai_tool_loop(
             .await?;
         }
 
-        let mut turn_text = String::new();
-        let mut turn_reasoning = String::new();
-        let mut turn_tool_calls = Vec::<genai::chat::ToolCall>::new();
         let mut stop_after_remote_im_done_in_turn = false;
+        let round_output = async {
+            let _provider_serial_guard = maybe_acquire_provider_serial_guard(
+                tool_abort_state,
+                &api_config,
+                model_name,
+            )
+            .await?;
+            let mut turn_text = String::new();
+            let mut turn_reasoning = String::new();
+            let mut turn_tool_calls = Vec::<genai::chat::ToolCall>::new();
+            let mut round_trusted_input_tokens = None;
 
-        let mut stream = {
-            let mut request = genai::chat::ChatRequest::from_messages(messages.clone());
-            if let Some(system) = system_prompt
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                request = request.with_system(system.to_string());
-            }
-            if !genai_tools.is_empty() {
-                request = request.with_tools(genai_tools.clone());
-            }
-            client
-                .exec_chat_stream(service_target.clone(), request, Some(&options))
-                .await
-                .map_err(|err| format!("GenAI 流式请求构建失败：{err}"))?
-                .stream
-        };
+            let mut stream = {
+                let mut request = genai::chat::ChatRequest::from_messages(messages.clone());
+                if let Some(system) = system_prompt
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    request = request.with_system(system.to_string());
+                }
+                if !genai_tools.is_empty() {
+                    request = request.with_tools(genai_tools.clone());
+                }
+                client
+                    .exec_chat_stream(service_target.clone(), request, Some(&options))
+                    .await
+                    .map_err(|err| format!("GenAI 流式请求构建失败：{err}"))?
+                    .stream
+            };
 
-        while let Some(chunk) = stream.next().await {
-            match chunk {
-                Ok(genai::chat::ChatStreamEvent::Start) => {}
-                Ok(genai::chat::ChatStreamEvent::Chunk(text)) => {
-                    if emit_text_boundary_before_next_chunk && !text.content.is_empty() {
-                        send_text_delta_event(on_delta, "\n");
-                        emit_text_boundary_before_next_chunk = false;
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(genai::chat::ChatStreamEvent::Start) => {}
+                    Ok(genai::chat::ChatStreamEvent::Chunk(text)) => {
+                        if emit_text_boundary_before_next_chunk && !text.content.is_empty() {
+                            send_text_delta_event(on_delta, "\n");
+                            emit_text_boundary_before_next_chunk = false;
+                        }
+                        send_text_delta_event(on_delta, &text.content);
+                        turn_text.push_str(&text.content);
                     }
-                    send_text_delta_event(on_delta, &text.content);
-                    turn_text.push_str(&text.content);
-                }
-                Ok(genai::chat::ChatStreamEvent::ReasoningChunk(reasoning)) => {
-                    if !reasoning.content.is_empty() {
-                        turn_reasoning.push_str(&reasoning.content);
-                        full_reasoning_standard.push_str(&reasoning.content);
-                        let _ = on_delta.send(AssistantDeltaEvent {
-                            delta: reasoning.content,
-                            kind: Some("reasoning_standard".to_string()),
-                            request_id: None,
-                            phase_id: None,
-                            reason: None,
-                            tool_name: None,
-                            tool_status: None,
-                            tool_args: None,
-                            message: None,
-                        });
+                    Ok(genai::chat::ChatStreamEvent::ReasoningChunk(reasoning)) => {
+                        if !reasoning.content.is_empty() {
+                            turn_reasoning.push_str(&reasoning.content);
+                            full_reasoning_standard.push_str(&reasoning.content);
+                            let _ = on_delta.send(AssistantDeltaEvent {
+                                delta: reasoning.content,
+                                kind: Some("reasoning_standard".to_string()),
+                                request_id: None,
+                                phase_id: None,
+                                reason: None,
+                                tool_name: None,
+                                tool_status: None,
+                                tool_args: None,
+                                message: None,
+                            });
+                        }
                     }
-                }
-                Ok(genai::chat::ChatStreamEvent::ThoughtSignatureChunk(_)) => {}
-                Ok(genai::chat::ChatStreamEvent::ToolCallChunk(_)) => {}
-                Ok(genai::chat::ChatStreamEvent::End(end)) => {
-                    trusted_input_tokens = end
-                        .captured_usage
-                        .as_ref()
-                        .and_then(|usage| usage.prompt_tokens)
-                        .and_then(|value| u64::try_from(value).ok())
-                        .filter(|value| *value > 0);
-                    if turn_text.is_empty() {
-                        if let Some(captured_texts) = end
-                            .captured_content
+                    Ok(genai::chat::ChatStreamEvent::ThoughtSignatureChunk(_)) => {}
+                    Ok(genai::chat::ChatStreamEvent::ToolCallChunk(_)) => {}
+                    Ok(genai::chat::ChatStreamEvent::End(end)) => {
+                        round_trusted_input_tokens = end
+                            .captured_usage
                             .as_ref()
-                            .map(|content| content.texts())
-                            .filter(|texts| !texts.is_empty())
-                        {
-                            let joined = captured_texts.join("\n");
-                            turn_text = joined.clone();
-                            if emit_text_boundary_before_next_chunk && !joined.is_empty() {
-                                send_text_delta_event(on_delta, "\n");
-                                emit_text_boundary_before_next_chunk = false;
-                            }
-                            send_text_delta_event(on_delta, &joined);
-                        }
-                    }
-                    if turn_reasoning.is_empty() {
-                        if let Some(captured_reasoning) = end
-                            .captured_reasoning_content
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                        {
-                            turn_reasoning = captured_reasoning.to_string();
-                            if full_reasoning_standard.is_empty() {
-                                full_reasoning_standard = captured_reasoning.to_string();
+                            .and_then(|usage| usage.prompt_tokens)
+                            .and_then(|value| u64::try_from(value).ok())
+                            .filter(|value| *value > 0);
+                        if turn_text.is_empty() {
+                            if let Some(captured_texts) = end
+                                .captured_content
+                                .as_ref()
+                                .map(|content| content.texts())
+                                .filter(|texts| !texts.is_empty())
+                            {
+                                let joined = captured_texts.join("\n");
+                                turn_text = joined.clone();
+                                if emit_text_boundary_before_next_chunk && !joined.is_empty() {
+                                    send_text_delta_event(on_delta, "\n");
+                                    emit_text_boundary_before_next_chunk = false;
+                                }
+                                send_text_delta_event(on_delta, &joined);
                             }
                         }
+                        if turn_reasoning.is_empty() {
+                            if let Some(captured_reasoning) = end
+                                .captured_reasoning_content
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                            {
+                                turn_reasoning = captured_reasoning.to_string();
+                                if full_reasoning_standard.is_empty() {
+                                    full_reasoning_standard = captured_reasoning.to_string();
+                                }
+                            }
+                        }
+                        if let Some(captured_content) = end.captured_content.as_ref() {
+                            turn_tool_calls = captured_content
+                                .tool_calls()
+                                .into_iter()
+                                .cloned()
+                                .collect::<Vec<_>>();
+                        }
                     }
-                    if let Some(captured_content) = end.captured_content.as_ref() {
-                        turn_tool_calls = captured_content
-                            .tool_calls()
-                            .into_iter()
-                            .cloned()
-                            .collect::<Vec<_>>();
-                    }
+                    Err(err) => return Err(format!("GenAI 流式处理失败：{err}")),
                 }
-                Err(err) => return Err(format!("GenAI 流式处理失败：{err}")),
             }
+
+            Ok::<GenaiToolLoopRoundOutput, String>(GenaiToolLoopRoundOutput {
+                turn_text,
+                turn_reasoning,
+                turn_tool_calls,
+                trusted_input_tokens: round_trusted_input_tokens,
+            })
         }
+        .await?;
+        let GenaiToolLoopRoundOutput {
+            turn_text,
+            turn_reasoning,
+            turn_tool_calls,
+            trusted_input_tokens: round_trusted_input_tokens,
+        } = round_output;
+        trusted_input_tokens = round_trusted_input_tokens;
 
         if let Some(context) = auto_compaction_context {
             conversation_prompt_service().refresh_shared_trusted_prompt_usage(
@@ -1254,12 +1272,6 @@ async fn run_genai_tool_loop_non_stream(
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
     let api_config = resolve_request_api_config(api_config).await?;
-    let _provider_serial_guard = maybe_acquire_provider_serial_guard(
-        tool_abort_state,
-        &api_config,
-        model_name,
-    )
-    .await?;
     let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let service_target = genai::ServiceTarget {
@@ -1326,6 +1338,12 @@ async fn run_genai_tool_loop_non_stream(
             if !genai_tools.is_empty() {
                 request = request.with_tools(genai_tools.clone());
             }
+            let _provider_serial_guard = maybe_acquire_provider_serial_guard(
+                tool_abort_state,
+                &api_config,
+                model_name,
+            )
+            .await?;
             execute_genai_non_stream_round(
                 &client,
                 &service_target,

@@ -985,8 +985,9 @@ async fn builtin_shell_exec(
                         "[工具审查] 失败 session={} command={} err={:?}",
                         normalized_session, cmd, err
                     ));
-                    smart_review_unavailable_notice =
-                        Some("当前审查模型不可用，已降级为本地规则审查。".to_string());
+                    smart_review_unavailable_notice = Some(
+                        "当前审查模型不可用，已跳过自动审查，请直接确认是否允许执行。".to_string()
+                    );
                     None
                 }
             }
