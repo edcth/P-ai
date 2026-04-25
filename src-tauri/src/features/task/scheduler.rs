@@ -195,8 +195,63 @@ fn task_resolve_dispatch_session(
     }))
 }
 
-fn task_conversation_is_busy(state: &AppState, conversation_id: &str) -> Result<bool, String> {
-    Ok(get_conversation_runtime_state(state, conversation_id)? != MainSessionState::Idle)
+fn task_dispatch_block_reason(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<Option<&'static str>, String> {
+    let _dequeue_guard = state
+        .dequeue_lock
+        .lock()
+        .map_err(|_| "Failed to lock dequeue lock".to_string())?;
+    let claims = lock_conversation_processing_claims(state)?;
+    let slots = lock_conversation_runtime_slots(state)?;
+    let running_count = claims.len();
+    let slot = slots.get(conversation_id);
+    if slot.map(|item| item.state != MainSessionState::Idle).unwrap_or(false) {
+        return Ok(Some("conversation_busy"));
+    }
+    if slot
+        .map(|item| !item.pending_queue.is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(Some("conversation_queue_not_empty"));
+    }
+    if conversation_running_slot_count(&claims, conversation_id) > 0 {
+        return Ok(Some("conversation_busy"));
+    }
+    if running_count >= CHAT_CONCURRENCY_LIMIT {
+        return Ok(Some("chat_concurrency_limit"));
+    }
+    Ok(None)
+}
+
+fn task_try_ingress_chat_event_direct(
+    state: &AppState,
+    event: ChatPendingEvent,
+) -> Result<Result<ChatPendingEvent, &'static str>, String> {
+    let _dequeue_guard = state
+        .dequeue_lock
+        .lock()
+        .map_err(|_| "Failed to lock dequeue lock".to_string())?;
+    let mut claims = lock_conversation_processing_claims(state)?;
+    let mut slots = lock_conversation_runtime_slots(state)?;
+    let running_count = claims.len();
+    let slot = conversation_slot_mut(&mut slots, &event.conversation_id);
+    if slot.state != MainSessionState::Idle {
+        return Ok(Err("conversation_busy"));
+    }
+    if !slot.pending_queue.is_empty() {
+        return Ok(Err("conversation_queue_not_empty"));
+    }
+    if conversation_running_slot_count(&claims, &event.conversation_id) > 0 {
+        return Ok(Err("conversation_busy"));
+    }
+    if running_count >= CHAT_CONCURRENCY_LIMIT {
+        return Ok(Err("chat_concurrency_limit"));
+    }
+    slot.last_activity_at = now_iso();
+    claims.insert(event.conversation_id.clone());
+    Ok(Ok(event))
 }
 
 fn task_conversation_last_message_is_system_persona(
@@ -376,7 +431,6 @@ async fn task_dispatch_due_task(
     session: &TaskDispatchSessionResolved,
 ) -> Result<(), String> {
     let started_at = std::time::Instant::now();
-    task_store_mark_triggered(&state.data_path, &task.task_id)?;
     if let Some(requested) = task
         .conversation_id
         .as_deref()
@@ -466,24 +520,19 @@ async fn task_dispatch_due_task(
     let todo_count = task_legacy_todos_from_todo(&task_todo_from_legacy_fields(&task.status_summary, &task.todos)).len();
     let task_goal = task_goal_from_legacy_fields(&task.title, &task.goal);
 
-    // 入队
-    match ingress_chat_event(state, event) {
-        Ok(ingress) => {
-            // 异步触发处理：直写或排队由 ingress 判定，排队仅在确实滞留时通知前端。
-            let (outcome, note_prefix) = match &ingress {
-                ChatEventIngress::Direct(_) => ("sent", "任务已发送"),
-                ChatEventIngress::Queued { .. } => ("queued", "任务已入队"),
-            };
-            trigger_chat_event_after_ingress(state, ingress);
+    match task_try_ingress_chat_event_direct(state, event)? {
+        Ok(event) => {
+            task_store_mark_triggered(&state.data_path, &task.task_id)?;
+            trigger_chat_event_after_ingress(state, ChatEventIngress::Direct(event));
 
             let duration_ms = started_at.elapsed().as_millis();
             task_store_insert_run_log(
                 &state.data_path,
                 &task.task_id,
-                outcome,
+                "sent",
                 &format!(
                     "{}，requestId={}，dispatchId={}，goal={}，conversationId={}，trigger={}，todoCount={}，hasRunAt={}，everyMinutes={}，durationMs={}，targetScope={}，fallbackToMain={}",
-                    note_prefix,
+                    "任务已发送",
                     request_id,
                     event_id,
                     task_goal.trim(),
@@ -500,14 +549,14 @@ async fn task_dispatch_due_task(
             )?;
             Ok(())
         }
-        Err(err) => {
+        Err(reason) => {
             let duration_ms = started_at.elapsed().as_millis();
             task_store_insert_run_log(
                 &state.data_path,
                 &task.task_id,
-                "failed",
+                "skipped",
                 &format!(
-                    "任务发送失败，requestId={}，dispatchId={}，goal={}，conversationId={}，trigger={}，todoCount={}，hasRunAt={}，everyMinutes={}，durationMs={}，targetScope={}，fallbackToMain={}，error={}",
+                    "任务已跳过，requestId={}，dispatchId={}，goal={}，conversationId={}，trigger={}，todoCount={}，hasRunAt={}，everyMinutes={}，durationMs={}，targetScope={}，fallbackToMain={}，reason={}",
                     request_id,
                     event_id,
                     task_goal.trim(),
@@ -519,10 +568,10 @@ async fn task_dispatch_due_task(
                     duration_ms,
                     session.target_scope,
                     session.fallback_to_main,
-                    err
+                    reason
                 ),
             )?;
-            Err(err)
+            Ok(())
         }
     }
 }
@@ -544,6 +593,12 @@ fn task_build_dispatch_candidates(
         let Some(session) = task_resolve_dispatch_session(state, &task)? else {
             continue;
         };
+        if task_dispatch_block_reason(state, &session.conversation_id)?.is_some() {
+            continue;
+        }
+        if task_conversation_last_message_is_system_persona(state, &session.conversation_id)? {
+            continue;
+        }
         if used_conversation_ids.insert(session.conversation_id.clone()) {
             candidates.push(TaskDispatchCandidate { task, session });
         }
@@ -556,12 +611,6 @@ async fn task_scheduler_tick(state: &AppState) -> Result<(), String> {
     let now = now_utc();
     let candidates = task_build_dispatch_candidates(state, tasks, now)?;
     for candidate in candidates {
-        if task_conversation_is_busy(state, &candidate.session.conversation_id)? {
-            continue;
-        }
-        if task_conversation_last_message_is_system_persona(state, &candidate.session.conversation_id)? {
-            continue;
-        }
         task_dispatch_due_task(state, &candidate.task, &candidate.session).await?;
     }
     Ok(())

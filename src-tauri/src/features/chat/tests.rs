@@ -2579,6 +2579,65 @@
     }
 
     #[test]
+    fn task_build_dispatch_candidates_should_skip_busy_conversation() {
+        let state = test_chat_runtime_state();
+        write_config(&state.config_path, &AppConfig::default()).expect("write config");
+        let data = test_user_switched_to_sub_conversation_data();
+        state_write_app_data_cached(&state, &data).expect("write app data");
+        set_conversation_runtime_state(&state, "conversation-main", MainSessionState::OrganizingContext)
+            .expect("set busy");
+
+        let tasks = vec![TaskRecordStored {
+            task_id: "task-busy".to_string(),
+            conversation_id: Some("conversation-main".to_string()),
+            target_scope: TASK_TARGET_SCOPE_DESKTOP.to_string(),
+            order_index: 1,
+            title: "busy".to_string(),
+            cause: String::new(),
+            goal: String::new(),
+            flow: String::new(),
+            todos: Vec::new(),
+            status_summary: String::new(),
+            completion_state: TASK_STATE_ACTIVE.to_string(),
+            completion_conclusion: String::new(),
+            progress_notes: Vec::new(),
+            stage_key: String::new(),
+            stage_updated_at_utc: None,
+            trigger: TaskTriggerStored {
+                run_at_utc: None,
+                every_minutes: None,
+                end_at_utc: None,
+                next_run_at_utc: None,
+            },
+            created_at_utc: now_utc_rfc3339(),
+            updated_at_utc: now_utc_rfc3339(),
+            last_triggered_at_utc: None,
+            completed_at_utc: None,
+        }];
+
+        let candidates =
+            task_build_dispatch_candidates(&state, tasks, now_utc()).expect("build dispatch candidates");
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn task_try_ingress_chat_event_direct_should_skip_when_queue_not_empty() {
+        let state = test_chat_runtime_state();
+        let existing = ingress_chat_event(&state, test_pending_event("conversation-main"))
+            .expect("existing ingress");
+        assert!(matches!(existing, ChatEventIngress::Direct(_)));
+        let queued = ingress_chat_event(&state, test_pending_event("conversation-main"))
+            .expect("queued ingress");
+        assert!(matches!(queued, ChatEventIngress::Queued { .. }));
+
+        let result = task_try_ingress_chat_event_direct(&state, test_pending_event("conversation-main"))
+            .expect("task direct ingress");
+
+        assert!(matches!(result, Err("conversation_queue_not_empty")));
+    }
+
+    #[test]
     fn delegate_parse_session_parts_should_preserve_conversation_in_two_segment_session() {
         let (api_config_id, agent_id, conversation_id) =
             delegate_parse_session_parts("default-agent::conversation-sub");
