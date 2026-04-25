@@ -298,6 +298,28 @@
     }
 
     #[test]
+    fn startup_self_check_should_fix_deputy_department_default_agent() {
+        let mut cfg = AppConfig::default();
+        let deputy = cfg
+            .departments
+            .iter_mut()
+            .find(|item| item.id == DEPUTY_DEPARTMENT_ID)
+            .expect("builtin deputy department");
+        deputy.agent_ids = vec![DEFAULT_AGENT_ID.to_string()];
+        let previous_updated_at = deputy.updated_at.clone();
+
+        assert!(run_startup_self_checks(&mut cfg));
+
+        let deputy = cfg
+            .departments
+            .iter()
+            .find(|item| item.id == DEPUTY_DEPARTMENT_ID)
+            .expect("builtin deputy department");
+        assert_eq!(deputy.agent_ids, vec![DEPUTY_AGENT_ID.to_string()]);
+        assert_ne!(deputy.updated_at, previous_updated_at);
+    }
+
+    #[test]
     fn normalize_app_config_should_drop_invalid_department_models_without_frontend_fallback() {
         let mut cfg = AppConfig {
             hotkey: "Alt+·".to_string(),

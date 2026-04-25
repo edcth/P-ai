@@ -40,6 +40,28 @@ fn write_config(path: &PathBuf, config: &AppConfig) -> Result<(), String> {
     fs::write(path, toml_str).map_err(|err| format!("Write config failed: {err}"))
 }
 
+fn run_startup_self_checks(config: &mut AppConfig) -> bool {
+    let mut changed = false;
+    for department in &mut config.departments {
+        if !department.is_deputy && department.id != DEPUTY_DEPARTMENT_ID {
+            continue;
+        }
+        let current = department
+            .agent_ids
+            .iter()
+            .find(|id| !id.trim().is_empty())
+            .map(|id| id.trim().to_string())
+            .unwrap_or_default();
+        if current != DEFAULT_AGENT_ID {
+            continue;
+        }
+        department.agent_ids = vec![DEPUTY_AGENT_ID.to_string()];
+        department.updated_at = now_iso();
+        changed = true;
+    }
+    changed
+}
+
 fn api_endpoint_id(provider_id: &str, model_id: &str) -> String {
     format!(
         "{}::{}",

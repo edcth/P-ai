@@ -1464,9 +1464,24 @@ async fn send_chat_message_inner(
             .iter()
             .any(|id| id.trim() == effective_agent_id)
         {
+            let effective_agent_name = runtime_agents
+                .iter()
+                .find(|agent| agent.id == effective_agent_id)
+                .map(|agent| agent.name.trim())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(effective_agent_id.as_str());
+            let effective_department_name = effective_department.name.trim();
+            let effective_department_name = if effective_department_name.is_empty() {
+                effective_department.id.as_str()
+            } else {
+                effective_department_name
+            };
             return Err(format!(
-                "Agent '{effective_agent_id}' is not assigned to department '{}'.",
-                effective_department.id
+                "部门人格配置不合法：部门“{}”（{}）不能使用人格“{}”（{}）。请到部门设置中为该部门选择已分配的人格。",
+                effective_department_name,
+                effective_department.id,
+                effective_agent_name,
+                effective_agent_id
             ));
         }
         let effective_department_id = effective_department.id.clone();

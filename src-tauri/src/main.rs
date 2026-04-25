@@ -462,6 +462,20 @@ fn main() {
                 eprintln!("[启动] 构建托盘失败: {err}");
             }
             let app_state = app_handle.state::<AppState>();
+            match state_read_config_cached(app_state.inner()) {
+                Ok(mut config) => {
+                    if run_startup_self_checks(&mut config) {
+                        if let Err(err) = state_write_config_cached(app_state.inner(), &config) {
+                            eprintln!("[启动自检] 写入修复后的配置失败: {err}");
+                        } else {
+                            eprintln!("[启动自检] 完成，已将副手部门模型从默认人格修正为副手");
+                        }
+                    }
+                }
+                Err(err) => {
+                    eprintln!("[启动自检] 读取配置失败: {err}");
+                }
+            }
             if let Err(err) = warm_hidden_skill_snapshot_cache(app_state.inner()) {
                 eprintln!("[启动] 预热技能快照缓存失败: {err}");
             }
