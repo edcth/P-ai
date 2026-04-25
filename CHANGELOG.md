@@ -2,6 +2,8 @@
 
 ## 进行中
 
+- 修复（terminal-approval-smart-review-allow-pass-through）：终端审查链路改为收缩本地 Git 硬拦截范围，普通 `git commit/pull/fetch/merge/rebase/checkout/switch/restore/stash/apply` 不再在本地规则层直接拒绝；`approval` 目录下的 `shell_exec` 智能审查提示词补齐“白名单外但明显无副作用”判定方法，测试/检查/编译校验命令与仅输出到终端的 `curl/wget/Invoke-WebRequest` 可由模型直接返回 `allow=true` 放行，而写文件、下载落盘、重定向写文件、管道执行脚本与无法确认副作用的命令返回 `allow=false`；同时终端后处理改为在 `approval` 下尊重模型 `allow=true` 结果，避免模型已判安全后仍再次弹用户审批
+
 ## 发布：v0.9.46
 
 - 修复（deepseek-kimi-reasoning-tool-history）：DeepSeek/Kimi 工具调用链路将 assistant `tool_calls` 对应的 `reasoning_content` 写入会话工具历史，并在会话 JSON -> 抽象 `PreparedHistoryMessage` -> genai 请求体的全过程中原样传递；带 `tool_calls` 的 assistant 历史消息不参与相邻 assistant 合并，避免思维链错位、被拼接或被清洗

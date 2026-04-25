@@ -57,19 +57,8 @@ fn terminal_git_dangerous_block_reason(command: &str) -> Option<&'static str> {
             "pull" if has_force_flag => {
                 return Some("git pull --force/-f is especially dangerous and is blocked");
             }
-            "push" => return Some("git push is blocked"),
-            "pull" => return Some("git pull is blocked"),
-            "fetch" => return Some("git fetch is blocked"),
-            "commit" => return Some("git commit is blocked"),
-            "merge" => return Some("git merge is blocked"),
-            "rebase" => return Some("git rebase is blocked"),
             "reset" => return Some("git reset is blocked"),
-            "checkout" => return Some("git checkout is blocked"),
-            "switch" => return Some("git switch is blocked"),
-            "restore" => return Some("git restore is blocked"),
             "clean" => return Some("git clean is blocked"),
-            "stash" => return Some("git stash is blocked"),
-            "apply" => return Some("git apply is blocked"),
             _ => {}
         }
     }
@@ -218,10 +207,12 @@ mod terminal_output_decode_tests {
     }
 
     #[test]
-    fn git_pull_should_be_blocked() {
-        assert_eq!(
-            terminal_command_block_reason("git pull origin main"),
-            Some("git pull is blocked")
-        );
+    fn git_pull_should_not_be_blocked_by_local_rule() {
+        assert_eq!(terminal_command_block_reason("git pull origin main"), None);
+    }
+
+    #[test]
+    fn git_commit_should_not_be_blocked_by_local_rule() {
+        assert_eq!(terminal_command_block_reason("git commit -m \"msg\""), None);
     }
 }

@@ -484,6 +484,10 @@ fn tool_safety_review_system_prompt(language: &str) -> String {
 你负责判断当前工具执行结果是否可以直接放行，还是必须先交给用户确认。\n\
 你的目标是让不会编程的普通人也能看明白这次工具执行大概要做什么、可能影响什么、为什么建议直接执行或先确认。\n\
 请优先使用简单人话，而不是技术术语；如果看不清影响范围，就直接说明无法确认。\n\
+对于 shell_exec，若命令虽不在白名单中，但可以明确判断为只读取、只查询、只检查、只测试、只输出结果，且不会写入或修改本地文件、不会修改 Git 状态、不会修改系统配置、也不会把网络内容保存到本地文件，则应返回 allow=true。\n\
+对于 shell_exec，各类测试、检查、编译校验命令只要只是运行并输出结果、不修改本地项目文件，应返回 allow=true；curl、wget、Invoke-WebRequest 等命令只要只是获取内容并输出到终端、不写入本地文件，也应返回 allow=true。\n\
+对于 shell_exec，如果命令会新增、覆盖、删除、重命名本地文件，修改 Git 工作区、索引、提交历史、分支指向或 stash 状态，修改系统配置、环境变量或其他持久化状态，下载内容到本地文件，使用输出重定向写文件，或通过管道直接执行脚本，则应返回 allow=false。\n\
+对于 shell_exec，如果无法确认命令是否存在副作用，也应返回 allow=false，不要猜测放行。\n\
 只返回一个 JSON 对象，不要输出 Markdown、代码块或额外解释。\n\
 JSON 只能包含这些字段：allow, review_opinion。\n\
 其中：allow 表示是否放行，review_opinion 表示给普通用户看的审查意见。"
@@ -1044,6 +1048,17 @@ async fn builtin_shell_exec(
             }
         }
         smart_review_handled = true;
+    }
+
+    if !smart_review_handled {
+        if smart_review
+            .as_ref()
+            .map(|review| review.allow)
+            .unwrap_or(false)
+            && effective_write_access == SHELL_WORKSPACE_ACCESS_APPROVAL
+        {
+            smart_review_handled = true;
+        }
     }
 
     if !smart_review_handled {
@@ -1670,6 +1685,40 @@ mod terminal_exec_tests {
             Some("python_requires_full_access")
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tool_safety_prompt_should_describe_approval_allow_examples() {
+        let prompt = tool_safety_review_system_prompt("简体中文");
+
+        assert!(prompt.contains("只读取、只查询、只检查、只测试、只输出结果"));
+        assert!(prompt.contains("应返回 allow=true"));
+        assert!(prompt.contains("curl、wget、Invoke-WebRequest"));
+        assert!(prompt.contains("通过管道直接执行脚本，则应返回 allow=false"));
+    }
+
+    #[test]
+    fn approval_allowing_smart_review_should_skip_followup_write_prompt() {
+        let mut smart_review_handled = false;
+        let smart_review = Some(TerminalSmartReviewDecision {
+            allow: true,
+            review_opinion: "只读检查".to_string(),
+            model_name: "mock".to_string(),
+        });
+        let effective_write_access = SHELL_WORKSPACE_ACCESS_APPROVAL;
+
+        if !smart_review_handled {
+            if smart_review
+                .as_ref()
+                .map(|review| review.allow)
+                .unwrap_or(false)
+                && effective_write_access == SHELL_WORKSPACE_ACCESS_APPROVAL
+            {
+                smart_review_handled = true;
+            }
+        }
+
+        assert!(smart_review_handled);
     }
 
     #[cfg(target_os = "windows")]
