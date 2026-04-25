@@ -263,7 +263,7 @@
               </button>
             </div>
             <div class="max-h-[min(52vh,28rem)] overflow-y-auto px-4 py-3">
-              <div class="whitespace-pre-wrap break-words text-sm leading-6 text-base-content/85">
+              <div class="whitespace-pre-wrap wrap-break-word text-sm leading-6 text-base-content/85">
                 {{ conversationSummaryCard.text }}
               </div>
             </div>
@@ -305,7 +305,15 @@
               >{{ chatStatusBanner.text }}</span>
             </div>
           </div>
+          <ChatApprovalPanel
+            v-if="activeConversationTerminalApprovals.length > 0"
+            :approvals="activeConversationTerminalApprovals"
+            :resolving="terminalApprovalResolving"
+            @approve="$emit('approveTerminalApproval', $event)"
+            @deny="$emit('denyTerminalApproval', $event)"
+          />
           <ChatComposerPanel
+            v-else
             ref="composerPanelRef"
             :selection-mode-enabled="messageSelectionModeEnabled"
             :selected-message-count="selectedMessageBlocks.length"
@@ -427,6 +435,7 @@ import "markstream-vue/index.css";
 import { invokeTauri } from "../../../services/tauri-api";
 import type { ApiConfigItem, ChatConversationOverviewItem, ChatMentionTarget, ChatMessageBlock, ChatPersonaPresenceChip, ChatTodoItem, PromptCommandPreset } from "../../../types/app";
 import ChatMessageItem from "../components/ChatMessageItem.vue";
+import ChatApprovalPanel from "../components/ChatApprovalPanel.vue";
 import ChatComposerPanel from "../components/ChatComposerPanel.vue";
 import ChatConversationSidebar from "../components/ChatConversationSidebar.vue";
 import ChatWorkspaceToolbar from "../components/ChatWorkspaceToolbar.vue";
@@ -437,6 +446,7 @@ import { useChatImagePreview } from "../composables/use-chat-image-preview";
 import { useChatMessageActions } from "../composables/use-chat-message-actions";
 import { useChatScrollLayout } from "../composables/use-chat-scroll-layout";
 import { useChatToolReview } from "../composables/use-chat-tool-review";
+import type { TerminalApprovalConversationItem } from "../../shell/composables/use-terminal-approval";
 import { isAbsoluteLocalPath, normalizeLocalLinkHref } from "../utils/local-link";
 
 type ChatRenderItem =
@@ -520,6 +530,8 @@ const props = defineProps<{
   createConversationDepartmentOptions: Array<{ id: string; name: string; ownerName: string }>;
   defaultCreateConversationDepartmentId: string;
   detachedChatWindow?: boolean;
+  terminalApprovals?: TerminalApprovalConversationItem[];
+  terminalApprovalResolving?: boolean;
 }>();
 
 const markdownIsDark = computed(() => isDarkAppTheme(props.currentTheme));
@@ -537,6 +549,12 @@ function isOrganizeContextToolCall(call: { name: string; argsText: string; statu
   const name = String(call.name || "").trim().toLowerCase();
   if (name === "organize_context" || name === "archive") return true;
   return false;
+}
+
+function handleViewApprovalDetail() {
+  if (!toolReviewPanelOpen.value) {
+    toggleToolReviewPanel();
+  }
 }
 
 const visibleStreamToolCalls = computed(() =>
@@ -577,6 +595,13 @@ const activeConversationTodoDisplay = computed(() => {
   if (!todo) return "";
   const personaName = String(props.personaName || "").trim();
   return personaName ? `${personaName} 打算${todo}` : `打算${todo}`;
+});
+
+const activeConversationTerminalApprovals = computed(() => {
+  const conversationId = String(props.activeConversationId || "").trim();
+  if (!conversationId) return [];
+  const approvals = Array.isArray(props.terminalApprovals) ? props.terminalApprovals : [];
+  return approvals.filter((item) => String(item.conversationId || item.sessionId || "").trim() === conversationId);
 });
 
 const supervisionButtonTitle = computed(() => {
@@ -745,6 +770,8 @@ const emit = defineEmits<{
   (e: "selectionActionBranch", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
   (e: "selectionActionForward", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[]; targetConversationId: string }): void;
   (e: "selectionActionShare", payload: { count: number; messageIds: string[]; blocks: ChatMessageBlock[] }): void;
+  (e: "approveTerminalApproval", requestId: string): void;
+  (e: "denyTerminalApproval", requestId: string): void;
 }>();
 const { t } = useI18n();
 

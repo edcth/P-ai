@@ -128,6 +128,10 @@
       :record-hotkey="config.recordHotkey"
       :selected-chat-model-id="currentForegroundApiConfigId"
       :tool-review-refresh-tick="toolReviewRefreshTick"
+      :terminal-approvals="terminalApprovalConversationItems"
+      :terminal-approval-resolving="terminalApprovalResolving"
+      :approve-terminal-approval="approveTerminalApproval"
+      :deny-terminal-approval="denyTerminalApproval"
       :plan-mode-enabled="currentConversationPlanModeEnabled"
       :chat-usage-percent="chatUsagePercent"
       :force-archive-tip="t('chat.forceArchiveTip')"
@@ -313,10 +317,6 @@
       :config-save-error-dialog-title="configSaveErrorDialogTitle"
       :config-save-error-dialog-body="configSaveErrorDialogBody"
       :config-save-error-dialog-kind="configSaveErrorDialogKind"
-      :terminal-approval-dialog-open="terminalApprovalDialogOpen"
-      :terminal-approval-current="terminalApprovalCurrent"
-      :terminal-approval-resolving="terminalApprovalResolving"
-      :terminal-approval-queue-length="terminalApprovalQueue.length"
       :archive-import-preview-dialog-open="archiveImportPreviewDialogOpen"
       :archive-import-preview="archiveImportPreview"
       :archive-import-running="archiveImportRunning"
@@ -336,8 +336,6 @@
       @confirm-rewind-message-only="confirmRewindMessageOnly"
       @cancel-rewind-confirm="cancelRewindConfirm"
       @close-config-save-error-dialog="closeConfigSaveErrorDialog"
-      @approve-terminal-approval="approveTerminalApproval"
-      @deny-terminal-approval="denyTerminalApproval"
       @close-archive-import-preview-dialog="closeArchiveImportPreviewDialog"
       @confirm-archive-import="confirmArchiveImport"
       @close-skill-placeholder-dialog="closeSkillPlaceholderDialog"
@@ -1715,8 +1713,7 @@ const { visibleMessageBlocks, chatContextUsageRatio, chatUsagePercent } = useCha
 const displayMessageBlocks = computed(() => visibleMessageBlocks.value);
 const {
   terminalApprovalCurrent,
-  terminalApprovalDialogOpen,
-  terminalApprovalDialogTitle,
+  listConversationTerminalApprovals,
   enqueueTerminalApprovalRequest,
   denyTerminalApproval,
   approveTerminalApproval,
@@ -1724,6 +1721,10 @@ const {
   queue: terminalApprovalQueue,
   resolving: terminalApprovalResolving,
 });
+
+const terminalApprovalConversationItems = computed(() =>
+  listConversationTerminalApprovals(currentChatConversationId.value)
+);
 
 function syncUserAliasFromPersona() {
   const next = (userPersona.value?.name || "").trim() || t("archives.roleUser");

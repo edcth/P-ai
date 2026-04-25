@@ -135,6 +135,8 @@
         :record-hotkey="recordHotkey"
         :selected-chat-model-id="selectedChatModelId"
         :tool-review-refresh-tick="toolReviewRefreshTick"
+        :terminal-approvals="terminalApprovals"
+        :terminal-approval-resolving="terminalApprovalResolving"
         :chat-model-options="textCapableApiConfigs"
         :plan-mode-enabled="planModeEnabled"
         :chat-usage-percent="chatUsagePercent"
@@ -201,6 +203,8 @@
         @rename-conversation="onRenameConversation"
         @toggle-pin-conversation="onToggleConversationPin"
         @create-conversation="onCreateConversation"
+        @approve-terminal-approval="approveTerminalApproval"
+        @deny-terminal-approval="denyTerminalApproval"
       />
       <div
         v-if="chatBusyOverlay"
@@ -320,6 +324,7 @@
 <script setup lang="ts">
 import ConfigView from "../../config/views/ConfigView.vue";
 import ChatView from "../../chat/views/ChatView.vue";
+import type { TerminalApprovalConversationItem } from "../composables/use-terminal-approval";
 import ArchivesView from "../../archive/views/ArchivesView.vue";
 import MemoryDialog from "../../memory/components/dialogs/MemoryDialog.vue";
 import PromptPreviewDialog from "../../chat/components/dialogs/PromptPreviewDialog.vue";
@@ -450,6 +455,10 @@ const props = defineProps<{
   recordHotkey: string;
   selectedChatModelId: string;
   toolReviewRefreshTick: number;
+  terminalApprovals?: TerminalApprovalConversationItem[];
+  terminalApprovalResolving?: boolean;
+  approveTerminalApproval: (requestId?: string) => void;
+  denyTerminalApproval: (requestId?: string) => void;
   planModeEnabled: boolean;
   chatUsagePercent: number;
   forceArchiveTip: string;

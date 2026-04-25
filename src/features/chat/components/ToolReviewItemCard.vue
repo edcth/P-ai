@@ -47,40 +47,15 @@
       </template>
     </div>
   </details>
-  <dialog ref="changesDialogRef" class="modal">
-    <div class="modal-box h-[90vh] w-[90vw] max-w-none p-0">
-      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-        <div class="min-w-0">
-          <div class="truncate text-sm">{{ item.toolName }}</div>
-          <div class="text-xs text-base-content/60">#{{ item.orderIndex }}</div>
-        </div>
-        <button
-          type="button"
-          class="btn btn-sm btn-ghost"
-          @click="closeChangesDialog"
-        >
-          {{ t("chat.toolReview.closeChanges") }}
-        </button>
-      </div>
-      <div class="flex h-[calc(90vh-61px)] min-h-0 flex-col overflow-hidden">
-        <ToolReviewCodePreview
-          v-if="detail"
-          :mode="detail.previewKind === 'patch' ? 'patch' : 'plain'"
-          :title="detail.previewKind === 'patch' ? '' : t('chat.toolReview.commandPreview')"
-          :code="detail.previewText || detail.resultText"
-        />
-        <ToolReviewCodePreview
-          v-if="detail?.review?.rawContent"
-          mode="plain"
-          :title="t('chat.toolReview.rawReview')"
-          :code="detail.review.rawContent"
-        />
-      </div>
-    </div>
-    <form method="dialog" class="modal-backdrop">
-      <button>{{ t("chat.toolReview.closeChanges") }}</button>
-    </form>
-  </dialog>
+  <ToolReviewChangesDialog
+    ref="changesDialogRef"
+    :title="item.toolName"
+    :subtitle="`#${item.orderIndex}`"
+    :show-preview="!!detail"
+    :preview-mode="detail?.previewKind === 'patch' ? 'patch' : 'plain'"
+    :preview-text="detail ? detail.previewText || detail.resultText : ''"
+    :raw-review="detail?.review?.rawContent || ''"
+  />
 </template>
 
 <script setup lang="ts">
@@ -88,7 +63,7 @@ import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Eye, RotateCcw } from "lucide-vue-next";
 import type { ToolReviewItemDetail, ToolReviewItemSummary } from "../composables/use-chat-tool-review";
-import ToolReviewCodePreview from "./ToolReviewCodePreview.vue";
+import ToolReviewChangesDialog from "./ToolReviewChangesDialog.vue";
 
 const props = defineProps<{
   item: ToolReviewItemSummary;
@@ -103,7 +78,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const changesDialogRef = ref<HTMLDialogElement | null>(null);
+const changesDialogRef = ref<{ openChangesDialog: () => void; closeChangesDialog: () => void } | null>(null);
 
 function handleToggle(event: Event) {
   const target = event.currentTarget as HTMLDetailsElement | null;
@@ -112,10 +87,6 @@ function handleToggle(event: Event) {
 }
 
 function openChangesDialog() {
-  changesDialogRef.value?.showModal();
-}
-
-function closeChangesDialog() {
-  changesDialogRef.value?.close();
+  changesDialogRef.value?.openChangesDialog();
 }
 </script>

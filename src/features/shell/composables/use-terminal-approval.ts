@@ -20,6 +20,10 @@ export type TerminalApprovalRequestPayload = {
   reviewModelName?: string;
 };
 
+export type TerminalApprovalConversationItem = TerminalApprovalRequestPayload & {
+  conversationId: string;
+};
+
 type UseTerminalApprovalOptions = {
   queue: Ref<TerminalApprovalRequestPayload[]>;
   resolving: Ref<boolean>;
@@ -34,6 +38,35 @@ export function useTerminalApproval(options: UseTerminalApprovalOptions) {
   const terminalApprovalDialogBody = computed(
     () => terminalApprovalCurrent.value?.message || "",
   );
+
+  function normalizeTerminalApprovalConversationId(payload: Pick<TerminalApprovalRequestPayload, "sessionId"> | null | undefined): string {
+    const sessionId = String(payload?.sessionId || "").trim();
+    if (!sessionId) return "";
+    const parts = sessionId.split("::");
+    if (parts.length >= 2) {
+      return String(parts[parts.length - 1] || "").trim();
+    }
+    return sessionId;
+  }
+
+  function listConversationTerminalApprovals(conversationId: string): TerminalApprovalConversationItem[] {
+    const normalizedConversationId = String(conversationId || "").trim();
+    if (!normalizedConversationId) return [];
+    return options.queue.value
+      .filter((item) => normalizeTerminalApprovalConversationId(item) === normalizedConversationId)
+      .map((item) => ({
+        ...item,
+        conversationId: normalizedConversationId,
+      }));
+  }
+
+  function getConversationTerminalApprovalCurrent(conversationId: string): TerminalApprovalConversationItem | null {
+    return listConversationTerminalApprovals(conversationId)[0] ?? null;
+  }
+
+  function hasConversationTerminalApprovals(conversationId: string): boolean {
+    return !!getConversationTerminalApprovalCurrent(conversationId);
+  }
 
   function enqueueTerminalApprovalRequest(payload: TerminalApprovalRequestPayload) {
     const requestId = String(payload.requestId || "").trim();
@@ -63,9 +96,14 @@ export function useTerminalApproval(options: UseTerminalApprovalOptions) {
     });
   }
 
-  async function resolveTerminalApproval(approved: boolean) {
+  async function resolveTerminalApproval(approved: boolean, requestId?: string) {
     if (options.resolving.value) return;
-    const current = terminalApprovalCurrent.value;
+    const normalizedRequestId = String(requestId || "").trim();
+    const targetIndex = normalizedRequestId
+      ? options.queue.value.findIndex((item) => item.requestId === normalizedRequestId)
+      : 0;
+    if (targetIndex < 0) return;
+    const current = options.queue.value[targetIndex] ?? null;
     if (!current) return;
     options.resolving.value = true;
     try {
@@ -78,17 +116,17 @@ export function useTerminalApproval(options: UseTerminalApprovalOptions) {
     } catch (error) {
       console.warn("[TERMINAL] resolve_terminal_approval failed:", error);
     } finally {
-      options.queue.value.shift();
+      options.queue.value.splice(targetIndex, 1);
       options.resolving.value = false;
     }
   }
 
-  function denyTerminalApproval() {
-    void resolveTerminalApproval(false);
+  function denyTerminalApproval(requestId?: string) {
+    void resolveTerminalApproval(false, requestId);
   }
 
-  function approveTerminalApproval() {
-    void resolveTerminalApproval(true);
+  function approveTerminalApproval(requestId?: string) {
+    void resolveTerminalApproval(true, requestId);
   }
 
   return {
@@ -96,6 +134,9 @@ export function useTerminalApproval(options: UseTerminalApprovalOptions) {
     terminalApprovalDialogOpen,
     terminalApprovalDialogTitle,
     terminalApprovalDialogBody,
+    listConversationTerminalApprovals,
+    getConversationTerminalApprovalCurrent,
+    hasConversationTerminalApprovals,
     enqueueTerminalApprovalRequest,
     denyTerminalApproval,
     approveTerminalApproval,

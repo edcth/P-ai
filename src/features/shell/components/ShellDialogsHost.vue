@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import type { RuntimeLogEntry } from "../../../types/app";
-import type { TerminalApprovalRequestPayload } from "../composables/use-terminal-approval";
 import RuntimeLogsDialog from "./RuntimeLogsDialog.vue";
-import TerminalApprovalDialog from "./TerminalApprovalDialog.vue";
 
 type UpdateDialogKind = "error" | "info" | "warning";
 type UpdateDialogPrimaryAction = "force" | "download" | "restart" | null | undefined;
@@ -45,10 +43,6 @@ const props = defineProps<{
   configSaveErrorDialogTitle: string;
   configSaveErrorDialogBody: string;
   configSaveErrorDialogKind: ConfigSaveErrorDialogKind;
-  terminalApprovalDialogOpen: boolean;
-  terminalApprovalCurrent: TerminalApprovalRequestPayload | null;
-  terminalApprovalResolving: boolean;
-  terminalApprovalQueueLength: number;
   archiveImportPreviewDialogOpen: boolean;
   archiveImportPreview: ArchiveImportPreview;
   archiveImportRunning: boolean;
@@ -71,8 +65,6 @@ const emit = defineEmits<{
   confirmRewindMessageOnly: [];
   cancelRewindConfirm: [];
   closeConfigSaveErrorDialog: [];
-  approveTerminalApproval: [];
-  denyTerminalApproval: [];
   closeArchiveImportPreviewDialog: [];
   confirmArchiveImport: [];
   closeSkillPlaceholderDialog: [];
@@ -198,15 +190,6 @@ function handleConfirmDeleteConversationFromArchiveDialog() {
       <button @click.prevent="emit('closeConfigSaveErrorDialog')">close</button>
     </form>
   </dialog>
-
-  <TerminalApprovalDialog
-    :open="terminalApprovalDialogOpen"
-    :payload="terminalApprovalCurrent"
-    :resolving="terminalApprovalResolving"
-    :queue-length="terminalApprovalQueueLength"
-    @approve="emit('approveTerminalApproval')"
-    @deny="emit('denyTerminalApproval')"
-  />
 
   <dialog class="modal" :class="{ 'modal-open': archiveImportPreviewDialogOpen }">
     <div class="modal-box max-w-md">
