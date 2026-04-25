@@ -266,7 +266,7 @@ fn prepared_prompt_to_messages_json(prepared: &PreparedPrompt) -> Vec<Value> {
 
     let normalized_history_messages = normalized_prepared_history_messages(&prepared.history_messages);
     for hm in &normalized_history_messages {
-        if hm.role == "assistant" && hm.tool_calls.is_some() {
+        if hm.role == "assistant" {
             let mut msg = serde_json::Map::new();
             msg.insert("role".to_string(), Value::String("assistant".to_string()));
             if hm.text.trim().is_empty() {
@@ -275,9 +275,7 @@ fn prepared_prompt_to_messages_json(prepared: &PreparedPrompt) -> Vec<Value> {
                 msg.insert("content".to_string(), Value::String(hm.text.clone()));
             }
             if let Some(reasoning) = &hm.reasoning_content {
-                if !reasoning.trim().is_empty() {
-                    msg.insert("reasoning_content".to_string(), Value::String(reasoning.clone()));
-                }
+                msg.insert("reasoning_content".to_string(), Value::String(reasoning.clone()));
             }
             if let Some(calls) = &hm.tool_calls {
                 msg.insert(

@@ -25,6 +25,23 @@ fn normalize_openai_genai_base_url(raw: &str) -> String {
     }
 }
 
+fn provider_openai_chat_adapter_kind(
+    api_config: &ResolvedApiConfig,
+    model_name: &str,
+) -> genai::adapter::AdapterKind {
+    let base_url = api_config.base_url.to_ascii_lowercase();
+    let model_name = model_name.to_ascii_lowercase();
+    if base_url.contains("deepseek")
+        || base_url.contains("moonshot")
+        || model_name.contains("deepseek")
+        || model_name.contains("kimi")
+    {
+        genai::adapter::AdapterKind::DeepSeek
+    } else {
+        genai::adapter::AdapterKind::OpenAI
+    }
+}
+
 fn genai_content_parts_from_text_and_binary(
     text_blocks: &[String],
     images: &[PreparedBinaryPayload],
@@ -92,12 +109,14 @@ fn genai_tool_call_id_for_history(
 fn prepared_history_to_genai_messages(
     prepared: &PreparedPrompt,
     protocol_family: ToolCallProtocolFamily,
+    force_tool_reasoning_content: bool,
+    request_stage: &str,
 ) -> Result<Vec<genai::chat::ChatMessage>, String> {
     let mut chat_history = Vec::<genai::chat::ChatMessage>::new();
     let mut tool_call_id_to_provider_call_id =
         std::collections::HashMap::<String, String>::new();
     let normalized_history_messages = normalized_prepared_history_messages(&prepared.history_messages);
-    for hm in &normalized_history_messages {
+    for (message_index, hm) in normalized_history_messages.iter().enumerate() {
         if hm.role == "user" {
             let base_user_text = if hm.text.trim().is_empty() {
                 " ".to_string()
@@ -122,6 +141,7 @@ fn prepared_history_to_genai_messages(
             ));
         } else if hm.role == "assistant" {
             let mut assistant_parts = Vec::<genai::chat::ContentPart>::new();
+            let mut has_replayable_tool_calls = false;
             if !hm.text.trim().is_empty() {
                 assistant_parts.push(genai::chat::ContentPart::from_text(hm.text.clone()));
             }
@@ -150,6 +170,7 @@ fn prepared_history_to_genai_messages(
                     ) {
                         continue;
                     }
+                    has_replayable_tool_calls = true;
                     if let Some(provider_call_id) = call
                         .provider_call_id
                         .as_deref()
@@ -172,13 +193,29 @@ fn prepared_history_to_genai_messages(
                     ));
                 }
             }
+            let assistant_reasoning_content = if force_tool_reasoning_content && has_replayable_tool_calls {
+                if hm.reasoning_content.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true) {
+                    runtime_log_warn(format!(
+                        "[聊天][DeepSeek] 阶段={stage} 历史消息缺失 reasoning_content：索引={index}, role=assistant, tool_calls=有，已自动补空串",
+                        stage = request_stage,
+                        index = message_index
+                    ));
+                    Some(String::new())
+                } else {
+                    hm.reasoning_content.clone()
+                }
+            } else {
+                hm.reasoning_content.clone()
+            };
             if assistant_parts.is_empty() {
                 assistant_parts.push(genai::chat::ContentPart::from_text(" "));
             }
             let assistant_message = genai::chat::ChatMessage::assistant(
                 genai::chat::MessageContent::from_parts(assistant_parts),
             )
-            .with_reasoning_content(hm.reasoning_content.clone());
+            // reasoning_content 是 assistant tool_calls 历史的一部分，必须从会话
+            // JSON 传递到最终供应商请求体；不要在这里清洗、合并或兜底伪造。
+            .with_reasoning_content(assistant_reasoning_content);
             chat_history.push(assistant_message);
         } else if hm.role == "tool" {
             let safe_tool_text = if hm.text.trim().is_empty() {
@@ -228,7 +265,12 @@ fn build_openai_responses_genai_request(
     prepared: &PreparedPrompt,
 ) -> Result<genai::chat::ChatRequest, String> {
     let history_messages =
-        prepared_history_to_genai_messages(prepared, ToolCallProtocolFamily::OpenAiResponses)?;
+        prepared_history_to_genai_messages(
+            prepared,
+            ToolCallProtocolFamily::OpenAiResponses,
+            false,
+            "build_openai_responses_genai_request",
+        )?;
     let latest_parts = genai_content_parts_from_text_and_binary(
         &prepared_prompt_latest_user_text_blocks(prepared),
         &prepared.latest_images,
@@ -247,9 +289,16 @@ fn build_openai_responses_genai_request(
 
 fn build_openai_chat_genai_request(
     prepared: &PreparedPrompt,
+    force_tool_reasoning_content: bool,
+    request_stage: &str,
 ) -> Result<genai::chat::ChatRequest, String> {
     let history_messages =
-        prepared_history_to_genai_messages(prepared, ToolCallProtocolFamily::OpenAiChatLike)?;
+        prepared_history_to_genai_messages(
+            prepared,
+            ToolCallProtocolFamily::OpenAiChatLike,
+            force_tool_reasoning_content,
+            request_stage,
+        )?;
     let latest_parts = genai_content_parts_from_text_and_binary(
         &prepared_prompt_latest_user_text_blocks(prepared),
         &prepared.latest_images,
@@ -270,7 +319,12 @@ fn build_gemini_genai_request(
     prepared: &PreparedPrompt,
 ) -> Result<genai::chat::ChatRequest, String> {
     let history_messages =
-        prepared_history_to_genai_messages(prepared, ToolCallProtocolFamily::Gemini)?;
+        prepared_history_to_genai_messages(
+            prepared,
+            ToolCallProtocolFamily::Gemini,
+            false,
+            "build_gemini_genai_request",
+        )?;
     let latest_parts = genai_content_parts_from_text_and_binary(
         &prepared_prompt_latest_user_text_blocks(prepared),
         &prepared.latest_images,
@@ -291,7 +345,12 @@ fn build_anthropic_genai_request(
     prepared: &PreparedPrompt,
 ) -> Result<genai::chat::ChatRequest, String> {
     let history_messages =
-        prepared_history_to_genai_messages(prepared, ToolCallProtocolFamily::Anthropic)?;
+        prepared_history_to_genai_messages(
+            prepared,
+            ToolCallProtocolFamily::Anthropic,
+            false,
+            "build_anthropic_genai_request",
+        )?;
     let latest_parts = genai_content_parts_from_text_and_binary(
         &prepared_prompt_latest_user_text_blocks(prepared),
         &prepared.latest_images,
@@ -311,10 +370,14 @@ fn build_anthropic_genai_request(
 fn build_provider_genai_request(
     prepared: &PreparedPrompt,
     protocol_family: ToolCallProtocolFamily,
+    force_tool_reasoning_content: bool,
+    request_stage: &str,
 ) -> Result<genai::chat::ChatRequest, String> {
     match protocol_family {
         ToolCallProtocolFamily::OpenAiResponses => build_openai_responses_genai_request(prepared),
-        ToolCallProtocolFamily::OpenAiChatLike => build_openai_chat_genai_request(prepared),
+        ToolCallProtocolFamily::OpenAiChatLike => {
+            build_openai_chat_genai_request(prepared, force_tool_reasoning_content, request_stage)
+        }
         ToolCallProtocolFamily::Gemini => build_gemini_genai_request(prepared),
         ToolCallProtocolFamily::Anthropic => build_anthropic_genai_request(prepared),
     }
@@ -354,7 +417,9 @@ fn normalize_provider_genai_base_url(
     raw: &str,
 ) -> String {
     match adapter_kind {
-        genai::adapter::AdapterKind::OpenAI | genai::adapter::AdapterKind::OpenAIResp => {
+        genai::adapter::AdapterKind::OpenAI
+        | genai::adapter::AdapterKind::OpenAIResp
+        | genai::adapter::AdapterKind::DeepSeek => {
             normalize_openai_genai_base_url(raw)
         }
         genai::adapter::AdapterKind::Gemini => normalize_gemini_genai_base_url(raw),
@@ -417,14 +482,19 @@ async fn call_model_openai_stream_internal(
     let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
     let adapter_kind = match kind {
-        OpenAiApiKind::ChatCompletions => genai::adapter::AdapterKind::OpenAI,
+        OpenAiApiKind::ChatCompletions => provider_openai_chat_adapter_kind(&api_config, model_name),
         OpenAiApiKind::Responses => genai::adapter::AdapterKind::OpenAIResp,
     };
     let protocol_family = match kind {
         OpenAiApiKind::ChatCompletions => ToolCallProtocolFamily::OpenAiChatLike,
         OpenAiApiKind::Responses => ToolCallProtocolFamily::OpenAiResponses,
     };
-    let request = build_provider_genai_request(&prepared, protocol_family)?;
+    let request = build_provider_genai_request(
+        &prepared,
+        protocol_family,
+        matches!(adapter_kind, genai::adapter::AdapterKind::DeepSeek),
+        "call_model_openai_stream_internal",
+    )?;
     let service_target = genai::ServiceTarget {
         endpoint: genai::resolver::Endpoint::from_owned(normalize_provider_genai_base_url(
             adapter_kind,
@@ -484,14 +554,20 @@ async fn call_model_openai_non_stream(
         maybe_acquire_provider_serial_guard(app_state, &api_config, model_name).await?;
     let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
+    let adapter_kind = provider_openai_chat_adapter_kind(&api_config, model_name);
     let service_target = genai::ServiceTarget {
-        endpoint: genai::resolver::Endpoint::from_owned(normalize_openai_genai_base_url(
+        endpoint: genai::resolver::Endpoint::from_owned(normalize_provider_genai_base_url(
+            adapter_kind,
             &api_config.base_url,
         )),
         auth: genai::resolver::AuthData::from_single(request_api_key),
-        model: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, model_name),
+        model: genai::ModelIden::new(adapter_kind, model_name),
     };
-    let request = build_openai_chat_genai_request(&prepared)?;
+    let request = build_openai_chat_genai_request(
+        &prepared,
+        matches!(adapter_kind, genai::adapter::AdapterKind::DeepSeek),
+        "call_model_openai_non_stream",
+    )?;
     let mut options = genai::chat::ChatOptions::default()
         .with_capture_usage(true)
         .with_capture_content(true)

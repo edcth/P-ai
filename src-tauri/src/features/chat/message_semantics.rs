@@ -198,11 +198,23 @@ fn normalized_tool_call_to_history_value(call: &NormalizedToolCallRecord) -> Opt
     Some(Value::Object(obj))
 }
 
+fn message_reasoning_standard_fallback(message: &ChatMessage) -> Option<String> {
+    message
+        .provider_meta
+        .as_ref()
+        .and_then(|meta| meta.get("reasoningStandard"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn build_prepared_history_messages_from_tool_history(
     message: &ChatMessage,
     view: MessageToolHistoryView,
 ) -> Vec<PreparedHistoryMessage> {
     let mut history_messages = Vec::<PreparedHistoryMessage>::new();
+    let reasoning_fallback = message_reasoning_standard_fallback(message);
     for event in normalize_message_tool_history_events(message, view) {
         if event.role == "assistant" {
             let tool_calls = event
@@ -210,6 +222,16 @@ fn build_prepared_history_messages_from_tool_history(
                 .iter()
                 .filter_map(normalized_tool_call_to_history_value)
                 .collect::<Vec<_>>();
+            let reasoning_content = event
+                .reasoning_content
+                .clone()
+                .or_else(|| {
+                    if tool_calls.is_empty() {
+                        None
+                    } else {
+                        reasoning_fallback.clone()
+                    }
+                });
             history_messages.push(PreparedHistoryMessage {
                 role: "assistant".to_string(),
                 text: event.text,
@@ -219,7 +241,9 @@ fn build_prepared_history_messages_from_tool_history(
                 audios: Vec::new(),
                 tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
                 tool_call_id: None,
-                reasoning_content: event.reasoning_content,
+                // DeepSeek/Kimi 等协议要求 assistant tool_calls 的 reasoning_content
+                // 在后续所有工具调用上下文中原样回传；这里禁止清洗、合并或省略。
+                reasoning_content,
             });
             continue;
         }
@@ -425,6 +449,46 @@ mod message_semantics_tests {
         );
         assert_eq!(history[1].role, "tool");
         assert_eq!(history[1].tool_call_id.as_deref(), Some("fc_1"));
+    }
+
+    #[test]
+    fn build_prepared_history_messages_from_tool_history_should_fallback_to_provider_meta_reasoning() {
+        let now = now_iso();
+        let mut assistant = test_message("assistant", "我查好了", &now);
+        assistant.provider_meta = Some(serde_json::json!({
+            "reasoningStandard": "先搜索版本，再确认发布时间"
+        }));
+        assistant.tool_call = Some(vec![
+            serde_json::json!({
+                "role": "assistant",
+                "content": Value::Null,
+                "tool_calls": [{
+                    "id": "fc_1",
+                    "type": "function",
+                    "function": {
+                        "name": "tavily_search",
+                        "arguments": "{\"query\":\"明日方舟终末地 最新版本\"}"
+                    }
+                }]
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "fc_1",
+                "content": "{\"ok\":true}"
+            }),
+        ]);
+
+        let history = build_prepared_history_messages_from_tool_history(
+            &assistant,
+            MessageToolHistoryView::PromptReplay,
+        );
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].role, "assistant");
+        assert_eq!(
+            history[0].reasoning_content.as_deref(),
+            Some("先搜索版本，再确认发布时间")
+        );
     }
 
     #[test]

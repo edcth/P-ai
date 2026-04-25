@@ -2026,8 +2026,18 @@ fn merge_adjacent_assistant_history_messages(
     let mut merged = Vec::<PreparedHistoryMessage>::new();
     for message in messages {
         if message.role == "assistant" {
+            if message.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty()) {
+                merged.push(message);
+                continue;
+            }
             if let Some(last) = merged.last_mut() {
-                if last.role == "assistant" {
+                if last.role == "assistant"
+                    && last
+                        .tool_calls
+                        .as_ref()
+                        .map(|calls| calls.is_empty())
+                        .unwrap_or(true)
+                {
                     merge_history_message_text(&mut last.text, message.text);
                     last.extra_text_blocks.extend(message.extra_text_blocks);
                     last.images.extend(message.images);
@@ -2155,7 +2165,11 @@ fn build_conversation_prompt_payload(
             audios,
             tool_calls: None,
             tool_call_id: None,
-            reasoning_content: None,
+            reasoning_content: if role == "assistant" {
+                message_reasoning_standard_fallback(message)
+            } else {
+                None
+            },
         });
     }
 

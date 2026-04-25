@@ -560,8 +560,15 @@ fn runtime_tool_result_followup_message(
 fn build_genai_message_state(
     prepared: &PreparedPrompt,
     protocol_family: ToolCallProtocolFamily,
+    force_tool_reasoning_content: bool,
+    request_stage: &str,
 ) -> Result<(Option<String>, Vec<genai::chat::ChatMessage>), String> {
-    let request = build_provider_genai_request(prepared, protocol_family)?;
+    let request = build_provider_genai_request(
+        prepared,
+        protocol_family,
+        force_tool_reasoning_content,
+        request_stage,
+    )?;
     Ok((request.system, request.messages))
 }
 
@@ -750,7 +757,12 @@ async fn run_genai_tool_loop(
     let mut full_reasoning_standard = String::new();
     let mut tool_history_events = Vec::<Value>::new();
     let mut trusted_input_tokens: Option<u64> = None;
-    let (system_prompt, mut messages) = build_genai_message_state(&prepared, protocol_family)?;
+    let (system_prompt, mut messages) = build_genai_message_state(
+        &prepared,
+        protocol_family,
+        matches!(adapter_kind, genai::adapter::AdapterKind::DeepSeek),
+        "run_genai_tool_loop.stream",
+    )?;
 
     let mut auto_compaction_applied = false;
     let mut tool_repeat_guard = ToolRepeatGuard::default();
@@ -1009,11 +1021,20 @@ async fn run_genai_tool_loop(
                     "arguments": tool_args
                 }
             });
-            tool_history_events.push(serde_json::json!({
+            let mut assistant_tool_event = serde_json::json!({
                 "role": "assistant",
                 "content": Value::Null,
                 "tool_calls": [tc_json]
-            }));
+            });
+            if include_reasoning_before_tool_calls {
+                if let Some(object) = assistant_tool_event.as_object_mut() {
+                    object.insert(
+                        "reasoning_content".to_string(),
+                        Value::String(turn_reasoning.trim().to_string()),
+                    );
+                }
+            }
+            tool_history_events.push(assistant_tool_event);
             let history_content = sanitize_tool_result_for_history(&tool_name, &tool_result_text);
             tool_history_events.push(serde_json::json!({
                 "role": "tool",
@@ -1270,7 +1291,12 @@ async fn run_genai_tool_loop_non_stream(
     let mut full_reasoning_standard = String::new();
     let mut tool_history_events = Vec::<Value>::new();
     let mut trusted_input_tokens: Option<u64> = None;
-    let (system_prompt, mut messages) = build_genai_message_state(&prepared, protocol_family)?;
+    let (system_prompt, mut messages) = build_genai_message_state(
+        &prepared,
+        protocol_family,
+        matches!(adapter_kind, genai::adapter::AdapterKind::DeepSeek),
+        "run_genai_tool_loop_non_stream",
+    )?;
 
     let mut auto_compaction_applied = false;
     let mut tool_repeat_guard = ToolRepeatGuard::default();
@@ -1448,11 +1474,20 @@ async fn run_genai_tool_loop_non_stream(
                     "arguments": tool_args
                 }
             });
-            tool_history_events.push(serde_json::json!({
+            let mut assistant_tool_event = serde_json::json!({
                 "role": "assistant",
                 "content": Value::Null,
                 "tool_calls": [tc_json]
-            }));
+            });
+            if include_reasoning_before_tool_calls {
+                if let Some(object) = assistant_tool_event.as_object_mut() {
+                    object.insert(
+                        "reasoning_content".to_string(),
+                        Value::String(turn_reasoning.trim().to_string()),
+                    );
+                }
+            }
+            tool_history_events.push(assistant_tool_event);
             let history_content = sanitize_tool_result_for_history(&tool_name, &tool_result_text);
             tool_history_events.push(serde_json::json!({
                 "role": "tool",

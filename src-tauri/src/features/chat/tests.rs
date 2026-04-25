@@ -609,7 +609,7 @@
     }
 
     #[test]
-    fn prepared_prompt_to_messages_json_should_merge_adjacent_assistant_messages_with_reasoning_and_tool_calls(
+    fn prepared_prompt_to_messages_json_should_keep_tool_call_reasoning_per_assistant_message(
     ) {
         let prepared = PreparedPrompt {
             preamble: "sys".to_string(),
@@ -683,22 +683,109 @@
 
         let messages = prepared_prompt_to_messages_json(&prepared);
 
-        assert_eq!(messages.len(), 4);
+        assert_eq!(messages.len(), 5);
         assert_eq!(messages[1]["role"], "user");
         assert_eq!(messages[2]["role"], "assistant");
         assert_eq!(
             messages[2]["content"].as_str(),
-            Some("我先调用工具\n\n工具结果我看完了")
+            Some("我先调用工具")
         );
         assert_eq!(
             messages[2]["reasoning_content"].as_str(),
-            Some("先查资料\n\n再补一轮定位")
+            Some("先查资料")
         );
         assert_eq!(
             messages[2]["tool_calls"].as_array().map(Vec::len),
-            Some(2)
+            Some(1)
         );
-        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["role"], "assistant");
+        assert_eq!(
+            messages[3]["content"].as_str(),
+            Some("工具结果我看完了")
+        );
+        assert_eq!(
+            messages[3]["reasoning_content"].as_str(),
+            Some("再补一轮定位")
+        );
+        assert_eq!(
+            messages[3]["tool_calls"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(messages[4]["role"], "tool");
+    }
+
+    #[test]
+    fn prepared_prompt_to_messages_json_should_keep_reasoning_for_plain_assistant_messages() {
+        let prepared = PreparedPrompt {
+            preamble: "sys".to_string(),
+            history_messages: vec![PreparedHistoryMessage {
+                role: "assistant".to_string(),
+                text: "这是结论".to_string(),
+                extra_text_blocks: Vec::new(),
+                user_time_text: None,
+                images: Vec::new(),
+                audios: Vec::new(),
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: Some("这是思考过程".to_string()),
+            }],
+            latest_user_text: String::new(),
+            latest_user_meta_text: String::new(),
+            latest_user_extra_text: String::new(),
+            latest_user_extra_blocks: Vec::new(),
+            latest_images: Vec::new(),
+            latest_audios: Vec::new(),
+        };
+
+        let messages = prepared_prompt_to_messages_json(&prepared);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"].as_str(), Some("这是结论"));
+        assert_eq!(
+            messages[1]["reasoning_content"].as_str(),
+            Some("这是思考过程")
+        );
+    }
+
+    #[test]
+    fn build_prompt_should_preserve_assistant_reasoning_from_provider_meta() {
+        let now = now_iso();
+        let agent = default_agent();
+        let mut assistant = test_text_message("assistant", "这是最终回复", &now);
+        assistant.speaker_agent_id = Some(agent.id.clone());
+        assistant.provider_meta = Some(serde_json::json!({
+            "reasoningStandard": "先分析用户问题，再整理答案"
+        }));
+        let messages = vec![
+            test_text_message("user", "帮我总结一下", &now),
+            assistant,
+            test_text_message("user", "继续", &now),
+        ];
+        let conv = test_active_conversation_with_messages(messages, Some(now));
+
+        let prepared = build_prompt(
+            &conv,
+            &agent,
+            &[agent.clone(), default_user_persona()],
+            &[],
+            "用户",
+            "我是...",
+            DEFAULT_RESPONSE_STYLE_ID,
+            "zh-CN",
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert!(
+            prepared.history_messages.iter().any(|message| {
+                message.role == "assistant"
+                    && message.text == "这是最终回复"
+                    && message.reasoning_content.as_deref() == Some("先分析用户问题，再整理答案")
+            })
+        );
     }
 
     #[test]
