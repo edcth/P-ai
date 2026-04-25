@@ -205,7 +205,6 @@ fn message_reasoning_standard_fallback(message: &ChatMessage) -> Option<String> 
         .and_then(|meta| meta.get("reasoningStandard"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
 
@@ -489,6 +488,43 @@ mod message_semantics_tests {
             history[0].reasoning_content.as_deref(),
             Some("先搜索版本，再确认发布时间")
         );
+    }
+
+    #[test]
+    fn build_prepared_history_messages_from_tool_history_should_preserve_explicit_empty_reasoning() {
+        let now = now_iso();
+        let mut assistant = test_message("assistant", "我查好了", &now);
+        assistant.provider_meta = Some(serde_json::json!({
+            "reasoningStandard": ""
+        }));
+        assistant.tool_call = Some(vec![
+            serde_json::json!({
+                "role": "assistant",
+                "content": Value::Null,
+                "tool_calls": [{
+                    "id": "fc_1",
+                    "type": "function",
+                    "function": {
+                        "name": "tavily_search",
+                        "arguments": "{\"query\":\"明日方舟终末地 最新版本\"}"
+                    }
+                }]
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "fc_1",
+                "content": "{\"ok\":true}"
+            }),
+        ]);
+
+        let history = build_prepared_history_messages_from_tool_history(
+            &assistant,
+            MessageToolHistoryView::PromptReplay,
+        );
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].role, "assistant");
+        assert_eq!(history[0].reasoning_content.as_deref(), Some(""));
     }
 
     #[test]

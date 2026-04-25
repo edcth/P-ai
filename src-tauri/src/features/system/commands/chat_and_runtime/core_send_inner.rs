@@ -2656,13 +2656,15 @@ async fn send_chat_message_inner(
     let mut provider_meta = {
         let standard = reasoning_standard.trim();
         let inline = reasoning_inline.trim();
-        if standard.is_empty()
-            && inline.is_empty()
-            && assistant_provider_meta_override.is_none()
-            && trusted_input_tokens.is_none()
-            && estimated_prompt_tokens == 0
-            && remote_im_reply_decision.is_none()
-        {
+        if !should_create_assistant_provider_meta(
+            &active_selected_api.request_format,
+            standard,
+            inline,
+            assistant_provider_meta_override.as_ref(),
+            trusted_input_tokens,
+            estimated_prompt_tokens,
+            remote_im_reply_decision.is_some(),
+        ) {
             None
         } else {
             let mut meta = serde_json::json!({
@@ -2922,6 +2924,24 @@ async fn send_chat_message_inner(
     final_result
 }
 
+fn should_create_assistant_provider_meta(
+    request_format: &RequestFormat,
+    reasoning_standard: &str,
+    reasoning_inline: &str,
+    assistant_provider_meta_override: Option<&Value>,
+    trusted_input_tokens: Option<u64>,
+    estimated_prompt_tokens: u64,
+    remote_im_reply_decision_present: bool,
+) -> bool {
+    !reasoning_standard.trim().is_empty()
+        || !reasoning_inline.trim().is_empty()
+        || assistant_provider_meta_override.is_some()
+        || trusted_input_tokens.is_some()
+        || estimated_prompt_tokens > 0
+        || remote_im_reply_decision_present
+        || matches!(request_format, RequestFormat::DeepSeekKimi)
+}
+
 #[cfg(test)]
 mod core_send_inner_tests {
     use super::*;
@@ -3009,6 +3029,28 @@ mod core_send_inner_tests {
         assert_eq!(candidate_api_ids, vec!["text-a".to_string()]);
         assert!(non_chat_err.contains("不是聊天文本模型"));
         assert!(missing_err.contains("模型不存在"));
+    }
+
+    #[test]
+    fn should_create_assistant_provider_meta_should_preserve_empty_reasoning_for_deepseek() {
+        assert!(should_create_assistant_provider_meta(
+            &RequestFormat::DeepSeekKimi,
+            "",
+            "",
+            None,
+            None,
+            0,
+            false,
+        ));
+        assert!(!should_create_assistant_provider_meta(
+            &RequestFormat::OpenAI,
+            "",
+            "",
+            None,
+            None,
+            0,
+            false,
+        ));
     }
 }
 fn error_indicates_image_input_unsupported(error: &str) -> bool {
