@@ -289,7 +289,7 @@
             class="pointer-events-none absolute inset-x-0 top-0 z-10 -translate-y-full"
           >
             <div
-              class="relative flex items-center justify-center rounded-box px-4 py-1.5 text-center text-[12px] backdrop-blur-md"
+              class="relative flex w-full items-center justify-center rounded-none px-4 py-1.5 text-center text-[12px] backdrop-blur-md"
               :class="chatStatusBanner.tone === 'error'
                 ? 'bg-error/12 text-error'
                 : chatStatusBanner.text === t('chat.statusCompactingContext')
