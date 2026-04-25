@@ -945,7 +945,6 @@ export function useChatFlow(options: UseChatFlowOptions) {
     reasoningStartedAtMs.value = 0;
     resetDisplayState();
     options.chatErrorText.value = "";
-    clearConversationStreamCache(options.getConversationId ? options.getConversationId() : "");
   }
 
   function readMessagePlainText(message?: ChatMessage): string {
@@ -960,6 +959,10 @@ export function useChatFlow(options: UseChatFlowOptions) {
   function freezeForegroundRoundState() {
     ++generation;
     sendChatActiveGen = 0;
+    const conversationId = options.getConversationId ? options.getConversationId() : "";
+    if (round.phase === "streaming") {
+      syncCurrentDisplayStateToConversationStreamCache(conversationId);
+    }
     if (pendingUserDraftId) {
       removeDraft(pendingUserDraftId);
     }
