@@ -290,16 +290,30 @@ export function useChatFlow(options: UseChatFlowOptions) {
   function applyConversationStreamCacheToDisplay(conversationId?: string | null): boolean {
     const cache = readConversationStreamCache(conversationId);
     if (!cache) return false;
-    options.latestAssistantText.value = cache.assistantText;
-    options.latestReasoningStandardText.value = cache.reasoningStandard;
-    options.latestReasoningInlineText.value = cache.reasoningInline;
-    options.toolStatusText.value = cache.toolStatusText;
-    options.toolStatusState.value = cache.toolStatusState;
-    if (options.streamToolCalls) {
-      options.streamToolCalls.value = cache.streamToolCalls.map((item) => ({ ...item }));
+    if (cache.assistantText || !options.latestAssistantText.value) {
+      options.latestAssistantText.value = cache.assistantText;
     }
-    streamToolCallCount = cache.streamToolCallCount;
-    streamLastToolName = cache.streamLastToolName;
+    if (cache.reasoningStandard || !options.latestReasoningStandardText.value) {
+      options.latestReasoningStandardText.value = cache.reasoningStandard;
+    }
+    if (cache.reasoningInline || !options.latestReasoningInlineText.value) {
+      options.latestReasoningInlineText.value = cache.reasoningInline;
+    }
+    if (cache.toolStatusText || !options.toolStatusText.value) {
+      options.toolStatusText.value = cache.toolStatusText;
+    }
+    if (cache.toolStatusState || !options.toolStatusState.value) {
+      options.toolStatusState.value = cache.toolStatusState;
+    }
+    if (options.streamToolCalls) {
+      if (cache.streamToolCalls.length > 0 || options.streamToolCalls.value.length === 0) {
+        options.streamToolCalls.value = cache.streamToolCalls.map((item) => ({ ...item }));
+      }
+    }
+    streamToolCallCount = Math.max(streamToolCallCount, cache.streamToolCallCount);
+    if (cache.streamLastToolName) {
+      streamLastToolName = cache.streamLastToolName;
+    }
     return true;
   }
 
@@ -746,9 +760,22 @@ export function useChatFlow(options: UseChatFlowOptions) {
   ) {
     if (!draftId) return;
     const agentId = String(options.getSession()?.agentId || "").trim();
+    const existingDraft = options.allMessages.value.find((item) => item.id === draftId);
+    const existingDraftText = readMessagePlainText(existingDraft);
+    const nextAssistantText = String(options.latestAssistantText.value || "");
+    const shouldPreserveExistingDraftText =
+      !!existingDraft
+      && !nextAssistantText
+      && !!existingDraftText
+      && (
+        !!String(options.toolStatusText.value || "").trim()
+        || (options.streamToolCalls?.value.length || 0) > 0
+      );
+    if (shouldPreserveExistingDraftText) {
+      options.latestAssistantText.value = existingDraftText;
+    }
     const nextStreamSegments = streamSegments || readDraftStreamSegments(draftId);
     const nextStreamTail = streamTail ?? readDraftStreamTail(draftId);
-    const existingDraft = options.allMessages.value.find((item) => item.id === draftId);
     const msg: ChatMessage = {
       id: draftId,
       role: "assistant",
@@ -1157,12 +1184,23 @@ export function useChatFlow(options: UseChatFlowOptions) {
       streamToolCallCount,
       streamLastToolName,
     } : null;
+    const shouldKeepStreamingDraft =
+      shouldActivate
+      && !shouldForceReset
+      && round.phase === "streaming"
+      && hasAssistantDraftInMessages()
+      && (
+        options.toolStatusState.value === "running"
+        || (options.streamToolCalls?.value.length || 0) > 0
+      );
     if (shouldActivate || shouldForceReset) {
       // 激活助理或上下文整理改写消息序列时，先强制收口当前显示态。
-      const oldDraftId = round.phase === "streaming" ? round.draftId : "";
-      resetDisplayState();
-      if (oldDraftId) removeDraft(oldDraftId);
-      setRound(shouldActivate ? { phase: "queued", gen } : { phase: "idle" });
+      if (!shouldKeepStreamingDraft) {
+        const oldDraftId = round.phase === "streaming" ? round.draftId : "";
+        resetDisplayState();
+        if (oldDraftId) removeDraft(oldDraftId);
+        setRound(shouldActivate ? { phase: "queued", gen } : { phase: "idle" });
+      }
       queuedStreamingState = preservedStreamingState;
     }
 
@@ -1785,6 +1823,32 @@ export function useChatFlow(options: UseChatFlowOptions) {
         action: "sendChat", apiConfigId: sendSession.apiConfigId, agentId: sendSession.agentId,
         gen, message: String((error as { message?: string })?.message ?? error ?? ""),
       });
+
+      const shouldPreserveVisibleStreamingDraft =
+        round.phase === "streaming"
+        && round.gen === gen
+        && hasAssistantDraftInMessages()
+        && (
+          !!String(options.latestAssistantText.value || "").trim()
+          || !!String(options.latestReasoningStandardText.value || "").trim()
+          || !!String(options.latestReasoningInlineText.value || "").trim()
+          || !!String(options.toolStatusText.value || "").trim()
+          || (options.streamToolCalls?.value.length || 0) > 0
+        );
+
+      if (shouldPreserveVisibleStreamingDraft) {
+        options.chatErrorText.value = options.formatRequestFailed(error);
+        if (!options.toolStatusText.value) {
+          options.toolStatusState.value = "failed";
+          options.toolStatusText.value = summarizeToolCallsText() || options.t("status.toolCallFailed");
+        }
+        syncCurrentDisplayStateToConversationStreamCache(options.getConversationId ? options.getConversationId() : "");
+        sendStartedAtMsByGen.delete(gen);
+        setRound({ phase: "idle" });
+        options.chatting.value = false;
+        reasoningStartedAtMs.value = 0;
+        return;
+      }
 
       if (round.phase === "idle" || round.gen !== gen) {
         if (pendingUserDraftId === `${DRAFT_USER_ID_PREFIX}${gen}`) {
