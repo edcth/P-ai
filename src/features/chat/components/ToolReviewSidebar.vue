@@ -7,17 +7,22 @@
 
       <template v-if="currentBatch">
         <div class="flex min-h-full flex-col">
-          <div class="flex flex-col gap-2 py-2">
-            <ToolReviewItemCard
-              v-for="item in currentBatch.items"
-              :key="item.callId"
-              :item="item"
-              :detail="detailMap[item.callId]"
-              :loading="detailLoadingCallId === item.callId"
-              :reviewing="reviewingCallId === item.callId"
-              @load-detail="emit('loadItemDetail', $event)"
-              @review="emit('reviewItem', $event)"
-            />
+          <div class="flex flex-col gap-3 py-2">
+            <section v-for="group in reviewGroups" :key="group.key" class="flex flex-col gap-2">
+              <div class="px-4 text-xs font-medium text-base-content/60">
+                {{ group.title }}
+              </div>
+              <ToolReviewItemCard
+                v-for="item in group.items"
+                :key="`${group.key}:${item.callId}`"
+                :item="item"
+                :detail="detailMap[item.callId]"
+                :loading="detailLoadingCallId === item.callId"
+                :reviewing="reviewingCallId === item.callId"
+                @load-detail="emit('loadItemDetail', $event)"
+                @review="emit('reviewItem', $event)"
+              />
+            </section>
           </div>
           <div v-if="batches.length > 1" class="mt-auto pb-2 pt-2">
             <div class="join flex justify-center">
@@ -132,7 +137,9 @@
 import { computed, ref, useAttrs, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import MarkdownRender, { enableKatex, enableMermaid, getMarkdown, parseMarkdownToStructure } from "markstream-vue";
-import type { ToolReviewBatchSummary, ToolReviewItemDetail } from "../composables/use-chat-tool-review";
+import type { ShellWorkspace } from "../../../types/app";
+import { defaultWorkspaceNameFromPath, inferWorkspaceName, isLegacyGenericWorkspaceName, normalizeWorkspaceLevel } from "../../../utils/shell-workspaces";
+import type { ToolReviewBatchSummary, ToolReviewItemDetail, ToolReviewItemSummary } from "../composables/use-chat-tool-review";
 import { registerChatMarkstreamComponents } from "../markdown/register-chat-markstream";
 import ToolReviewItemCard from "./ToolReviewItemCard.vue";
 
@@ -175,6 +182,9 @@ const props = defineProps<{
   errorText: string;
   reportErrorText: string;
   markdownIsDark: boolean;
+  currentWorkspaceName: string;
+  currentWorkspaceRootPath: string;
+  workspaces: ShellWorkspace[];
 }>();
 
 const emit = defineEmits<{
@@ -224,9 +234,157 @@ const submitting = computed(() =>
   !!currentBatch.value && props.submittingBatchKey === currentBatch.value.batchKey
 );
 
+type ToolReviewGroup = {
+  key: string;
+  title: string;
+  firstOrderIndex: number;
+  items: ToolReviewItemSummary[];
+};
+
+const reviewGroups = computed<ToolReviewGroup[]>(() => {
+  const terminalItems = [] as ToolReviewItemSummary[];
+  const patchGroups = new Map<string, ToolReviewGroup>();
+  for (const item of currentBatch.value?.items ?? []) {
+    if (item.toolName === "shell_exec") {
+      terminalItems.push(item);
+      continue;
+    }
+    if (item.toolName !== "apply_patch") {
+      continue;
+    }
+    const paths = Array.isArray(item.affectedPaths) ? item.affectedPaths.filter(Boolean) : [];
+    const key = paths.length === 1 ? paths[0] : "__multi_patch__";
+    const title = paths.length === 1
+      ? formatPatchGroupTitle(paths[0])
+      : t("chat.toolReview.patchMultiFileGroup");
+    const group = patchGroups.get(key) || {
+      key: `patch:${key}`,
+      title,
+      firstOrderIndex: Number(item.orderIndex || 0),
+      items: [],
+    };
+    group.firstOrderIndex = Math.min(group.firstOrderIndex, Number(item.orderIndex || 0));
+    group.items.push(item);
+    patchGroups.set(key, group);
+  }
+  const groups = [] as ToolReviewGroup[];
+  if (terminalItems.length > 0) {
+    groups.push({
+      key: "terminal",
+      title: t("chat.toolReview.terminalGroup"),
+      firstOrderIndex: Math.min(...terminalItems.map((item) => Number(item.orderIndex || 0))),
+      items: terminalItems.sort(sortByOrderIndex),
+    });
+  }
+  groups.push(
+    ...Array.from(patchGroups.values())
+      .map((group) => ({ ...group, items: group.items.sort(sortByOrderIndex) }))
+      .sort((a, b) => a.firstOrderIndex - b.firstOrderIndex)
+  );
+  return groups;
+});
+
 const currentBatchUnreviewedCount = computed(() =>
   currentBatch.value?.items.filter((item) => !item.hasReview).length ?? 0
 );
+
+function sortByOrderIndex(left: ToolReviewItemSummary, right: ToolReviewItemSummary) {
+  return Number(left.orderIndex || 0) - Number(right.orderIndex || 0);
+}
+
+function formatPatchGroupTitle(path: string) {
+  const normalized = String(path || "").replace(/\\/g, "/").trim();
+  if (!normalized) return t("chat.toolReview.patchUnknownFileGroup");
+  return compactPathByWorkspace(normalized);
+}
+
+function compactPathByWorkspace(path: string) {
+  const normalizedPath = normalizePathForDisplay(path);
+  const matches = workspacePathDisplayCandidates.value
+    .map((candidate) => {
+      const root = candidate.root;
+      if (!root) return null;
+      if (isSameNormalizedPath(normalizedPath, root)) {
+        return { root, name: candidate.name, rest: "" };
+      }
+      if (!isPathUnderWorkspace(normalizedPath, root)) return null;
+      return {
+        root,
+        name: candidate.name,
+        rest: normalizedPath.slice(root.length + 1),
+      };
+    })
+    .filter((item): item is { root: string; name: string; rest: string } => !!item)
+    .sort((left, right) => right.root.length - left.root.length);
+  const matched = matches[0];
+  if (!matched) return normalizedPath;
+  return matched.rest ? `${matched.name}/${matched.rest}` : matched.name;
+}
+
+const workspacePathDisplayCandidates = computed(() =>
+  [currentWorkspaceCandidate.value, ...workspaceListCandidates.value]
+    .filter((item): item is { root: string; name: string } => !!item)
+    .sort((left, right) => right.root.length - left.root.length)
+);
+
+const currentWorkspaceCandidate = computed(() => {
+  const root = normalizePathForDisplay(props.currentWorkspaceRootPath);
+  if (!root) return null;
+  const matchedWorkspace = (Array.isArray(props.workspaces) ? props.workspaces : []).find((workspace) =>
+    isSameNormalizedPath(root, normalizePathForDisplay(workspace.path))
+  );
+  const currentName = String(props.currentWorkspaceName || "").trim();
+  const matchedName = currentName || (matchedWorkspace ? workspaceDisplayName(matchedWorkspace, root, 0) : "");
+  return {
+    root,
+    name: matchedName || defaultWorkspaceNameFromPath(root) || root,
+  };
+});
+
+const workspaceListCandidates = computed(() =>
+  (Array.isArray(props.workspaces) ? props.workspaces : [])
+    .map((workspace, index) => {
+      const root = normalizePathForDisplay(workspace.path);
+      if (!root) return null;
+      return {
+        root,
+        name: workspaceDisplayName(workspace, root, index),
+      };
+    })
+    .filter((item): item is { root: string; name: string } => !!item)
+);
+
+function normalizePathForDisplay(path: string) {
+  return String(path || "")
+    .replace(/^\\\\\?\\/, "")
+    .replace(/^\/\/\?\//, "")
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .trim();
+}
+
+function normalizePathForCompare(path: string) {
+  return normalizePathForDisplay(path).toLowerCase();
+}
+
+function isSameNormalizedPath(path: string, root: string) {
+  return normalizePathForCompare(path) === normalizePathForCompare(root);
+}
+
+function isPathUnderWorkspace(path: string, root: string) {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedRoot = normalizePathForCompare(root);
+  return normalizedPath.startsWith(`${normalizedRoot}/`);
+}
+
+function workspaceDisplayName(workspace: ShellWorkspace, root: string, index: number) {
+  const level = normalizeWorkspaceLevel(String(workspace.level || ""));
+  const rawName = String(workspace.name || "").trim();
+  if (!isLegacyGenericWorkspaceName(level, rawName)) {
+    return rawName;
+  }
+  return inferWorkspaceName(level, root, index) || defaultWorkspaceNameFromPath(root) || root;
+}
 
 const reportMarkdownNodes = computed(() =>
   parseMarkdownToStructure(

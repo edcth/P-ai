@@ -99,6 +99,8 @@
       :user-alias="userAlias"
       :selected-persona-name="currentForegroundPersona?.name || t('archives.roleAssistant')"
       :current-chat-workspace-name="chatWorkspaceName"
+      :current-chat-workspace-root-path="chatWorkspaceRootPath"
+      :current-chat-workspaces="chatWorkspaceChoices"
       :user-avatar-url="userAvatarUrl"
       :selected-persona-avatar-url="currentForegroundPersonaAvatarUrl"
       :chat-persona-name-map="chatPersonaNameMap"
@@ -1504,6 +1506,7 @@ const chatUnarchivedConversationItems = computed(() => {
 });
 const {
   chatWorkspaceName,
+  chatWorkspaceRootPath,
   chatWorkspacePickerOpen,
   chatWorkspaceChoices,
   refreshChatWorkspaceState,

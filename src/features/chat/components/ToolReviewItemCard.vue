@@ -4,13 +4,13 @@
       <div class="flex items-center justify-between gap-3">
         <div class="min-w-0 flex items-center gap-2">
           <div class="shrink-0 text-sm text-base-content/60">#{{ item.orderIndex }}</div>
-          <div class="truncate text-sm">{{ item.toolName }}</div>
+          <div class="truncate text-sm">{{ title }}</div>
         </div>
         <div
           class="badge badge-sm"
           :class="item.hasReview ? 'badge-primary' : 'badge-warning'"
         >
-          {{ item.hasReview ? t("chat.toolReview.reviewed") : t("chat.toolReview.unreviewed") }}
+          {{ item.hasReview ? t("chat.toolReview.evaluated") : t("chat.toolReview.unevaluated") }}
         </div>
       </div>
     </summary>
@@ -49,7 +49,7 @@
   </details>
   <ToolReviewChangesDialog
     ref="changesDialogRef"
-    :title="item.toolName"
+    :title="title"
     :subtitle="`#${item.orderIndex}`"
     :show-preview="!!detail"
     :preview-mode="detail?.previewKind === 'patch' ? 'patch' : 'plain'"
@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Eye, RotateCcw } from "lucide-vue-next";
 import type { ToolReviewItemDetail, ToolReviewItemSummary } from "../composables/use-chat-tool-review";
@@ -79,6 +79,23 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const changesDialogRef = ref<{ openChangesDialog: () => void; closeChangesDialog: () => void } | null>(null);
+
+const title = computed(() => {
+  if (props.item.toolName === "shell_exec") {
+    return String(props.item.command || "").trim() || t("chat.toolReview.terminalCommand");
+  }
+  if (props.item.toolName === "apply_patch") {
+    return patchOperationLabel(props.item.patchOperation);
+  }
+  return props.item.toolName;
+});
+
+function patchOperationLabel(operation?: string) {
+  if (operation === "add") return t("chat.toolReview.patchOperationAdd");
+  if (operation === "delete") return t("chat.toolReview.patchOperationDelete");
+  if (operation === "mixed") return t("chat.toolReview.patchOperationMixed");
+  return t("chat.toolReview.patchOperationUpdate");
+}
 
 function handleToggle(event: Event) {
   const target = event.currentTarget as HTMLDetailsElement | null;

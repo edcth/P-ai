@@ -4,6 +4,108 @@ struct ToolReviewConversationInput {
     conversation_id: String,
 }
 
+fn tool_review_command_for_item(item: &ToolReviewCollectedItem) -> Option<String> {
+    item.result_value
+        .as_ref()
+        .and_then(|value| tool_review_json_string_field(value, "command"))
+        .or_else(|| tool_review_json_string_field(&item.args_value, "command"))
+        .or_else(|| {
+            let trimmed = item.args_text.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+        .map(ToOwned::to_owned)
+}
+
+fn tool_review_extract_patch_paths_from_text(input: &str) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    for line in input.lines() {
+        let value = line
+            .strip_prefix("*** Add File: ")
+            .or_else(|| line.strip_prefix("*** Delete File: "))
+            .or_else(|| line.strip_prefix("*** Update File: "))
+            .or_else(|| line.strip_prefix("*** Move to: "))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(path) = value {
+            out.push(path.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn tool_review_patch_paths_for_item(item: &ToolReviewCollectedItem) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    if let Some(changed) = item
+        .result_value
+        .as_ref()
+        .and_then(|value| value.get("changed"))
+        .and_then(Value::as_array)
+    {
+        for entry in changed {
+            for key in ["path", "from", "to"] {
+                if let Some(path) = tool_review_json_string_field(entry, key) {
+                    out.push(path.to_string());
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        let (_, preview_text) = tool_review_preview_for_item(item);
+        out.extend(tool_review_extract_patch_paths_from_text(&preview_text));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn tool_review_patch_operation_for_item(item: &ToolReviewCollectedItem) -> Option<String> {
+    let mut operations = Vec::<String>::new();
+    if let Some(changed) = item
+        .result_value
+        .as_ref()
+        .and_then(|value| value.get("changed"))
+        .and_then(Value::as_array)
+    {
+        for entry in changed {
+            if let Some(op) = tool_review_json_string_field(entry, "op") {
+                let normalized = match op {
+                    "add" => "add",
+                    "delete" => "delete",
+                    "update" | "update_move" => "update",
+                    _ => "update",
+                };
+                operations.push(normalized.to_string());
+            }
+        }
+    }
+    if operations.is_empty() {
+        let (_, preview_text) = tool_review_preview_for_item(item);
+        for line in preview_text.lines() {
+            let operation = if line.starts_with("*** Add File: ") {
+                Some("add")
+            } else if line.starts_with("*** Delete File: ") {
+                Some("delete")
+            } else if line.starts_with("*** Update File: ") {
+                Some("update")
+            } else {
+                None
+            };
+            if let Some(operation) = operation {
+                operations.push(operation.to_string());
+            }
+        }
+    }
+    operations.sort();
+    operations.dedup();
+    match operations.as_slice() {
+        [] => None,
+        [single] => Some(single.clone()),
+        _ => Some("mixed".to_string()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolReviewCallInput {
@@ -45,6 +147,12 @@ struct ToolReviewItemSummary {
     tool_name: String,
     order_index: usize,
     has_review: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    affected_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    patch_operation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +474,21 @@ fn tool_review_batch_summary_from_collected(batch: &ToolReviewCollectedBatch) ->
                 tool_name: item.tool_name.clone(),
                 order_index: item.order_index,
                 has_review: item.review_value.is_some(),
+                affected_paths: if item.tool_name == "apply_patch" {
+                    tool_review_patch_paths_for_item(item)
+                } else {
+                    Vec::new()
+                },
+                patch_operation: if item.tool_name == "apply_patch" {
+                    tool_review_patch_operation_for_item(item)
+                } else {
+                    None
+                },
+                command: if item.tool_name == "shell_exec" {
+                    tool_review_command_for_item(item)
+                } else {
+                    None
+                },
             })
             .collect(),
         report: batch.report.clone(),
@@ -733,7 +856,7 @@ fn tool_review_submission_user_prompt(
                     value.review_opinion
                 }
             })
-            .unwrap_or_else(|| "尚未生成工具审查意见。".to_string());
+            .unwrap_or_else(|| "尚未生成评估意见。".to_string());
         let result_text = item.result_text.trim();
         let result_preview = if result_text.chars().count() > 800 {
             format!("{}...", result_text.chars().take(800).collect::<String>())

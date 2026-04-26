@@ -153,6 +153,8 @@
         :latest-own-message-align-request="latestOwnMessageAlignRequest"
         :conversation-scroll-to-bottom-request="conversationScrollToBottomRequest"
         :current-workspace-name="currentChatWorkspaceName"
+        :current-workspace-root-path="currentChatWorkspaceRootPath"
+        :workspaces="currentChatWorkspaces"
         :active-conversation-id="currentChatConversationId"
         :current-todos="currentChatTodos"
         :supervision-active="chatSupervisionActive"
@@ -347,6 +349,7 @@ import type {
   PersonaProfile,
   PromptCommandPreset,
   ResponseStyleOption,
+  ShellWorkspace,
   ToolLoadStatus,
   UnarchivedConversationSummary,
 } from "../../../types/app";
@@ -474,6 +477,8 @@ const props = defineProps<{
   latestOwnMessageAlignRequest: number;
   conversationScrollToBottomRequest: number;
   currentChatWorkspaceName: string;
+  currentChatWorkspaceRootPath: string;
+  currentChatWorkspaces: ShellWorkspace[];
   currentChatConversationId: string;
   currentChatTodos: ChatTodoItem[];
   chatSupervisionActive: boolean;

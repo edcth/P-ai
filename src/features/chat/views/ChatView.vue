@@ -415,6 +415,9 @@
         :error-text="toolReviewErrorText"
         :report-error-text="toolReviewReportErrorText"
         :markdown-is-dark="markdownIsDark"
+        :current-workspace-name="currentWorkspaceName"
+        :current-workspace-root-path="currentWorkspaceRootPath"
+        :workspaces="workspaces"
         @select-batch="setToolReviewCurrentBatchKey"
         @load-item-detail="loadToolReviewItemDetail"
         @review-item="runToolReviewForCall"
@@ -433,7 +436,7 @@ import { isDarkAppTheme } from "../../shell/composables/use-app-theme";
 import { ChevronsDown, History, ListTodo } from "lucide-vue-next";
 import "markstream-vue/index.css";
 import { invokeTauri } from "../../../services/tauri-api";
-import type { ApiConfigItem, ChatConversationOverviewItem, ChatMentionTarget, ChatMessageBlock, ChatPersonaPresenceChip, ChatTodoItem, PromptCommandPreset } from "../../../types/app";
+import type { ApiConfigItem, ChatConversationOverviewItem, ChatMentionTarget, ChatMessageBlock, ChatPersonaPresenceChip, ChatTodoItem, PromptCommandPreset, ShellWorkspace } from "../../../types/app";
 import ChatMessageItem from "../components/ChatMessageItem.vue";
 import ChatApprovalPanel from "../components/ChatApprovalPanel.vue";
 import ChatComposerPanel from "../components/ChatComposerPanel.vue";
@@ -504,6 +507,8 @@ const props = defineProps<{
   latestOwnMessageAlignRequest: number;
   conversationScrollToBottomRequest: number;
   currentWorkspaceName: string;
+  currentWorkspaceRootPath: string;
+  workspaces: ShellWorkspace[];
   activeConversationId: string;
   currentTodos: ChatTodoItem[];
   supervisionActive: boolean;

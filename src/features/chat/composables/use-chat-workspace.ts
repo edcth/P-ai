@@ -38,6 +38,7 @@ export function useChatWorkspace(options: UseChatWorkspaceOptions) {
   const DEFAULT_CHAT_WORKSPACE_NAME = t("chat.defaultWorkspace");
   const chatWorkspaceName = ref(DEFAULT_CHAT_WORKSPACE_NAME);
   const chatWorkspacePath = ref("");
+  const chatWorkspaceRootPath = ref("");
   const chatWorkspacePickerOpen = ref(false);
   const chatWorkspaceItems = ref<ShellWorkspace[]>([]);
 
@@ -82,6 +83,7 @@ export function useChatWorkspace(options: UseChatWorkspaceOptions) {
 
   function applyChatWorkspaceState(state: ChatShellWorkspaceState) {
     const nextPath = String(state.rootPath || "").trim();
+    chatWorkspaceRootPath.value = nextPath;
     chatWorkspaceItems.value = Array.isArray(state.workspaces) ? state.workspaces : [];
     chatWorkspaceName.value = resolveWorkspaceDisplayName(nextPath, String(state.workspaceName || "").trim());
     chatWorkspacePath.value = nextPath;
@@ -109,6 +111,7 @@ export function useChatWorkspace(options: UseChatWorkspaceOptions) {
     if (!apiConfigId || !agentId) {
       chatWorkspaceName.value = DEFAULT_CHAT_WORKSPACE_NAME;
       chatWorkspacePath.value = "";
+      chatWorkspaceRootPath.value = "";
       chatWorkspaceItems.value = [];
       return;
     }
@@ -168,6 +171,7 @@ export function useChatWorkspace(options: UseChatWorkspaceOptions) {
   return {
     chatWorkspaceName,
     chatWorkspacePath,
+    chatWorkspaceRootPath,
     chatWorkspacePickerOpen,
     chatWorkspaceChoices,
     refreshChatWorkspaceState,

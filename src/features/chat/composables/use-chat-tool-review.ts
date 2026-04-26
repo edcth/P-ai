@@ -15,6 +15,9 @@ export type ToolReviewItemSummary = {
   toolName: string;
   orderIndex: number;
   hasReview: boolean;
+  affectedPaths?: string[];
+  patchOperation?: "add" | "update" | "delete" | "mixed" | string;
+  command?: string;
 };
 
 export type ToolReviewReportSummary = {
