@@ -1,219 +1,190 @@
-# π师傅
+# P-ai（π师傅）
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Tauri](https://img.shields.io/badge/Tauri-2-24C8D8?logo=tauri)](https://tauri.app)
-[![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org)
-[![Rust](https://img.shields.io/badge/Rust-Desktop-000000?logo=rust)](https://www.rust-lang.org)
+[![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8D8?logo=tauri)](https://tauri.app)
+[![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org)
+[![Rust](https://img.shields.io/badge/Rust-000000?logo=rust)](https://www.rust-lang.org)
+[![Release](https://img.shields.io/badge/Release-0.9.50-6366f1)](https://github.com/kawayiYokami/P-ai/releases)
 
-**语言 / Languages**  
+**Languages / 语言**
 [简体中文](README.md) | [繁體中文](docs/readme/README.zh-TW.md) | [English](docs/readme/README.en-US.md) | [日本語](docs/readme/README.ja-JP.md)
 
 ---
 
-> 把 LLM 从“聊天网页”推进成“长期工作的桌面 AI 系统”。
+> **A self-growing desktop AI work system — ready-to-use, long-running, with agent delegation, memory, tool review, MCP, and high-concurrency workspace automation.**
+>
+> **开箱即用的自我成长型桌面 AI 工作系统 — 部门委派、长期记忆、工具审查、MCP、高并发工作区自动化。**
 
-π师傅是一个 Windows 优先、同时支持 Linux 发布的桌面 AI 助手。  
-它不是只会问答的聊天框，而是一个带有：
+---
 
-- 全局热键呼出
-- 托盘常驻
-- 多人格 / 多部门 / 多模型协作
-- 任务与督工
-- Skill 与 MCP 工作区
-- 自动归档与长期记忆
-- 工具执行、审批与审查
+## 它是什么
 
-的桌面 AI 工作中枢。
+P-ai 不是另一个 AI 聊天客户端。
 
-如果你想要的是“问一句答一句”的界面，这个项目可能不是重点。  
-如果你想要的是“能长期推进任务、管理上下文、管理工具边界、管理组织结构”的桌面 AI，这就是它要做的事。
+它默认驻留在你的桌面（Windows/Linux），有全局热键、系统托盘、独立多窗口。但它真正的不同在于：**它内部有一套完整的组织系统**。
 
-## 0.8 之后，它进化成了什么
+主助理、副手部门、远程客服部门、私有人格、私有 Skill —— 这些不是抽象概念，而是实际运行在系统中的协作单元。AI 不只是"回答者"，而是可以委派任务、协同工作、接受审查的组织。
 
-如果你很久没看这个项目，最容易低估的就是：  
-它已经不是“桌面聊天 + 几个工具”了。
+---
 
-从 `0.8` 往后，这个项目连续做出了几条非常重的能力跃迁：
+## 如果你很久没看这个项目
 
-- **远程 IM 接入正式成型**
-  - 个人微信
-  - OneBot / NapCat
-  - 钉钉 Stream
-  - 联系人级收发权限、激活策略、后台入队与会话回流
+最容易低估的是：它已经不是一个"聊天框 + 几个工具"了。
 
-- **聊天从单轮问答进化成长期协作系统**
-  - 多会话并行
-  - 会话级 Todo
-  - 计划模式
-  - 督工任务
-  - 长对话自动归档与压缩
+从 0.8 往后，连续做出了几条重型能力跃迁：
 
-- **工具链从“能调”进化到“可审、可追溯、可批量评估”**
-  - 终端审批
-  - `apply_patch` 审批
-  - 工具审查模型
-  - 批次评估
-  - 最终审查报告
+### 工具治理系统 — 领先多数大公司工程团队数月
 
-- **工作区从“目录概念”进化到“会话级运行环境”**
-  - 会话主工作目录
-  - `AGENTS.md` 自动注入
-  - 私有部门 / 私有人格 / 私有 Skill 刷新
+它不是"能调工具"，而是有完整的工具审查链：终端命令审批、`apply_patch` 补丁审查、可配置的审查专用模型、单工具评估、批次评估、最终审查报告。工具调用结果可追溯、可回看、可审核。AI 不仅执行，还要接受评审。
 
-- **模型接入层完成重构**
-  - 全量迁移到 `rust-genai`
-  - 接入 Codex 协议与账号登录
-  - 多供应商、多角色模型分工更稳定
+这种"让 AI 审查 AI 的工具使用"的机制，在桌面 AI 领域几乎没有第二家做到。
 
-- **桌面体验已经非常不像“套壳网页”**
-  - 自定义 Markdown 渲染链
-  - 图片预览支持缩放与拖拽
-  - Windows 安装版 / 便携版自动更新
-  - 大量围绕流式、任务、审批、归档的细节打磨
+### 多部门委派架构 — 让 AI 像组织一样工作
 
-一句话说：
+主助理可以将任务委派给副手部门，远程客服部门自动承接 IM 消息并按办事指南决策。每个部门有独立人格、独立工具权限、独立 Skill 和 MCP。私有人格和私有部门可以按需创建，支持运行时热刷新。
 
-> 它已经从“桌面 AI 客户端”进化成“带任务系统、组织系统、工作区系统、审查系统、远程渠道系统的桌面 AI 平台”。  
+这不是"一个模型换换人设"，而是有真实边界、真实权限、真实委派链的组织化协作。
 
-## 现在它已经能做什么
+### 长期记忆与上下文治理 — 不死记硬背，精准检索
 
-### 1. 真正驻留在桌面的 AI
+长对话自动归档，归档时生成总结并提取长期记忆。记忆通过 RAG 延迟注入提示词，用户画像快照持续维护。上下文压缩走统一 `SummaryContext` 管线，不是粗暴截断，而是结构化整理。
 
-- 全局热键唤起 / 隐藏聊天窗
-- 系统托盘常驻
-- 独立配置窗、聊天窗、归档窗
-- 不需要把工作切走到浏览器里
+效果是：AI 能记住几个月前的对话，但不会让上下文无限膨胀。
 
-### 2. 不只是一个助手，而是一套组织
+### 工作区感知 — AI 真正理解你在哪个项目里
 
-- 主助理 + 部门 + 人格
-- 支持把任务委派给下属角色
-- 支持后台协作与回流汇报
-- 支持私有部门、私有人格、私有工作区
+每个会话可以绑定不同的主工作目录。`AGENTS.md` 自动注入让 AI 立即理解当前项目的编码规范、架构约定、发布流程。工具执行（终端、补丁）在对应工作区上下文中运行，路径自动压缩显示。
 
-这意味着它不是“一个模型硬扛所有事”，而是开始具备组织化协同能力。
+这比任何"上传文件到聊天"的体验都更接近真正的开发协作。
 
-### 3. 不是一次性问答，而是长期任务推进
+### 远程 IM 接入 — AI 进入真实社交网络
 
-- 任务创建、追踪、提醒、完成
-- 督工任务与计划模式
-- 会话级 Todo 与任务状态胶囊
-- 长期事项可以分阶段推进
-- 会话丢失、归档、恢复都有配套链路
+个人微信、OneBot/NapCat、钉钉 Stream 已接入。支持联系人级收发权限、激活策略、后台入队、会话回流。远程消息和本地对话走同一套会话、任务、归档链路。
 
-### 4. 不只是会调工具，还会审工具
+不是"AI 帮你回消息"，而是"你的 AI 组织里有一个部门专门负责远程联络"。
 
-- `shell_exec` / `apply_patch` 支持审批
-- 可配置“工具审查模型”
-- 支持单工具评估、批量评估、最终审查报告
-- 支持原始变更预览、补丁预览、审查意见回看
-- 支持终端与补丁结果写回工具消息，便于后续追踪
+### 高并发架构 — 从第一天就为多任务设计
 
-项目的目标不是盲目放工具，而是让工具调用可解释、可追溯、可控。
+后端 Rust 异步运行时，供应商级串行请求门、零拷贝热路径、只读快路径缓存、消息 JSONL 分片存储。前端虚拟滚动、首屏轻量快照、流式通道重建。
 
-### 5. 不只是本地聊天，还能接远程渠道
+不是"能跑就行"，而是系统性地压低了每条热路径的延迟和内存开销。
 
-- 支持远程 IM 渠道接入
-- 支持联系人级收发控制
-- 支持激活策略、冷却与自动发送决策
-- 远程消息可以进入统一会话与任务链路
+---
 
-### 6. Skill + MCP 工作区
+## 现在它能做什么
 
-- 支持预设 Skill
-- 支持工作区内安装 / 编写 / 刷新 Skill
-- 支持 MCP 工具接入
-- 能按人格 / 部门边界控制工具能力
-- 支持会话主工作目录 `AGENTS.md` 自动注入提示词
+### 桌面常驻
 
-这让 AI 的能力扩展不是“堆插件”，而是有运行时边界、有组织归属的系统化扩展。
+- 全局热键呼出 / 隐藏，系统托盘常驻
+- 独立配置窗、聊天窗、归档窗，无边框原生窗口
+- Windows 安装版 + 便携版 + Linux .deb/AppImage，应用内自动更新
 
-### 7. 长期记忆、自动归档、上下文治理
+### 组织化 AI
 
-- 长对话自动归档
-- 上下文压缩与整理
-- 低成本记忆回灌
-- 会话与归档并行存在
-- 后端统一计算上下文占用
+- 主助理 + 副手部门 + 远程客服部门 + 自建私有部门
+- 私有人格 / 私有 Skill / 私有 MCP，运行时热刷新
+- 部门级工具权限与办事指南
+- 会话绑定部门，部门决定人格、模型、工具范围
 
-项目不追求“无限塞上下文”，而是追求“长期活着且成本可控”。
+### 任务与督工
 
-### 8. 多模型、多供应商统一运行
+- 会话级 Todo，督促任务，计划模式
+- 长期任务分阶段推进，跨会话追踪
+- 暂停 / 恢复 / 完成状态流转
 
-当前后端统一适配多种 API 形态，包括：
+### 工具审查系统
 
-- `openai`
-- `anthropic`
-- `gemini`
-- `openai_tts`
+- `shell_exec` / `apply_patch` 审批链路
+- 可配置审查专用模型（与对话模型分离）
+- 单工具评估 → 批次评估 → 最终审查报告
+- 终端/补丁分组展示，路径压缩，原始变更预览
+- 审查意见写回工具消息，完整追溯链
 
-同时支持：
+### 长期记忆
 
-- 多 API 配置
-- 不同角色使用不同模型
-- 流式输出
-- 工具调用与上下文拼装
-- Codex 协议与账号登录
-- 多模态输入与图片回退治理
+- 自动归档 + 结构化总结 + 记忆提取
+- RAG 延迟注入，用户画像持续维护
+- 上下文统一压缩管线，成本可控
 
-### 9. 桌面交互体验已经重做过很多轮
+### 工作区感知
 
-- 聊天窗口流式体验与动画收口
-- 自定义 Markdown 渲染链
-- 图片预览支持缩放 / 拖拽
-- 本地文件链接定位打开
-- 输入面板指令系统
-- 聊天工具栏、Todo 浮层、模型切换等交互持续打磨
+- 会话主工作目录绑定
+- `AGENTS.md` 自动注入提示词
+- 路径压缩显示（`easy_call_ai/src/...`）
+- 终端/补丁在工作区上下文中执行
+
+### 远程 IM
+
+- 个人微信 / OneBot (NapCat) / 钉钉 Stream
+- 联系人级权限与激活策略
+- 后台入队，会话回流，统一任务链路
+
+### 模型体系
+
+- OpenAI / Anthropic / Gemini / DeepSeek / Kimi / Codex
+- 供应商级并发控制，流式输出
+- 思维链推理保留与回传（DeepSeek/Kimi）
+- 多模态图片 + 视觉描述降级
+
+### 桌面体验
+
+- 流式 Markdown 渲染（Shiki 代码高亮、Mermaid 图表、KaTeX 数学）
+- 图片预览缩放/拖拽，本地文件链接定位打开
+- 虚拟滚动、消息多选、草稿保留、队列引导
+- 自定义深色/浅色主题生成
+
+---
 
 ## 一个典型工作流
 
-### 临时协作
+### 日常使用
 
-1. 热键呼出聊天窗
-2. 粘贴文本、图片、截图或附件
-3. 让 AI 直接回答、分析或调用工具
-4. 完成后收起窗口，继续当前工作
+1. 热键呼出，问一个问题，热键隐藏。和 Spotlight 一样快，但回答你的是一个有记忆、有上下文的 AI。
 
-### 长期事项推进
+### 开发协作
 
-1. 让 AI 创建任务或计划
-2. 设定持续推进目标
-3. 由主助理或部门持续跟进
-4. 需要时自动回顾上下文与历史改动
-
-### 开发 / 运维辅助
-
-1. AI 调用终端或补丁工具
+1. AI 调用终端或 `apply_patch` 修改代码
 2. 工具结果进入审查链路
-3. 用户查看评估意见、补丁内容、最终审查报告
-4. 再决定是否继续提交、继续修改或中断
+3. 审查模型生成评估意见、批次报告
+4. 你审核后决定批准、驳回或继续修改
 
-## 为什么它和普通 AI 客户端不一样
+### 长期推进
 
-很多 AI 产品的问题，不是模型不够强，而是系统层太薄：
+1. 创建任务，设定目标
+2. AI 分阶段推进，自动回顾历史上下文
+3. 长时间未处理的事项自动归档，但记忆保留
+4. 任何时候回来都能继续，不需要重述背景
 
-| 常见问题 | 结果 |
+### 远程联动
+
+1. 微信/钉钉收到消息
+2. 远程客服部门接管，按办事指南决策
+3. 重要事项回流到任务系统
+4. 你在桌面看到完整的处理记录和待办
+
+---
+
+## 为什么它和所有 AI 客户端都不一样
+
+大多数 AI 产品的问题不是模型不够强，而是**系统层太薄**：
+
+| 常见缺失 | P-ai 的做法 |
 |---|---|
-| 只有聊天，没有任务 | AI 只能回答，不能持续推进 |
-| 没有稳定身份和组织 | 所有事都塞给一个角色 |
-| 没有长期工作区 | 每轮都像失忆重开 |
-| 工具没有治理 | 容易失控，也难追责 |
-| 记忆全靠堆上下文 | 成本高、稳定性差 |
+| 只有聊天，没有任务系统 | 会话级 Todo + 督工任务 + 计划模式，AI 能持续推进 |
+| 所有事塞给一个角色 | 主助理 + 副手 + 远程客服 + 私有人格，有边界有权限 |
+| 每次打开像失忆重开 | 长期记忆 RAG + 自动归档 + 用户画像持续维护 |
+| 工具能调但不能审 | 审查模型 + 终端审批 + 补丁审查 + 批次评估 + 最终报告 |
+| 上下文无限膨胀 | 统一 SummaryContext 压缩管线，成本可控 |
+| 不会真的进工作目录 | 工作区绑定 + AGENTS.md 注入 + 路径感知执行 |
+| 和社交网络割裂 | 微信 / OneBot / 钉钉 + 联系人权限 + 激活策略 |
+| 一个模型吃所有场景 | 多供应商 + 部门级模型分工 + 审查专用模型分离 |
 
-π师傅的方向正相反：
-
-- 给 AI 身份
-- 给 AI 部门
-- 给 AI 委派链
-- 给 AI 工作区
-- 给 AI 工具边界
-- 给 AI 审查与归档
-- 给 AI 长期记忆
+P-ai 的方向是：**给 AI 身份、部门、委派链、工作区、工具边界、审查机制、长期记忆、远程渠道。**
 
 ## 技术栈
 
 - 桌面壳：Tauri 2
-- 后端：Rust
+- 后端：Rust（异步，tokio）
 - 前端：Vue 3 + TypeScript + Vite
 - UI：DaisyUI + Tailwind CSS
 - 包管理：pnpm
@@ -251,35 +222,31 @@ pnpm tauri build
 
 当前发布策略：
 
-- Windows 安装版：NSIS
-- Windows 便携版：zip + `PORTABLE` 标记文件
-- Linux：`.deb` / `AppImage`
-
-当前应用内自动更新覆盖：
-
-- Windows 安装版
-- Windows 便携版
-
-Linux 目前保留发布构建链路，但不走应用内自动更新。
+- Windows：NSIS 安装版 + zip 便携版（`PORTABLE` 标记），应用内自动更新
+- Linux：`.deb` / `AppImage`，保留发布链路
 
 ## 数据与隐私
 
-- API Key 默认保存在本地
-- 对话、任务、归档、工作区、媒体等数据默认保存在本地
-- 便携版可切换到可执行文件同级 `data/` 目录
-- 你可以自行管理、导出、清理这些数据
+- API Key 保存在本地，不经过任何中间服务器
+- 对话、任务、归档、记忆、媒体全部本地存储
+- 便携版数据在可执行文件同级 `data/`，U 盘即插即用
+- 你可以自行管理、导出、清理所有数据
 
 ## 适合谁
 
-- 想把 LLM 真正放进桌面工作流的人
-- 不满足于“只会聊天”的 AI 工具的人
-- 需要长期任务推进与上下文治理的人
-- 希望 AI 有组织能力、委派能力、审查能力的人
-- 喜欢自己塑造 Skill / MCP / 人格 / 部门体系的人
+- 想把 AI 真正放进桌面工作流的开发者
+- 不满足于"只会聊天"的 AI 工具的人
+- 需要长期任务推进、而不是一次一清的人
+- 希望 AI 有审查能力、不是盲目放权的人
+- 对 AI 组织化协作有想象力的人
 
-## Arch Linux 安装（yay）
+## 快速开始
 
-如果你在 Arch Linux / Manjaro 上，希望从本项目仓库直接安装：
+### Windows
+
+从 [Releases](https://github.com/kawayiYokami/P-ai/releases) 下载安装版或便携版。
+
+### Arch Linux
 
 ```bash
 git clone https://github.com/kawayiYokami/P-ai.git
@@ -297,17 +264,7 @@ chmod +x install-with-yay.sh
 
 ## 致谢
 
-这个项目能走到今天，离不开这些重要依赖和上游项目：
-
-- [Tauri](https://tauri.app/) 与相关插件：桌面壳、托盘、全局快捷键、更新能力
-- [Vue 3](https://vuejs.org/)：前端响应式基础
-- [DaisyUI](https://daisyui.com/) 与 [Tailwind CSS](https://tailwindcss.com/)：界面系统
-- [markstream-vue](https://www.npmjs.com/package/markstream-vue)、[stream-markdown](https://www.npmjs.com/package/stream-markdown)、[Shiki](https://shiki.style/)、[Mermaid](https://mermaid.js.org/)、[KaTeX](https://katex.org/)：流式 Markdown 与代码 / 图表渲染
-- [genai](https://github.com/jeremychone/rust-genai)：当前多模型接入层的重要基础，帮助项目统一连接不同模型供应商
-- [rmcp](https://github.com/modelcontextprotocol/rust-sdk) 与 MCP 生态：工具协议接入
-- [rusqlite](https://github.com/rusqlite/rusqlite)、[tantivy](https://github.com/quickwit-oss/tantivy)、[hayro](https://crates.io/crates/hayro)：本地数据、全文检索与搜索能力基础
-- [reqwest](https://github.com/seanmonstar/reqwest)、[tokio](https://tokio.rs/)：网络与异步运行时
-- [async-openai](https://github.com/64bit/async-openai) 与相关模型生态库：模型连接层的重要组成
+这个项目能走到今天，依赖这些优秀的上游项目：[Tauri](https://tauri.app/) · [Vue 3](https://vuejs.org/) · [DaisyUI](https://daisyui.com/) · [Tailwind CSS](https://tailwindcss.com/) · [rust-genai](https://github.com/jeremychone/rust-genai) · [rmcp](https://github.com/modelcontextprotocol/rust-sdk) · [Shiki](https://shiki.style/) · [Mermaid](https://mermaid.js.org/) · [KaTeX](https://katex.org/) · [markstream-vue](https://www.npmjs.com/package/markstream-vue) · [tokio](https://tokio.rs/) · [reqwest](https://github.com/seanmonstar/reqwest) · [rusqlite](https://github.com/rusqlite/rusqlite) · [tantivy](https://github.com/quickwit-oss/tantivy)
 
 也感谢所有为本项目贡献想法、测试、反馈和代码的人。
 
