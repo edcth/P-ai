@@ -215,6 +215,9 @@
                 :conversation-busy="conversationBusy"
                 :workspace-button-label="t('chat.allowedWorkspaceButton')"
                 :workspace-button-name="currentWorkspaceName"
+                :workspace-button-disabled="activeConversationSummary?.kind === 'remote_im_contact'"
+                :hide-menu-button="activeConversationSummary?.kind === 'remote_im_contact'"
+                :hide-workspace-button="activeConversationSummary?.kind === 'remote_im_contact'"
                 :persona-presence-chips="personaPresenceChips"
                 :mentionable-agent-ids="mentionableAgentIds"
                 :selected-mention-agent-ids="selectedMentionAgentIds"
@@ -222,6 +225,7 @@
                 :supervision-label="t('chat.supervision.button')"
                 :supervision-active-label="t('chat.supervision.buttonActive')"
                 :supervision-title="supervisionButtonTitle"
+                :supervision-disabled="activeConversationSummary?.kind === 'remote_im_contact'"
                 :review-button-label="toolReviewButtonLabel"
                 :review-button-count="toolReviewButtonCount"
                 :review-panel-open="toolReviewPanelOpen"
@@ -554,9 +558,10 @@ const markdownIsDark = computed(() => isDarkAppTheme(props.currentTheme));
 const activeConversationSummary = computed(() => {
   const activeConversationId = String(props.activeConversationId || "").trim();
   if (!activeConversationId) return null;
-  return (props.conversationItems || props.unarchivedConversationItems).find(
+  const matched = (props.conversationItems || props.unarchivedConversationItems).find(
     (item) => String(item.conversationId || "").trim() === activeConversationId,
   ) || null;
+  return matched;
 });
 const ephemeralBlockRenderIdMap = new WeakMap<ChatMessageBlock, string>();
 let ephemeralBlockRenderIdSeq = 0;

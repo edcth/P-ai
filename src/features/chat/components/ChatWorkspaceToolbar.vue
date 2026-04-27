@@ -2,6 +2,7 @@
   <div class="rounded-box border border-base-300 bg-base-100/70 px-2 py-1.5 flex items-center justify-between gap-2 text-[11px]">
     <div class="flex min-w-0 items-center gap-1.5">
       <div
+        v-if="!hideMenuButton"
         class="dropdown dropdown-start"
         :class="menuPlacement === 'top' ? 'dropdown-top' : 'dropdown-bottom'"
       >
@@ -28,13 +29,13 @@
             </button>
           </li>
           <li>
-            <button type="button" class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left" :disabled="busy" @click="emit('openSupervisionTask')">
+            <button type="button" class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left" :disabled="busy || supervisionDisabled" @click="emit('openSupervisionTask')">
               <Timer class="h-4 w-4 shrink-0" />
               <span class="leading-5">{{ t("chat.conversationMenu.startSupervision") }}</span>
             </button>
           </li>
           <li>
-            <button type="button" class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left" :disabled="busy" @click="emit('lockWorkspace')">
+            <button type="button" class="flex min-h-10 items-center justify-start gap-3 px-4 py-2 text-left" :disabled="busy || workspaceButtonDisabled" @click="emit('lockWorkspace')">
               <Folder class="h-4 w-4 shrink-0" />
               <span class="leading-5">{{ t("chat.conversationMenu.setWorkspace") }}</span>
             </button>
@@ -54,8 +55,9 @@
         </ul>
       </div>
       <button
+        v-if="!hideWorkspaceButton"
         class="btn btn-sm btn-ghost gap-1.5"
-        :disabled="busy"
+        :disabled="busy || workspaceButtonDisabled"
         @click="emit('lockWorkspace')"
       >
         <SquareTerminal class="h-3.5 w-3.5" />
@@ -140,6 +142,7 @@ const props = defineProps<{
   conversationBusy?: boolean;
   workspaceButtonLabel: string;
   workspaceButtonName: string;
+  workspaceButtonDisabled?: boolean;
   personaPresenceChips: ChatPersonaPresenceChip[];
   mentionableAgentIds: string[];
   selectedMentionAgentIds: string[];
@@ -147,10 +150,13 @@ const props = defineProps<{
   supervisionLabel: string;
   supervisionActiveLabel: string;
   supervisionTitle: string;
+  supervisionDisabled?: boolean;
   reviewButtonLabel: string;
   reviewButtonCount?: number;
   reviewPanelOpen: boolean;
   reviewButtonEnabled: boolean;
+  hideMenuButton?: boolean;
+  hideWorkspaceButton?: boolean;
   showDetachButton?: boolean;
   detachDisabled?: boolean;
 }>();

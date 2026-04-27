@@ -76,12 +76,15 @@ fn detach_current_conversation_to_window(
     }
 
     let conversation = state_read_conversation_cached(&state, conversation_id)?;
-    if !conversation.summary.trim().is_empty() || !conversation_visible_in_foreground_lists(&conversation) {
+    if !conversation.summary.trim().is_empty()
+        || (!conversation_visible_in_foreground_lists(&conversation)
+            && !conversation_is_remote_im_contact(&conversation))
+    {
         eprintln!(
             "[独立聊天窗口] 拒绝：会话不在前台列表 conversation_id={}",
             conversation_id
         );
-        return Err("只能独立打开未归档的前台会话。".to_string());
+        return Err("只能独立打开未归档前台会话或远程联系人会话。".to_string());
     }
     let title = if conversation.title.trim().is_empty() {
         conversation_preview_title(&conversation)

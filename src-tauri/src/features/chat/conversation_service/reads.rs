@@ -180,7 +180,7 @@ impl ConversationService {
             .map(ToOwned::to_owned);
 
         let mut snapshot = if let Some(conversation_id) = direct_conversation_id {
-            self.with_unarchived_conversation_by_id_fast(state, &conversation_id, |conversation| {
+            self.with_chat_view_conversation_by_id_fast(state, &conversation_id, |conversation| {
                 ensure_unarchived_conversation_not_organizing(state, &conversation.id)?;
                 build_foreground_conversation_snapshot_from_conversation(
                     state,

@@ -1317,10 +1317,39 @@ async function switchRemoteImContactConversation(contactId: string) {
   }
 }
 
+async function openConversationInDetachedWindowById(conversationId: string) {
+  // 打开或聚焦指定会话的独立聊天窗口，并在窗口操作后刷新普通会话与远程联系人概览。
+  const cid = String(conversationId || "").trim();
+  if (!cid) return;
+  try {
+    const focused = await invokeTauri<boolean>("focus_detached_chat_window_by_conversation", {
+      input: { conversationId: cid },
+    });
+    if (focused) return;
+  } catch (error) {
+    console.warn("[独立聊天窗口] 聚焦已占用会话失败", {
+      conversationId: cid,
+      error,
+    });
+  }
+  try {
+    await invokeTauri<{ conversationId: string; windowLabel: string; mainConversationId?: string | null }>("detach_current_conversation_to_window", {
+      input: { conversationId: cid },
+    });
+  } catch (error) {
+    console.warn("[独立聊天窗口] 打开独立会话窗口失败", {
+      conversationId: cid,
+      error,
+    });
+  }
+  await refreshUnarchivedConversationOverview();
+  await refreshRemoteImConversationOverview();
+}
+
 async function switchChatConversation(payload: { kind?: ChatConversationKind; conversationId: string; remoteContactId?: string }) {
   const kind = payload.kind === "remote_im_contact" ? "remote_im_contact" : "local_unarchived";
   if (kind === "remote_im_contact") {
-    await switchRemoteImContactConversation(String(payload.remoteContactId || "").trim());
+    await openConversationInDetachedWindowById(payload.conversationId);
     return;
   }
   await switchUnarchivedConversation(payload.conversationId);
@@ -1348,7 +1377,7 @@ const currentForegroundConversationSummary = computed(() => {
   const currentConversationId = String(currentChatConversationId.value || "").trim();
   if (currentConversationId) {
     const matched = chatConversationItems.value.find(
-      (item) => String(item.conversationId || "").trim() === currentConversationId && item.kind !== "remote_im_contact",
+      (item) => String(item.conversationId || "").trim() === currentConversationId,
     );
     if (matched) return matched;
   }
@@ -1575,6 +1604,15 @@ const chatUnarchivedConversationItems = computed(() => {
   });
 });
 
+function resolveRemoteConversationDepartmentName(boundDepartmentId?: string): string {
+  const normalizedDepartmentId = String(boundDepartmentId || "").trim();
+  if (!normalizedDepartmentId) return "主部门";
+  return (
+    config.departments.find((item) => String(item.id || "").trim() === normalizedDepartmentId)?.name
+    || normalizedDepartmentId
+  );
+}
+
 const chatRemoteImConversationItems = computed<ChatConversationOverviewItem[]>(() =>
   remoteImContactConversations.value.map((item) => ({
     conversationId: String(item.conversationId || "").trim(),
@@ -1586,7 +1624,7 @@ const chatRemoteImConversationItems = computed<ChatConversationOverviewItem[]>((
     departmentId: String(item.boundDepartmentId || "").trim() || undefined,
     departmentName: [
       String(item.channelName || "").trim(),
-      String(item.processingMode || "").trim() === "continuous" ? "连续模式" : "问答模式",
+      resolveRemoteConversationDepartmentName(item.boundDepartmentId),
     ].filter(Boolean).join(" · "),
     updatedAt: item.lastMessageAt || item.updatedAt || "",
     lastMessageAt: item.lastMessageAt || item.updatedAt || "",
@@ -2325,6 +2363,10 @@ async function handleConfirmForceArchiveAction() {
 
 async function refreshChatUnarchivedConversations() {
   if (conversationForegroundSyncing.value) return;
+  if (detachedChatWindow.value) {
+    await refreshRemoteImConversationOverview();
+    return;
+  }
   try {
     conversationForegroundSyncing.value = true;
     await refreshUnarchivedConversationOverview();
@@ -2390,6 +2432,7 @@ async function initializeDetachedChatWindow() {
     detachedChatConversationId.value = conversationId;
     currentChatConversationId.value = conversationId;
     sideConversationListVisible.value = false;
+    await refreshRemoteImConversationOverview();
     const snapshot = await requestConversationLightSnapshot(conversationId);
     applyConversationSnapshot(snapshot);
     await nextTick();
@@ -3002,6 +3045,20 @@ function applyConversationMessageAppended(payload?: ConversationMessageAppendedP
 
 function applyConversationSnapshot(snapshot: SwitchConversationSnapshot) {
   const nextConversationId = String(snapshot.conversationId || "").trim();
+  const detachedConversationId = String(detachedChatConversationId.value || "").trim();
+  if (
+    detachedChatWindow.value
+    && detachedConversationId
+    && nextConversationId
+    && nextConversationId !== detachedConversationId
+  ) {
+    console.warn("[独立窗口] 跳过非绑定会话快照", {
+      windowLabel: tauriWindowLabel.value,
+      detachedConversationId,
+      snapshotConversationId: nextConversationId,
+    });
+    return;
+  }
   const previousMessages = Array.isArray(allMessages.value) ? allMessages.value : [];
   const rawNextMessages = freezeConversationMessages(Array.isArray(snapshot.messages) ? snapshot.messages : []);
   const nextRuntimeState = String(snapshot.runtimeState || "").trim();

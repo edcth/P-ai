@@ -186,6 +186,41 @@ impl ConversationService {
         Ok(result)
     }
 
+    fn with_chat_view_conversation_by_id_fast<T>(
+        &self,
+        state: &AppState,
+        conversation_id: &str,
+        reader: impl FnOnce(&Conversation) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let normalized_conversation_id = conversation_id.trim();
+        if normalized_conversation_id.is_empty() {
+            return Err("conversationId is required.".to_string());
+        }
+        let guard = state
+            .conversation_lock
+            .lock()
+            .map_err(|err| format!("Failed to lock state mutex at {}:{} {}: {err}", file!(), line!(), module_path!()))?;
+        let conversation = state_read_conversation_cached(state, normalized_conversation_id)
+            .map_err(|err| {
+                format!(
+                    "Conversation not found: {normalized_conversation_id}: {err}"
+                )
+            })?;
+        if !conversation.summary.trim().is_empty()
+            || (!conversation_visible_in_foreground_lists(&conversation)
+                && !conversation_is_remote_im_contact(&conversation))
+        {
+            drop(guard);
+            return Err(format!(
+                "Conversation not available for chat view: {}",
+                normalized_conversation_id
+            ));
+        }
+        let result = reader(&conversation)?;
+        drop(guard);
+        Ok(result)
+    }
+
     fn ensure_unarchived_foreground_conversation(
         &self,
         conversation: &Conversation,
