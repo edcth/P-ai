@@ -208,7 +208,7 @@
               </div>
             </div>
 
-            <div ref="toolbarContainer" class="ecall-chat-toolbar-shell pt-1 pb-2">
+            <div ref="toolbarContainer" class="ecall-chat-toolbar-shell px-2 pt-1 pb-2">
               <ChatWorkspaceToolbar
                 :chatting="chatting"
                 :frozen="frozen"

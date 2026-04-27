@@ -2,6 +2,7 @@
 
 ## 进行中
 
+- 修复（chat-toolbar-padding-and-busy-attachment-paste）：聊天历史区底部工具栏补齐左右边距；流式/忙碌期间不再拦截附件粘贴与拖拽入队，仅在强制归档期间继续禁止，允许用户在助理回复中提前准备下一条附件输入。
 - 修复（remote-im-bound-contact-round-routing）：远程联系人轮次新增“本轮绑定联系人”运行时语义；联系人工具注入改为只看本轮是否已绑定唯一联系人，不再依赖联系人会话；`contact_reply` / `contact_send_files` 改为按当前轮次绑定联系人解析目标；轮末自动外发与提示词说明统一收口到“本轮绑定联系人”，并补强 `contact_send_files.file_paths` 必须传真实本地文件路径的约束；压缩续跑与 follow-up 路径同步继承该绑定联系人。
 
 ## 发布：v0.9.52
