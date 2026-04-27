@@ -21,6 +21,29 @@ pub(super) fn write_jsonl_snapshot_directory_shard(
     write_jsonl_snapshot_directory_shard_full(paths, &normalized_conversation)
 }
 
+pub(super) fn write_jsonl_snapshot_directory_shard_if_changed(
+    paths: &MessageStorePaths,
+    conversation: &Conversation,
+) -> Result<bool, String> {
+    let normalized_conversation =
+        normalize_conversation_media_refs_for_message_store(paths, conversation);
+    if let Some(existing) = read_ready_message_store_directory_conversation(paths)? {
+        if serde_json::to_value(&existing)
+            .map_err(|err| format!("序列化现有会话失败，conversation_id={}，error={err}", paths.conversation_id))?
+            == serde_json::to_value(&normalized_conversation).map_err(|err| {
+                format!(
+                    "序列化待写入会话失败，conversation_id={}，error={err}",
+                    paths.conversation_id
+                )
+            })?
+        {
+            return Ok(false);
+        }
+    }
+    write_jsonl_snapshot_directory_shard(paths, &normalized_conversation)?;
+    Ok(true)
+}
+
 fn normalize_conversation_media_refs_for_message_store(
     paths: &MessageStorePaths,
     conversation: &Conversation,

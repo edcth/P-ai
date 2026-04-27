@@ -319,7 +319,6 @@ fn upsert_chat_index_conversation(index: &mut ChatIndexFile, conversation: &Conv
     }
 }
 
-#[cfg(test)]
 fn remove_chat_index_conversation(index: &mut ChatIndexFile, conversation_id: &str) {
     let conversation_id = conversation_id.trim();
     if conversation_id.is_empty() {
@@ -428,15 +427,7 @@ fn write_conversation_shard(path: &PathBuf, conversation: &Conversation) -> Resu
     fs::create_dir_all(app_layout_chat_conversations_dir(path))
         .map_err(|err| format!("Create chat conversations dir failed: {err}"))?;
     let store_paths = message_store::message_store_paths(path, &conversation.id)?;
-    if message_store::should_write_jsonl_snapshot_directory_shard(&store_paths)? {
-        message_store::write_jsonl_snapshot_directory_shard(&store_paths, conversation)?;
-        return Ok(true);
-    }
-    write_json_file_atomic_if_changed(
-        &app_layout_chat_conversation_path(path, &conversation.id),
-        conversation,
-        "conversation file",
-    )
+    message_store::write_jsonl_snapshot_directory_shard_if_changed(&store_paths, conversation)
 }
 
 fn delete_conversation_shard(path: &PathBuf, conversation_id: &str) -> Result<bool, String> {
@@ -864,8 +855,6 @@ fn read_app_data(path: &PathBuf) -> Result<AppData, String> {
     let main_conversation_marker_changed = normalize_main_conversation_marker(&mut parsed, "");
     let mut tool_review_reports_migrated = false;
     for conversation in parsed.conversations.iter_mut() {
-        let store_paths = message_store::message_store_paths(path, &conversation.id)?;
-        let _ = message_store::resume_jsonl_snapshot_migration(&store_paths, conversation)?;
         if tool_review_migrate_legacy_reports_after_message_store(path, conversation)? {
             tool_review_reports_migrated = true;
         }
@@ -938,8 +927,7 @@ fn write_app_data_with_stats(path: &PathBuf, data: &AppData) -> Result<AppDataWr
     let mut expected_ids = std::collections::HashSet::<String>::new();
     for conv in &data.conversations {
         expected_ids.insert(conv.id.clone());
-        let conv_path = app_layout_chat_conversation_path(path, &conv.id);
-        if write_json_file_atomic_if_changed(&conv_path, conv, "conversation file")? {
+        if write_conversation_shard(path, conv)? {
             stats.conversation_writes += 1;
         }
     }

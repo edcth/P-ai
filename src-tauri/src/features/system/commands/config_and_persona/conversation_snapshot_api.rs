@@ -517,6 +517,8 @@ struct ForegroundConversationLightSnapshotOutput {
     current_todo: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     current_todos: Vec<ConversationTodoItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    unarchived_conversations: Vec<UnarchivedConversationSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -576,20 +578,39 @@ fn emit_unarchived_conversation_overview_updated_payload(
     state: &AppState,
     payload: &UnarchivedConversationOverviewUpdatedPayload,
 ) {
+    let started_at = std::time::Instant::now();
+    runtime_log_info(format!(
+        "[会话概览] 开始，任务=推送未归档会话概览，preferred_conversation_id={}，conversation_count={}",
+        payload.preferred_conversation_id.as_deref().unwrap_or(""),
+        payload.unarchived_conversations.len()
+    ));
     let app_handle = match state.app_handle.lock() {
         Ok(guard) => guard.as_ref().cloned(),
         Err(err) => {
-            eprintln!("[会话概览] 获取 app_handle 失败：锁已损坏，error={:?}", err);
+            runtime_log_error(format!("[会话概览] 失败，任务=推送未归档会话概览，阶段=获取app_handle，error={:?}", err));
             None
         }
     };
     let Some(app_handle) = app_handle else {
-        eprintln!("[会话概览] 推送跳过：无法获取 app_handle");
+        runtime_log_warn("[会话概览] 跳过，任务=推送未归档会话概览，原因=app_handle_missing".to_string());
         return;
     };
     if let Err(err) = app_handle.emit(CHAT_CONVERSATION_OVERVIEW_UPDATED_EVENT, payload) {
-        eprintln!("[会话概览] 推送失败：错误={}", err);
+        runtime_log_error(format!(
+            "[会话概览] 失败，任务=推送未归档会话概览，event={}，error={}，duration_ms={}",
+            CHAT_CONVERSATION_OVERVIEW_UPDATED_EVENT,
+            err,
+            started_at.elapsed().as_millis()
+        ));
+        return;
     }
+    runtime_log_info(format!(
+        "[会话概览] 完成，任务=推送未归档会话概览，event={}，preferred_conversation_id={}，conversation_count={}，duration_ms={}",
+        CHAT_CONVERSATION_OVERVIEW_UPDATED_EVENT,
+        payload.preferred_conversation_id.as_deref().unwrap_or(""),
+        payload.unarchived_conversations.len(),
+        started_at.elapsed().as_millis()
+    ));
 }
 
 fn emit_conversation_todos_updated_payload(

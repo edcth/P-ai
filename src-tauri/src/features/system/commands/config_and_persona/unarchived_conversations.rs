@@ -72,6 +72,9 @@ fn get_foreground_conversation_light_snapshot(
         runtime_state: snapshot.runtime_state,
         current_todo: snapshot.current_todo,
         current_todos: snapshot.current_todos,
+        unarchived_conversations: conversation_service()
+            .list_unarchived_conversation_summaries(state.inner())?
+            .summaries,
     })
 }
 
@@ -402,10 +405,40 @@ fn create_unarchived_conversation(
     input: CreateUnarchivedConversationInput,
     state: State<'_, AppState>,
 ) -> Result<CreateUnarchivedConversationOutput, String> {
+    let started_at = std::time::Instant::now();
+    runtime_log_info(format!(
+        "[会话] 开始，任务=新建未归档会话，department_id={}，agent_id={}，api_config_id={}，title_len={}，copy_source_conversation_id={}",
+        input.department_id.as_deref().unwrap_or(""),
+        input.agent_id.as_deref().unwrap_or(""),
+        input.api_config_id.as_deref().unwrap_or(""),
+        input.title.as_deref().unwrap_or("").chars().count(),
+        input.copy_source_conversation_id.as_deref().unwrap_or("")
+    ));
     let result = conversation_service().create_unarchived_conversation(state.inner(), &input)?;
+    let conversation_id = result.conversation_id.clone();
+    let overview_count = result.overview_payload.unarchived_conversations.len();
+    let preferred_conversation_id = result
+        .overview_payload
+        .preferred_conversation_id
+        .as_deref()
+        .unwrap_or("")
+        .to_string();
+    runtime_log_info(format!(
+        "[会话] 完成，任务=新建未归档会话，阶段=创建并更新索引，conversation_id={}，preferred_conversation_id={}，overview_count={}，duration_ms={}",
+        conversation_id,
+        preferred_conversation_id,
+        overview_count,
+        started_at.elapsed().as_millis()
+    ));
     emit_unarchived_conversation_overview_updated_payload(state.inner(), &result.overview_payload);
+    runtime_log_info(format!(
+        "[会话] 完成，任务=新建未归档会话，阶段=返回前端，conversation_id={}，overview_count={}，duration_ms={}",
+        conversation_id,
+        overview_count,
+        started_at.elapsed().as_millis()
+    ));
     Ok(CreateUnarchivedConversationOutput {
-        conversation_id: result.conversation_id,
+        conversation_id,
         unarchived_conversations: result.overview_payload.unarchived_conversations,
     })
 }

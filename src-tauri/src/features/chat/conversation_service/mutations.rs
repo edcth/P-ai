@@ -634,6 +634,7 @@ impl ConversationService {
         state: &AppState,
         input: &CreateUnarchivedConversationInput,
     ) -> Result<CreateUnarchivedConversationMutationResult, String> {
+        let started_at = std::time::Instant::now();
         let guard = state
             .conversation_lock
             .lock()
@@ -708,7 +709,16 @@ impl ConversationService {
             )
         };
         let conversation_id = conversation.id.clone();
-        state_schedule_conversation_persist(state, &conversation, true)?;
+        let persist_seq = state_schedule_conversation_persist(state, &conversation, true)?;
+        runtime_log_info(format!(
+            "[会话] 完成，任务=新建未归档会话，阶段=调度持久化，conversation_id={}，persist_seq={}，department_id={}，agent_id={}，message_count={}，duration_ms={}",
+            conversation_id,
+            persist_seq,
+            conversation.department_id,
+            conversation.agent_id,
+            conversation.messages.len(),
+            started_at.elapsed().as_millis()
+        ));
         if runtime
             .main_conversation_id
             .as_deref()
@@ -718,6 +728,11 @@ impl ConversationService {
         {
             runtime.main_conversation_id = Some(conversation_id.clone());
             state_write_runtime_state_cached(state, &runtime)?;
+            runtime_log_info(format!(
+                "[会话] 完成，任务=新建未归档会话，阶段=设置主会话，conversation_id={}，duration_ms={}",
+                conversation_id,
+                started_at.elapsed().as_millis()
+            ));
         }
         let overview_payload = UnarchivedConversationOverviewUpdatedPayload {
             preferred_conversation_id: Some(conversation_id.clone()),
@@ -726,6 +741,12 @@ impl ConversationService {
                 &app_config,
             )?,
         };
+        runtime_log_info(format!(
+            "[会话] 完成，任务=新建未归档会话，阶段=构建概览，conversation_id={}，overview_count={}，duration_ms={}",
+            conversation_id,
+            overview_payload.unarchived_conversations.len(),
+            started_at.elapsed().as_millis()
+        ));
         drop(guard);
         Ok(CreateUnarchivedConversationMutationResult {
             conversation_id,

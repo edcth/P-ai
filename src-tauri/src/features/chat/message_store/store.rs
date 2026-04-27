@@ -1208,6 +1208,37 @@ pub(super) fn delete_message_store_shard_artifacts(
     Ok(changed)
 }
 
+#[cfg(test)]
+pub(super) fn message_store_shard_write_signature(
+    paths: &MessageStorePaths,
+) -> Vec<(PathBuf, u64, Option<std::time::SystemTime>)> {
+    let mut signatures = Vec::new();
+    collect_message_store_shard_write_signatures(&paths.legacy_conversation_file, &mut signatures);
+    collect_message_store_shard_write_signatures(&paths.shard_dir, &mut signatures);
+    signatures.sort_by(|left, right| left.0.cmp(&right.0));
+    signatures
+}
+
+#[cfg(test)]
+fn collect_message_store_shard_write_signatures(
+    path: &PathBuf,
+    signatures: &mut Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
+) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if metadata.is_file() {
+        signatures.push((path.clone(), metadata.len(), metadata.modified().ok()));
+        return;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        collect_message_store_shard_write_signatures(&entry.path(), signatures);
+    }
+}
+
 fn validate_message_store_shard_dir_for_delete(paths: &MessageStorePaths) -> Result<(), String> {
     let conversations_dir = paths
         .legacy_conversation_file

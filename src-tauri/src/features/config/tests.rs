@@ -808,11 +808,11 @@ maxOutputTokens = 8192
 
         let agents_path = app_layout_agents_path(&data_path);
         let runtime_path = app_layout_runtime_state_path(&data_path);
-        let conversation_path = app_layout_chat_conversation_path(&data_path, "conv-a");
+        let conversation_paths =
+            message_store::message_store_paths(&data_path, "conv-a").expect("conversation paths");
 
         let runtime_before = std::fs::read(&runtime_path).expect("read runtime before");
-        let conversation_before =
-            std::fs::read(&conversation_path).expect("read conversation before");
+        let conversation_before = message_store::message_store_shard_write_signature(&conversation_paths);
 
         let mut agents = data.agents.clone();
         agents.push(AgentProfile {
@@ -833,7 +833,7 @@ maxOutputTokens = 8192
         assert!(write_agents_shard(&data_path, &agents).expect("write agents shard"));
         assert_eq!(std::fs::read(&runtime_path).expect("read runtime after agents"), runtime_before);
         assert_eq!(
-            std::fs::read(&conversation_path).expect("read conversation after agents"),
+            message_store::message_store_shard_write_signature(&conversation_paths),
             conversation_before
         );
 
@@ -845,14 +845,14 @@ maxOutputTokens = 8192
             runtime_before
         );
         assert_eq!(
-            std::fs::read(&conversation_path).expect("read conversation after runtime"),
+            message_store::message_store_shard_write_signature(&conversation_paths),
             conversation_before
         );
         assert!(!std::fs::read(&agents_path).expect("read agents after runtime").is_empty());
     }
 
     #[test]
-    fn write_conversation_shard_should_only_touch_target_conversation_file() {
+    fn write_conversation_shard_should_write_message_store_and_only_touch_target() {
         let root = std::env::temp_dir().join(format!("eca-conversation-shard-{}", Uuid::new_v4()));
         std::fs::create_dir_all(root.join("config")).expect("create temp config dir");
         let data_path = root.join("config").join("app_data.json");
@@ -864,25 +864,37 @@ maxOutputTokens = 8192
         ];
         write_app_data_with_stats(&data_path, &data).expect("seed layout");
 
-        let conversation_a_path = app_layout_chat_conversation_path(&data_path, "conv-a");
-        let conversation_b_path = app_layout_chat_conversation_path(&data_path, "conv-b");
+        let legacy_conversation_a_path = app_layout_chat_conversation_path(&data_path, "conv-a");
+        let legacy_conversation_b_path = app_layout_chat_conversation_path(&data_path, "conv-b");
+        assert!(!legacy_conversation_a_path.exists());
+        assert!(!legacy_conversation_b_path.exists());
+        let conversation_a_paths =
+            message_store::message_store_paths(&data_path, "conv-a").expect("conversation a paths");
+        let conversation_b_paths =
+            message_store::message_store_paths(&data_path, "conv-b").expect("conversation b paths");
+        assert!(message_store::should_write_jsonl_snapshot_directory_shard(&conversation_a_paths)
+            .expect("conversation a manifest ready"));
+        assert!(message_store::should_write_jsonl_snapshot_directory_shard(&conversation_b_paths)
+            .expect("conversation b manifest ready"));
         let conversation_a_before =
-            std::fs::read(&conversation_a_path).expect("read conversation a before");
+            message_store::message_store_shard_write_signature(&conversation_a_paths);
         let conversation_b_before =
-            std::fs::read(&conversation_b_path).expect("read conversation b before");
+            message_store::message_store_shard_write_signature(&conversation_b_paths);
 
         let mut conversation_a = read_conversation_shard(&data_path, "conv-a").expect("read conversation a");
         conversation_a.title = "Conversation A Updated".to_string();
         assert!(write_conversation_shard(&data_path, &conversation_a).expect("write conversation a"));
 
         assert_ne!(
-            std::fs::read(&conversation_a_path).expect("read conversation a after"),
+            message_store::message_store_shard_write_signature(&conversation_a_paths),
             conversation_a_before
         );
         assert_eq!(
-            std::fs::read(&conversation_b_path).expect("read conversation b after"),
+            message_store::message_store_shard_write_signature(&conversation_b_paths),
             conversation_b_before
         );
+        assert!(!legacy_conversation_a_path.exists());
+        assert!(!legacy_conversation_b_path.exists());
     }
 
     #[test]
@@ -899,12 +911,14 @@ maxOutputTokens = 8192
         write_app_data_with_stats(&data_path, &data).expect("seed layout");
 
         let chat_index_path = app_layout_chat_index_path(&data_path);
-        let conversation_a_path = app_layout_chat_conversation_path(&data_path, "conv-a");
-        let conversation_b_path = app_layout_chat_conversation_path(&data_path, "conv-b");
+        let conversation_a_paths =
+            message_store::message_store_paths(&data_path, "conv-a").expect("conversation a paths");
+        let conversation_b_paths =
+            message_store::message_store_paths(&data_path, "conv-b").expect("conversation b paths");
         let conversation_a_before =
-            std::fs::read(&conversation_a_path).expect("read conversation a before");
+            message_store::message_store_shard_write_signature(&conversation_a_paths);
         let conversation_b_before =
-            std::fs::read(&conversation_b_path).expect("read conversation b before");
+            message_store::message_store_shard_write_signature(&conversation_b_paths);
         let chat_index_before = std::fs::read(&chat_index_path).expect("read chat index before");
 
         let mut index = read_chat_index_shard(&data_path).expect("read chat index shard");
@@ -916,11 +930,11 @@ maxOutputTokens = 8192
             chat_index_before
         );
         assert_eq!(
-            std::fs::read(&conversation_a_path).expect("read conversation a after"),
+            message_store::message_store_shard_write_signature(&conversation_a_paths),
             conversation_a_before
         );
         assert_eq!(
-            std::fs::read(&conversation_b_path).expect("read conversation b after"),
+            message_store::message_store_shard_write_signature(&conversation_b_paths),
             conversation_b_before
         );
     }

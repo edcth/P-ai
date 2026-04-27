@@ -604,6 +604,7 @@ let chatConversationMessagesAfterSyncedUnlisten: UnlistenFn | null = null;
 let chatConversationMessageAppendedUnlisten: UnlistenFn | null = null;
 let chatConversationTodosUpdatedUnlisten: UnlistenFn | null = null;
 let chatConversationPinUpdatedUnlisten: UnlistenFn | null = null;
+let chatConversationOverviewUpdatedUnlisten: UnlistenFn | null = null;
 let foregroundPaintTraceSeq = 0;
 let chatWindowActiveSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let chatMicPrewarmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1433,6 +1434,11 @@ type ConversationPinUpdatedPayload = {
   conversationId?: string;
   isPinned?: boolean;
   pinIndex?: number | null;
+};
+
+type ConversationOverviewUpdatedPayload = {
+  unarchivedConversations?: UnarchivedConversationSummary[];
+  preferredConversationId?: string | null;
 };
 
 function clearPendingConversationScrollToBottomFallback() {
@@ -2979,6 +2985,11 @@ function applyConversationTodosUpdated(payload?: ConversationTodosUpdatedPayload
   );
 }
 
+function applyConversationOverviewUpdated(payload?: ConversationOverviewUpdatedPayload | null) {
+  if (!Array.isArray(payload?.unarchivedConversations)) return;
+  unarchivedConversations.value = payload.unarchivedConversations;
+}
+
 function applyConversationPinUpdated(payload?: ConversationPinUpdatedPayload | null) {
   const conversationId = String(payload?.conversationId || "").trim();
   if (!conversationId) return;
@@ -3875,6 +3886,15 @@ onMounted(() => {
       .catch((error) => {
         console.error("[会话置顶] 监听器注册失败", error);
       });
+    void listen<ConversationOverviewUpdatedPayload>("easy-call:conversation-overview-updated", (event) => {
+      applyConversationOverviewUpdated(event.payload);
+    })
+      .then((unlisten) => {
+        chatConversationOverviewUpdatedUnlisten = unlisten;
+      })
+      .catch((error) => {
+        console.error("[会话概览] 监听器注册失败", error);
+      });
     void listen<unknown>("easy-call:assistant-delta", (event) => {
       const conversationId = readConversationIdFromPayload(event.payload);
       if (CHAT_STREAM_DEBUG) {
@@ -3989,6 +4009,10 @@ onBeforeUnmount(() => {
   if (chatConversationPinUpdatedUnlisten) {
     chatConversationPinUpdatedUnlisten();
     chatConversationPinUpdatedUnlisten = null;
+  }
+  if (chatConversationOverviewUpdatedUnlisten) {
+    chatConversationOverviewUpdatedUnlisten();
+    chatConversationOverviewUpdatedUnlisten = null;
   }
   window.removeEventListener("focus", handleWindowFocusForStateSync);
   window.removeEventListener("blur", handleWindowBlurForStateSync);

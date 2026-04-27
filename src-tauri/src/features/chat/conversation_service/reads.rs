@@ -11,31 +11,66 @@ impl ConversationService {
             .map(str::trim)
             .unwrap_or_default()
             .to_string();
-        let chat_index = state_read_chat_index_cached(state)?;
+        let mut chat_index = state_read_chat_index_cached(state)?;
+        let mut stale_conversation_ids = Vec::<String>::new();
+        let mut changed_conversations = Vec::<Conversation>::new();
         let visible_conversations = chat_index
             .conversations
             .iter()
-            .filter(|item| item.summary.trim().is_empty())
             .filter_map(|item| {
                 let conversation = match state_read_conversation_cached(state, item.id.as_str()) {
                     Ok(conversation) => conversation,
                     Err(err) => {
                         eprintln!(
-                            "[会话索引读取] 状态=失败，任务=collect_unarchived_conversation_summaries_cached，conversation_id={}，error={}",
+                            "[会话索引清理] 状态=标记，任务=collect_unarchived_conversation_summaries_cached，conversation_id={}，原因=conversation_missing，error={}",
                             item.id, err
                         );
+                        stale_conversation_ids.push(item.id.clone());
                         return None;
                     }
                 };
                 if conversation.summary.trim().is_empty()
                     && conversation_visible_in_foreground_lists(&conversation)
                 {
+                    if conversation.summary.trim() != item.summary.trim() {
+                        changed_conversations.push(conversation.clone());
+                    }
                     Some(conversation)
                 } else {
+                    stale_conversation_ids.push(item.id.clone());
                     None
                 }
             })
             .collect::<Vec<_>>();
+        if !stale_conversation_ids.is_empty() {
+            let before_count = chat_index.conversations.len();
+            let stale_ids = stale_conversation_ids
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>();
+            chat_index
+                .conversations
+                .retain(|item| !stale_ids.contains(&item.id));
+            if chat_index.conversations.len() != before_count {
+                state_write_chat_index_cached(state, &chat_index)?;
+                eprintln!(
+                    "[会话索引清理] 状态=完成，任务=collect_unarchived_conversation_summaries_cached，清理数量={}，清理前={}，清理后={}",
+                    before_count.saturating_sub(chat_index.conversations.len()),
+                    before_count,
+                    chat_index.conversations.len()
+                );
+            }
+        }
+        if !changed_conversations.is_empty() {
+            for conversation in changed_conversations.iter() {
+                upsert_chat_index_conversation(&mut chat_index, conversation);
+            }
+            state_write_chat_index_cached(state, &chat_index)?;
+            eprintln!(
+                "[会话索引修正] 状态=完成，任务=collect_unarchived_conversation_summaries_cached，修正数量={}",
+                changed_conversations.len()
+            );
+        }
         let visible_ids = visible_conversations
             .iter()
             .map(|conversation| conversation.id.trim().to_string())

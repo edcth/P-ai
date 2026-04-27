@@ -189,6 +189,52 @@ fn ensure_conversation_chat_index_item_consistent(
         .conversations
         .iter()
         .find(|item| item.id == conversation.id);
+    if !conversation_visible_in_foreground_lists(conversation) || !conversation.summary.trim().is_empty() {
+        if initial_existing.is_none() {
+            return Ok(());
+        }
+        let before_log = format_chat_index_item_log(initial_existing);
+        let started = std::time::Instant::now();
+        eprintln!(
+            "[会话索引自愈] 状态=开始，conversation_id={}，触发原因={}，修复原因=chat_index_stale_hidden_item，修复前={}",
+            conversation.id, trigger_reason, before_log
+        );
+
+        let repair_gate = conversation_index_repair_gate(state, &conversation.id)?;
+        let _repair_guard = repair_gate
+            .lock()
+            .map_err(|err| format!("Failed to lock conversation index repair gate: {err}"))?;
+
+        let mut chat_index = state_read_chat_index_cached(state)?;
+        let existing_after_lock = chat_index
+            .conversations
+            .iter()
+            .find(|item| item.id == conversation.id)
+            .cloned();
+        if existing_after_lock.is_none() {
+            eprintln!(
+                "[会话索引自愈] 状态=跳过，conversation_id={}，触发原因={}，修复原因=chat_index_stale_hidden_item，修复前={}，修复后={}，duration_ms={}",
+                conversation.id,
+                trigger_reason,
+                before_log,
+                format_chat_index_item_log(None),
+                started.elapsed().as_millis()
+            );
+            return Ok(());
+        }
+
+        remove_chat_index_conversation(&mut chat_index, &conversation.id);
+        state_write_chat_index_cached(state, &chat_index)?;
+        eprintln!(
+            "[会话索引自愈] 状态=完成，conversation_id={}，触发原因={}，修复原因=chat_index_stale_hidden_item，修复前={}，修复后={}，duration_ms={}",
+            conversation.id,
+            trigger_reason,
+            before_log,
+            format_chat_index_item_log(None),
+            started.elapsed().as_millis()
+        );
+        return Ok(());
+    }
     let initial_mismatch_fields = initial_existing
         .map(|existing| chat_index_item_mismatch_fields(existing, &expected))
         .unwrap_or_else(Vec::new);
@@ -1147,31 +1193,22 @@ fn state_schedule_conversation_persist(
 
     let mut pending_chat_index = None;
     if include_chat_index {
-        let chat_index_snapshot = {
-            let cached = state
-                .cached_app_data
-                .lock()
-                .map_err(|_| "Failed to lock cached app data".to_string())?;
-            cached
-                .as_ref()
-                .map(|data| build_chat_index_file(&data.conversations))
-        };
-        if let Some(chat_index) = chat_index_snapshot {
-            let disk_mtime = path_modified_time(&app_layout_chat_index_path(&state.data_path));
-            *state
-                .cached_chat_index
-                .lock()
-                .map_err(|_| "Failed to lock cached chat index".to_string())? =
-                Some(chat_index.clone());
-            *state
-                .cached_chat_index_mtime
-                .lock()
-                .map_err(|_| "Failed to lock cached chat index mtime".to_string())? = disk_mtime;
-            state
-                .cached_chat_index_dirty
-                .store(true, std::sync::atomic::Ordering::Release);
-            pending_chat_index = Some(chat_index);
-        }
+        let mut chat_index = state_read_chat_index_cached(state)?;
+        upsert_chat_index_conversation(&mut chat_index, conversation);
+        let disk_mtime = path_modified_time(&app_layout_chat_index_path(&state.data_path));
+        *state
+            .cached_chat_index
+            .lock()
+            .map_err(|_| "Failed to lock cached chat index".to_string())? =
+            Some(chat_index.clone());
+        *state
+            .cached_chat_index_mtime
+            .lock()
+            .map_err(|_| "Failed to lock cached chat index mtime".to_string())? = disk_mtime;
+        state
+            .cached_chat_index_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
+        pending_chat_index = Some(chat_index);
     }
 
     {
