@@ -266,10 +266,12 @@ export type RemoteImContactConversationSummary = {
   lastMessageAt?: string;
   messageCount: number;
   channelId: string;
+  channelName?: string;
   platform: RemoteImPlatform;
   contactDisplayName: string;
   boundDepartmentId?: string;
   processingMode: "qa" | "continuous";
+  previewMessages?: ConversationPreviewMessage[];
 };
 
 export type McpDefinitionValidateResult = {
@@ -587,6 +589,9 @@ export type ConversationPreviewMessage = {
 export type ChatConversationOverviewItem = {
   conversationId: string;
   title: string;
+  kind?: "local_unarchived" | "remote_im_contact";
+  remoteContactId?: string;
+  remoteContactDisplayName?: string;
   messageCount: number;
   unreadCount?: number;
   agentId?: string;

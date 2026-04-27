@@ -165,6 +165,7 @@
         :active-supervision-task="activeSupervisionTask"
         :recent-supervision-task-history="recentSupervisionTaskHistory"
         :unarchived-conversation-items="chatUnarchivedConversationItems"
+        :conversation-items="chatConversationItems || chatUnarchivedConversationItems"
         :create-conversation-department-options="createConversationDepartmentOptions"
         :default-create-conversation-department-id="defaultCreateConversationDepartmentId"
         :current-theme="currentTheme"
@@ -503,6 +504,7 @@ const props = defineProps<{
     durationHours: number;
   }>;
   chatUnarchivedConversationItems: ChatConversationOverviewItem[];
+  chatConversationItems?: ChatConversationOverviewItem[];
   createConversationDepartmentOptions: Array<{ id: string; name: string; ownerName: string }>;
   defaultCreateConversationDepartmentId: string;
   archives: ArchiveSummary[];
@@ -613,7 +615,7 @@ const props = defineProps<{
   closeSupervisionTaskDialog: () => void;
   saveSupervisionTask: (payload: { durationHours: number; goal: string; why: string; todo: string }) => void;
   onRefreshToolReviewMessage: (payload: { conversationId: string; messageId: string }) => void;
-  onSwitchConversation: (conversationId: string) => void;
+  onSwitchConversation: (payload: { conversationId: string; kind?: "local_unarchived" | "remote_im_contact"; remoteContactId?: string }) => void;
   onRenameConversation: (payload: { conversationId: string; title: string }) => void;
   onToggleConversationPin: (conversationId: string) => void;
   onCreateConversation: (input?: { title?: string; departmentId?: string }) => void;

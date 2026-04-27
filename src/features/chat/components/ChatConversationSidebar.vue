@@ -1,17 +1,13 @@
 <template>
   <aside class="flex h-full w-88 shrink-0 flex-col border-r border-base-300 bg-base-200">
-    <div class="flex-1 min-h-0 overflow-y-auto p-2">
-      <div>
-        <label class="input input-bordered input-sm flex h-8 w-full items-center gap-2 bg-base-100">
-          <Search class="h-3.5 w-3.5 opacity-60" />
-          <input
-            v-model="conversationSearchQuery"
-            type="text"
-            class="w-full bg-transparent outline-none"
-            :placeholder="t('chat.conversationSearchPlaceholder')"
-          />
-        </label>
-      </div>
+    <ChatConversationListHeader
+      v-model:search-query="conversationSearchQuery"
+      v-model:active-tab="activeConversationTab"
+      :search-placeholder="t('chat.conversationSearchPlaceholder')"
+      :local-label="t('chat.localConversationTab')"
+      :contact-label="t('chat.contactConversationTab')"
+    />
+    <div class="flex-1 min-h-0 overflow-y-auto p-2 pt-2">
       <section
         v-for="section in filteredConversationSections"
         :key="section.key"
@@ -155,10 +151,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
-import { Pin, PinOff, Search } from "lucide-vue-next";
+import { Pin, PinOff } from "lucide-vue-next";
 import type { ChatConversationOverviewItem, ConversationPreviewMessage } from "../../../types/app";
 import { usePipelineStatus } from "../../shell/composables/use-pipeline-status";
 import { formatConversationListTime } from "../utils/conversation-time";
+import ChatConversationListHeader from "./ChatConversationListHeader.vue";
+
+const CHAT_CONVERSATION_LIST_TAB_STORAGE_KEY = "easy_call.chat_conversation_list_tab.v1";
 
 const props = defineProps<{
   items: ChatConversationOverviewItem[];
@@ -170,7 +169,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: "select", conversationId: string): void;
+  (e: "select", payload: { conversationId: string; kind?: "local_unarchived" | "remote_im_contact"; remoteContactId?: string }): void;
   (e: "rename", payload: { conversationId: string; title: string }): void;
   (e: "togglePinConversation", conversationId: string): void;
 }>();
@@ -180,14 +179,32 @@ const renameInputRef = ref<HTMLInputElement | null>(null);
 const editingConversationId = ref("");
 const editingTitleDraft = ref("");
 const conversationSearchQuery = ref("");
+const activeConversationTab = ref<"local" | "contact">(readStoredConversationTab());
 const { conversationStatusById, markConversationRead } = usePipelineStatus();
+
+function readStoredConversationTab(): "local" | "contact" {
+  if (typeof window === "undefined") return "local";
+  const stored = String(window.localStorage.getItem(CHAT_CONVERSATION_LIST_TAB_STORAGE_KEY) || "").trim();
+  return stored === "contact" ? "contact" : "local";
+}
+
+watch(activeConversationTab, (value) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(CHAT_CONVERSATION_LIST_TAB_STORAGE_KEY, value);
+});
 
 const conversationPreviewCache = computed(() => new Map(
   props.items.map((item) => [String(item.conversationId || "").trim(), Array.isArray(item.previewMessages) ? item.previewMessages : []]),
 ));
 const conversationSections = computed(() => {
-  const pinned = props.items.filter((item) => !!item.isPinned || !!item.isMainConversation);
-  const others = props.items.filter((item) => !item.isPinned && !item.isMainConversation);
+  const visibleItems = props.items.filter((item) => {
+    const kind = String(item.kind || "local_unarchived").trim();
+    return activeConversationTab.value === "contact"
+      ? kind === "remote_im_contact"
+      : kind !== "remote_im_contact";
+  });
+  const pinned = visibleItems.filter((item) => !!item.isPinned || !!item.isMainConversation);
+  const others = visibleItems.filter((item) => !item.isPinned && !item.isMainConversation);
   return [
     pinned.length > 0
       ? {
@@ -284,6 +301,7 @@ function isConversationDisabled(item: ChatConversationOverviewItem): boolean {
 }
 
 function canRenameConversation(item: ChatConversationOverviewItem): boolean {
+  if (item.kind === "remote_im_contact") return false;
   return isCurrentConversation(item) && !item.isMainConversation && !isConversationDisabled(item);
 }
 
@@ -292,6 +310,9 @@ function isEditingTitle(item: ChatConversationOverviewItem): boolean {
 }
 
 function conversationDisplayTitle(item: ChatConversationOverviewItem): string {
+  if (item.kind === "remote_im_contact") {
+    return String(item.remoteContactDisplayName || item.title || "").trim() || t("chat.untitledConversation");
+  }
   if (item.isMainConversation) return t("chat.mainConversation");
   return item.title || t("chat.untitledConversation");
 }
@@ -303,6 +324,10 @@ function conversationItemTitle(item: ChatConversationOverviewItem): string {
 }
 
 function workspaceDepartmentLabel(item: ChatConversationOverviewItem): string {
+  if (item.kind === "remote_im_contact") {
+    const departmentName = String(item.departmentName || "").trim();
+    return departmentName || t("chat.contactConversationTab");
+  }
   const workspaceLabel = String(item.workspaceLabel || "").trim() || t("chat.defaultWorkspace");
   const departmentName = String(item.departmentName || "").trim();
   if (!departmentName) return workspaceLabel;
@@ -311,11 +336,15 @@ function workspaceDepartmentLabel(item: ChatConversationOverviewItem): string {
 
 function handleConversationCardClick(item: ChatConversationOverviewItem) {
   if (isCurrentConversation(item) || isConversationDisabled(item)) return;
-  emit("select", item.conversationId);
+  emit("select", {
+    conversationId: String(item.conversationId || "").trim(),
+    kind: item.kind,
+    remoteContactId: String(item.remoteContactId || "").trim() || undefined,
+  });
 }
 
 function canToggleConversationPin(item: ChatConversationOverviewItem): boolean {
-  return !item.isMainConversation;
+  return item.kind !== "remote_im_contact" && !item.isMainConversation;
 }
 
 function pinConversationTitle(item: ChatConversationOverviewItem): string {

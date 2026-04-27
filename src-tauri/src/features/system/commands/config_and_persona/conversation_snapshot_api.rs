@@ -166,8 +166,14 @@ fn build_conversation_preview_messages(
     conversation: &Conversation,
     limit: usize,
 ) -> Vec<ConversationPreviewMessage> {
-    let mut selected = conversation
-        .messages
+    build_preview_messages_from_chat_messages(&conversation.messages, limit)
+}
+
+fn build_preview_messages_from_chat_messages(
+    messages: &[ChatMessage],
+    limit: usize,
+) -> Vec<ConversationPreviewMessage> {
+    let mut selected = messages
         .iter()
         .filter(|message| {
             if is_tool_review_report_message(message) {

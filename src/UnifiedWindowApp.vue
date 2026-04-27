@@ -12,7 +12,7 @@
       :current-persona-name="String(currentForegroundPersona?.name || '').trim() || t('archives.roleAssistant')"
       :side-conversation-list-visible="sideConversationListVisible"
       :active-conversation-id="currentChatConversationId"
-      :conversation-items="chatUnarchivedConversationItems"
+      :conversation-items="chatConversationItems"
       :user-alias="userAlias"
       :user-avatar-url="userAvatarUrl"
       :persona-name-map="chatPersonaNameMap"
@@ -39,7 +39,7 @@
       @update:config-search-query="updateConfigSearchQuery"
       @select-config-search-result="handleSelectConfigSearchResult"
       @update-to-latest="triggerUpdateToLatest"
-      @switch-conversation="switchUnarchivedConversation"
+      @switch-conversation="switchChatConversation"
       @rename-conversation="renameCurrentConversation"
       @toggle-pin-conversation="toggleConversationPin"
       @create-conversation="createUnarchivedConversation"
@@ -158,6 +158,7 @@
       :active-supervision-task="activeSupervisionTask"
       :recent-supervision-task-history="recentSupervisionTaskHistory"
       :chat-unarchived-conversation-items="chatUnarchivedConversationItems"
+      :chat-conversation-items="chatConversationItems"
       :create-conversation-department-options="createConversationDepartmentOptions"
       :default-create-conversation-department-id="defaultCreateConversationDepartmentId"
       :archives="archives"
@@ -268,7 +269,7 @@
       :on-regenerate-turn="handleRegenerateTurn"
       :confirm-plan="handleConfirmPlan"
       :on-lock-chat-workspace="openChatWorkspacePicker"
-      :on-switch-conversation="switchUnarchivedConversation"
+      :on-switch-conversation="switchChatConversation"
       :on-rename-conversation="renameCurrentConversation"
       :on-toggle-conversation-pin="toggleConversationPin"
       :on-create-conversation="createUnarchivedConversation"
@@ -459,11 +460,13 @@ import type {
   AppConfig,
   ChatMentionTarget,
   ChatMessage,
+  ChatConversationOverviewItem,
   PromptCommandPreset,
   ChatTodoItem,
   ChatPersonaPresenceChip,
   ConversationPreviewMessage,
   ImageTextCacheStats,
+  RemoteImContactConversationSummary,
   ResponseStyleOption,
   ToolLoadStatus,
   UnarchivedConversationSummary,
@@ -1276,6 +1279,52 @@ async function attachToolReviewReport(reportText: string) {
     setStatusError("status.pasteImageReadFailed", error);
   }
 }
+
+async function switchRemoteImContactConversation(contactId: string) {
+  const normalizedContactId = String(contactId || "").trim();
+  if (!normalizedContactId) return;
+  const targetOverview = remoteImContactConversations.value.find((item) => String(item.contactId || "").trim() === normalizedContactId);
+  const conversationId = String(targetOverview?.conversationId || "").trim();
+  if (!conversationId) return;
+  const previousConversationId = String(currentChatConversationId.value || "").trim();
+  try {
+    conversationForegroundSyncing.value = true;
+    if (previousConversationId) {
+      cacheConversationMessages(previousConversationId, allMessages.value);
+    }
+    chatFlow.freezeForegroundRoundState();
+    currentChatConversationId.value = conversationId;
+    currentChatTodos.value = [];
+    clearPendingManualScrollToBottom();
+    const cachedDisplay = freezeConversationMessages(conversationMessageCache.value[conversationId] || []);
+    allMessages.value = cachedDisplay;
+    hasMoreBackendHistory.value = cachedDisplay.length >= FOREGROUND_SNAPSHOT_RECENT_LIMIT;
+    foregroundTailLatestReady.value = true;
+    const messages = await requestRemoteImConversationMessages(normalizedContactId);
+    const nextMessages = reuseStableMessageReferences(
+      freezeConversationMessages(Array.isArray(messages) ? messages : []),
+      allMessages.value,
+    );
+    allMessages.value = nextMessages;
+    cacheConversationMessages(conversationId, nextMessages);
+    hasMoreBackendHistory.value = nextMessages.length >= FOREGROUND_SNAPSHOT_RECENT_LIMIT;
+    clearConversationBadge(conversationId);
+    scheduleConversationScrollToBottomFallback(conversationId);
+  } catch (error) {
+    setStatusError("status.loadMessagesFailed", error);
+  } finally {
+    conversationForegroundSyncing.value = false;
+  }
+}
+
+async function switchChatConversation(payload: { kind?: ChatConversationKind; conversationId: string; remoteContactId?: string }) {
+  const kind = payload.kind === "remote_im_contact" ? "remote_im_contact" : "local_unarchived";
+  if (kind === "remote_im_contact") {
+    await switchRemoteImContactConversation(String(payload.remoteContactId || "").trim());
+    return;
+  }
+  await switchUnarchivedConversation(payload.conversationId);
+}
 const recordHotkey = useRecordHotkey({
   isActive: () => viewMode.value === "chat",
   getRecordHotkey: () => config.recordHotkey,
@@ -1298,8 +1347,8 @@ const assistantDepartmentPersona = computed(
 const currentForegroundConversationSummary = computed(() => {
   const currentConversationId = String(currentChatConversationId.value || "").trim();
   if (currentConversationId) {
-    const matched = unarchivedConversations.value.find(
-      (item) => String(item.conversationId || "").trim() === currentConversationId,
+    const matched = chatConversationItems.value.find(
+      (item) => String(item.conversationId || "").trim() === currentConversationId && item.kind !== "remote_im_contact",
     );
     if (matched) return matched;
   }
@@ -1424,6 +1473,8 @@ type SwitchConversationSnapshot = {
   unarchivedConversations?: UnarchivedConversationSummary[];
 };
 
+type ChatConversationKind = "local_unarchived" | "remote_im_contact";
+
 type ConversationTodosUpdatedPayload = {
   conversationId?: string;
   currentTodo?: string;
@@ -1479,6 +1530,7 @@ const chatUnarchivedConversationItems = computed(() => {
     .map((item) => ({
       conversationId: item.conversationId,
       title: item.title,
+      kind: "local_unarchived" as const,
       messageCount: Number(item.messageCount || 0),
       unreadCount: Number(item.unreadCount || 0),
       agentId: String(item.agentId || "").trim(),
@@ -1522,6 +1574,30 @@ const chatUnarchivedConversationItems = computed(() => {
     };
   });
 });
+
+const chatRemoteImConversationItems = computed<ChatConversationOverviewItem[]>(() =>
+  remoteImContactConversations.value.map((item) => ({
+    conversationId: String(item.conversationId || "").trim(),
+    title: String(item.title || "").trim() || String(item.contactDisplayName || "").trim(),
+    kind: "remote_im_contact",
+    remoteContactId: String(item.contactId || "").trim(),
+    remoteContactDisplayName: String(item.contactDisplayName || "").trim(),
+    messageCount: Number(item.messageCount || 0),
+    departmentId: String(item.boundDepartmentId || "").trim() || undefined,
+    departmentName: [
+      String(item.channelName || "").trim(),
+      String(item.processingMode || "").trim() === "continuous" ? "连续模式" : "问答模式",
+    ].filter(Boolean).join(" · "),
+    updatedAt: item.lastMessageAt || item.updatedAt || "",
+    lastMessageAt: item.lastMessageAt || item.updatedAt || "",
+    previewMessages: Array.isArray(item.previewMessages) ? item.previewMessages : [],
+  })),
+);
+
+const chatConversationItems = computed<ChatConversationOverviewItem[]>(() => ([
+  ...chatUnarchivedConversationItems.value,
+  ...chatRemoteImConversationItems.value,
+]));
 const {
   chatWorkspaceName,
   chatWorkspaceRootPath,
@@ -2252,6 +2328,7 @@ async function refreshChatUnarchivedConversations() {
   try {
     conversationForegroundSyncing.value = true;
     await refreshUnarchivedConversationOverview();
+    await refreshRemoteImConversationOverview();
     const currentConversationId = String(currentChatConversationId.value || "").trim();
     const nextConversationId = currentConversationId && unarchivedConversations.value.some((item) =>
       String(item.conversationId || "").trim() === currentConversationId
@@ -3159,6 +3236,16 @@ async function requestConversationLightSnapshot(conversationId?: string | null):
 
 async function requestUnarchivedConversationOverview(): Promise<UnarchivedConversationSummary[]> {
   return invokeTauri<UnarchivedConversationSummary[]>("list_unarchived_conversations");
+}
+
+async function requestRemoteImConversationMessages(contactId: string): Promise<ChatMessage[]> {
+  return invokeTauri<ChatMessage[]>("remote_im_get_contact_conversation_messages", {
+    input: { contactId },
+  });
+}
+
+async function refreshRemoteImConversationOverview() {
+  remoteImContactConversations.value = await invokeTauri<RemoteImContactConversationSummary[]>("remote_im_list_contact_conversations");
 }
 
 async function refreshUnarchivedConversationOverview() {

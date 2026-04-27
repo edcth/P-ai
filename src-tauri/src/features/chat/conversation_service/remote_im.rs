@@ -8,6 +8,7 @@ impl ConversationService {
             .lock()
             .map_err(|err| state_lock_error_with_panic(file!(), line!(), module_path!(), &err))?;
         let runtime = state_read_runtime_state_cached(state)?;
+        let config = state_read_config_cached(state)?;
         let mut unresolved_contact_ids = std::collections::HashSet::<String>::new();
         let mut resolved_pairs = Vec::<(RemoteImContact, String)>::new();
         for contact in runtime.remote_im_contacts.iter() {
@@ -77,10 +78,16 @@ impl ConversationService {
                         .or_else(|| Some(meta.updated_at().to_string())),
                     message_count: manifest_status.source_message_count,
                     channel_id: contact.channel_id.clone(),
+                    channel_name: remote_im_channel_by_id(&config, &contact.channel_id)
+                        .map(|channel| channel.name.trim().to_string())
+                        .filter(|value| !value.is_empty()),
                     platform: contact.platform.clone(),
                     contact_display_name: remote_im_contact_display_name(&contact),
                     bound_department_id: contact.bound_department_id.clone(),
                     processing_mode: normalize_contact_processing_mode(&contact.processing_mode),
+                    preview_messages: self
+                        .read_remote_im_contact_preview_messages(state, &conversation_id, 2)
+                        .unwrap_or_default(),
                 })
             } else {
                 let conversation = match self.try_read_unarchived_conversation(state, &conversation_id)? {
@@ -98,10 +105,14 @@ impl ConversationService {
                         .map(|message| message.created_at.clone()),
                     message_count: conversation.messages.len(),
                     channel_id: contact.channel_id.clone(),
+                    channel_name: remote_im_channel_by_id(&config, &contact.channel_id)
+                        .map(|channel| channel.name.trim().to_string())
+                        .filter(|value| !value.is_empty()),
                     platform: contact.platform.clone(),
                     contact_display_name: remote_im_contact_display_name(&contact),
                     bound_department_id: contact.bound_department_id.clone(),
                     processing_mode: normalize_contact_processing_mode(&contact.processing_mode),
+                    preview_messages: build_conversation_preview_messages(&conversation, 2),
                 })
             };
             if let Some(item) = summary {
@@ -121,6 +132,27 @@ impl ConversationService {
         });
         drop(guard);
         Ok(items)
+    }
+
+    fn read_remote_im_contact_preview_messages(
+        &self,
+        state: &AppState,
+        conversation_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ConversationPreviewMessage>, String> {
+        let normalized_limit = limit.max(1);
+        let store_paths = message_store::message_store_paths(&state.data_path, conversation_id)?;
+        if let Some(page) = message_store::read_ready_message_store_recent_messages_page_cached(
+            &store_paths,
+            normalized_limit,
+        )? {
+            let mut messages = page.messages;
+            materialize_chat_message_parts_from_media_refs(&mut messages, &state.data_path);
+            return Ok(build_preview_messages_from_chat_messages(&messages, normalized_limit));
+        }
+        self.with_unarchived_conversation_by_id_fast(state, conversation_id, |conversation| {
+            Ok(build_conversation_preview_messages(conversation, normalized_limit))
+        })
     }
 
     fn read_remote_im_contact_conversation_messages(

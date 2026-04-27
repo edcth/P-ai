@@ -160,10 +160,14 @@ struct RemoteImContactConversationSummary {
     last_message_at: Option<String>,
     message_count: usize,
     channel_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel_name: Option<String>,
     platform: RemoteImPlatform,
     contact_display_name: String,
     bound_department_id: Option<String>,
     processing_mode: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    preview_messages: Vec<ConversationPreviewMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

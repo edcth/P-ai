@@ -6,7 +6,7 @@
   >
     <ChatConversationSidebar
       v-if="showSideConversationList && !detachedChatWindow"
-      :items="unarchivedConversationItems"
+      :items="conversationItems || unarchivedConversationItems"
       :active-conversation-id="activeConversationId"
       :user-alias="userAlias"
       :user-avatar-url="userAvatarUrl"
@@ -542,6 +542,7 @@ const props = defineProps<{
   }>;
   currentTheme: string;
   unarchivedConversationItems: ChatConversationOverviewItem[];
+  conversationItems?: ChatConversationOverviewItem[];
   createConversationDepartmentOptions: Array<{ id: string; name: string; ownerName: string }>;
   defaultCreateConversationDepartmentId: string;
   detachedChatWindow?: boolean;
@@ -553,7 +554,7 @@ const markdownIsDark = computed(() => isDarkAppTheme(props.currentTheme));
 const activeConversationSummary = computed(() => {
   const activeConversationId = String(props.activeConversationId || "").trim();
   if (!activeConversationId) return null;
-  return props.unarchivedConversationItems.find(
+  return (props.conversationItems || props.unarchivedConversationItems).find(
     (item) => String(item.conversationId || "").trim() === activeConversationId,
   ) || null;
 });
@@ -908,7 +909,7 @@ const emit = defineEmits<{
   (e: "detachConversation"): void;
   (e: "closeSupervisionTask"): void;
   (e: "saveSupervisionTask", payload: { durationHours: number; goal: string; why: string; todo: string }): void;
-  (e: "switchConversation", conversationId: string): void;
+  (e: "switchConversation", payload: { conversationId: string; kind?: "local_unarchived" | "remote_im_contact"; remoteContactId?: string }): void;
   (e: "renameConversation", payload: { conversationId: string; title: string }): void;
   (e: "togglePinConversation", conversationId: string): void;
   (e: "createConversation", input?: { title?: string; departmentId?: string }): void;
@@ -1623,12 +1624,19 @@ function canConfirmPlan(block: ChatMessageBlock): boolean {
   return !props.messageBlocks.slice(blockIndex + 1).some((item) => !item.isExtraTextBlock && item.role === "user");
 }
 
-function handleConversationListSelect(conversationId: string) {
-  const normalizedConversationId = String(conversationId || "").trim();
+function handleConversationListSelect(payload: { conversationId: string; kind?: "local_unarchived" | "remote_im_contact"; remoteContactId?: string }) {
+  const normalizedConversationId = String(payload?.conversationId || "").trim();
   if (!normalizedConversationId) return;
   const isCurrent = normalizedConversationId === String(props.activeConversationId || "").trim();
   if (isCurrent) return;
-  emit("switchConversation", normalizedConversationId);
+  const target = (props.conversationItems || props.unarchivedConversationItems).find(
+    (item) => String(item.conversationId || "").trim() === normalizedConversationId,
+  );
+  emit("switchConversation", {
+    conversationId: normalizedConversationId,
+    kind: payload?.kind || target?.kind,
+    remoteContactId: String(payload?.remoteContactId || target?.remoteContactId || "").trim() || undefined,
+  });
 }
 
 function handleConversationRename(payload: { conversationId: string; title: string }) {

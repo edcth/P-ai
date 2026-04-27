@@ -435,7 +435,7 @@ const emit = defineEmits<{
   (e: "open-archives"): void;
   (e: "minimize-window"): void;
   (e: "toggle-maximize-window"): void;
-  (e: "switch-conversation", conversationId: string): void;
+  (e: "switch-conversation", payload: { conversationId: string; kind?: "local_unarchived" | "remote_im_contact"; remoteContactId?: string }): void;
   (e: "rename-conversation", payload: { conversationId: string; title: string }): void;
   (e: "toggle-pin-conversation", conversationId: string): void;
   (e: "create-conversation", input?: CreateConversationInput): void;
@@ -568,9 +568,13 @@ function toggleConversationList() {
   conversationListOpen.value = !conversationListOpen.value;
 }
 
-function handleConversationListSelect(conversationId: string) {
+function handleConversationListSelect(payload: { conversationId: string; kind?: "local_unarchived" | "remote_im_contact"; remoteContactId?: string }) {
   closeConversationList();
-  emit("switch-conversation", String(conversationId || "").trim());
+  emit("switch-conversation", {
+    conversationId: String(payload?.conversationId || "").trim(),
+    kind: payload?.kind,
+    remoteContactId: String(payload?.remoteContactId || "").trim() || undefined,
+  });
 }
 
 function handleConversationRename(payload: { conversationId: string; title: string }) {

@@ -833,6 +833,8 @@
       "mainConversationPinned": "Main conversation is always pinned",
       "pinnedConversations": "Pinned",
       "otherConversations": "Others",
+      "localConversationTab": "Local",
+      "contactConversationTab": "Contacts",
       "conversationSearchPlaceholder": "Search title or last two messages",
       "conversationSearchEmpty": "No matching conversations",
       "pinConversation": "Pin conversation",
