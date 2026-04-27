@@ -51,6 +51,55 @@ fn is_aliyun_dashscope_base_url(base_url: &str) -> bool {
     host.to_ascii_lowercase().contains("aliyuncs")
 }
 
+fn is_aliyun_dashscope_coding_base_url(base_url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(base_url.trim()) else {
+        return false;
+    };
+    let host = parsed
+        .host_str()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    host == "coding.dashscope.aliyuncs.com"
+        || (host.contains("dashscope.aliyuncs.com") && parsed.path().contains("/coding"))
+}
+
+fn decode_prepared_binary_payload_base64(
+    data_path: &PathBuf,
+    entry: &mut PreparedBinaryPayload,
+) -> Result<(), String> {
+    if stored_binary_ref_from_marker(&entry.content).is_some() {
+        entry.content = resolve_stored_binary_base64(data_path, &entry.content)?;
+    }
+    Ok(())
+}
+
+fn decode_prepared_binary_payloads_base64(
+    data_path: &PathBuf,
+    entries: &mut [PreparedBinaryPayload],
+) -> Result<(), String> {
+    for entry in entries {
+        if is_remote_binary_url(&entry.content) {
+            continue;
+        }
+        decode_prepared_binary_payload_base64(data_path, entry)?;
+    }
+    Ok(())
+}
+
+fn decode_prepared_prompt_binaries_base64(
+    data_path: &PathBuf,
+    prepared_prompt: &mut PreparedPrompt,
+) -> Result<(), String> {
+    for message in &mut prepared_prompt.history_messages {
+        decode_prepared_binary_payloads_base64(data_path, &mut message.images)?;
+        decode_prepared_binary_payloads_base64(data_path, &mut message.audios)?;
+    }
+    decode_prepared_binary_payloads_base64(data_path, &mut prepared_prompt.latest_images)?;
+    decode_prepared_binary_payloads_base64(data_path, &mut prepared_prompt.latest_audios)?;
+    Ok(())
+}
+
 fn aliyun_multimodal_uploads_url(base_url: &str) -> Result<String, String> {
     let mut parsed =
         reqwest::Url::parse(base_url.trim()).map_err(|err| format!("解析百炼 base_url 失败: {err}"))?;
@@ -475,16 +524,29 @@ async fn ensure_aliyun_multimodal_urls_for_entries(
             }
         }
 
-        let url = upload_media_to_aliyun_temp_url(
+        let url = match upload_media_to_aliyun_temp_url(
             state,
             api_key,
             base_url,
             model_name,
             &entry.mime,
             &content_hash,
-            raw,
+            raw.clone(),
         )
-        .await?;
+        .await
+        {
+            Ok(url) => url,
+            Err(err) => {
+                runtime_log_warn(format!(
+                    "[百炼多模态URL缓存] 上传失败，已回退为base64: model={} mime={} error={}",
+                    model_name,
+                    entry.mime,
+                    err
+                ));
+                entry.content = B64.encode(&raw);
+                continue;
+            }
+        };
         let item = AliyunMultimodalCacheItem {
             kind: kind.to_string(),
             mime: entry.mime.clone(),
@@ -525,8 +587,23 @@ async fn maybe_prepare_aliyun_multimodal_urls_for_candidate(
     if !has_multimodal {
         return Ok(());
     }
+    if is_aliyun_dashscope_coding_base_url(&resolved_api.base_url) {
+        decode_prepared_prompt_binaries_base64(&state.data_path, prepared_prompt)?;
+        runtime_log_info(format!(
+            "[百炼多模态URL缓存] 跳过，任务=prepare_multimodal_url_cache，触发条件=百炼Coding地址，处理=保留base64，会话ID={}，模型={}",
+            conversation.id,
+            model_name
+        ));
+        return Ok(());
+    }
     if resolved_api.api_key.trim().is_empty() {
-        return Err("百炼多模态 URL 缓存需要可用的 API Key。".to_string());
+        decode_prepared_prompt_binaries_base64(&state.data_path, prepared_prompt)?;
+        runtime_log_warn(format!(
+            "[百炼多模态URL缓存] 跳过上传，已回退为base64: reason=api_key_empty，会话ID={}，模型={}",
+            conversation.id,
+            model_name
+        ));
+        return Ok(());
     }
 
     let started_at = std::time::Instant::now();
@@ -677,5 +754,19 @@ mod aliyun_multimodal_cache_tests {
             "https://coding.dashscope.aliyuncs.com/v1"
         ));
         assert!(!is_aliyun_dashscope_base_url("https://api.openai.com/v1"));
+    }
+
+    #[test]
+    fn is_aliyun_dashscope_coding_base_url_should_match_coding_only() {
+        assert!(is_aliyun_dashscope_coding_base_url(
+            "https://coding.dashscope.aliyuncs.com/v1"
+        ));
+        assert!(is_aliyun_dashscope_coding_base_url(
+            "https://dashscope.aliyuncs.com/api/coding/v1"
+        ));
+        assert!(!is_aliyun_dashscope_coding_base_url(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ));
+        assert!(!is_aliyun_dashscope_coding_base_url("https://api.openai.com/v1"));
     }
 }

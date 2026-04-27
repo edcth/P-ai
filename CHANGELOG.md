@@ -2,6 +2,7 @@
 
 ## 进行中
 
+- 修复（aliyun-coding-multimodal-base64-fallback）：百炼 Coding 地址不再触发多模态临时 URL 上传，统一保留/解析为 base64 请求；百炼通用地址上传失败或 API Key 缺失时也回退 base64 继续发送，避免 URL 预处理失败直接中断候选模型。
 - 修复（chat-plan-confirm-active-plans-and-activation）：计划确认状态从聊天消息流剥离到会话级 `active_plans.jsonl`；用户同意计划时由后端原子写入进行中计划、按需压缩上下文并创建 `activateAssistant=true` 的续调度事件，LLM 调用 `plan complete` 时完成最新进行中计划，摘要与请求上下文统一注入全部进行中计划；同时为 `round_started/round_completed/round_failed` 补齐 activation/request 关联字段，前端按激活事件创建草稿并在撤回、计划确认前清理流式运行态，避免压缩后不续跑或旧草稿残影冒泡。
 - 修复（terminal-current-session-and-check-whitelist）：终端与补丁工具移除对外 `session_id` 入参，统一使用当前聊天会话绑定的工作区，避免模型自造会话 ID 后绕开会话级 full_access 配置退回系统工作区；同时将 `pnpm typecheck`、`cargo check/test`、`vue-tsc`、`tsc` 等只读校验命令纳入本地读取白名单。
 - 修复（chat-message-list-edge-padding）：聊天消息列表去掉横向滚动容器内边距，仅保留纵向间距，避免头像被列表 padding 与消息行 padding 叠加推离窗口边缘。
