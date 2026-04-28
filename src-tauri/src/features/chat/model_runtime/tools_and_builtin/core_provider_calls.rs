@@ -36,6 +36,7 @@ fn provider_openai_chat_adapter_kind(
         || base_url.contains("moonshot")
         || model_name.contains("deepseek")
         || model_name.contains("kimi")
+        || model_name.contains("mimo")
     {
         genai::adapter::AdapterKind::DeepSeek
     } else {

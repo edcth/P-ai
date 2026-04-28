@@ -155,7 +155,7 @@ impl RequestFormat {
     fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "openai" => Some(Self::OpenAI),
-            "deepseek/kimi" => Some(Self::DeepSeekKimi),
+            "deepseek/kimi" | "deepseek/kimi/mimo" => Some(Self::DeepSeekKimi),
             "openai_responses" => Some(Self::OpenAIResponses),
             "codex" => Some(Self::Codex),
             "openai_tts" => Some(Self::OpenAITts),

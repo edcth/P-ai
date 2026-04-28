@@ -207,10 +207,10 @@
                             <ChevronDown class="h-3.5 w-3.5" />
                           </button>
                         </div>
-                        <div v-if="shouldWarnDeepSeekKimiProtocol(modelCard)"
+                        <div v-if="shouldWarnDeepSeekKimiMimoProtocol(modelCard)"
                           class="alert alert-warning mt-2 py-2 text-xs">
                           <AlertTriangle class="h-4 w-4 shrink-0" />
-                          <span>{{ t("config.api.deepSeekKimiProtocolHint") }}</span>
+                          <span>{{ t("config.api.deepSeekKimiMimoProtocolHint") }}</span>
                         </div>
                       </label>
                       <div v-if="activeModelPickerId === modelCard.id"
@@ -398,7 +398,7 @@ const capabilityTabs: Array<{ id: ApiCapability; label: string }> = [
 const protocolOptionsByCapability: Record<ApiCapability, ProtocolOption[]> = {
   text: [
     { value: "openai", label: "OpenAI Compatible" },
-    { value: "deepseek/kimi", label: "DeepSeek / Kimi" },
+    { value: "deepseek/kimi", label: "DeepSeek / Kimi / Mimo" },
     { value: "openai_responses", label: "OpenAI Responses" },
     { value: "codex", label: "OpenAI Codex" },
     { value: "gemini", label: "Google Gemini" },
@@ -883,10 +883,10 @@ function maxOutputTokensMax(modelCard: ApiModelConfigItem): number {
   return Math.max(256, Math.min(128_000, Math.round(raw)));
 }
 
-function shouldWarnDeepSeekKimiProtocol(modelCard: ApiModelConfigItem): boolean {
+function shouldWarnDeepSeekKimiMimoProtocol(modelCard: ApiModelConfigItem): boolean {
   if (selectedProtocol.value === "deepseek/kimi") return false;
   const modelName = String(modelCard.model || "").toLowerCase();
-  return modelName.includes("deepseek") || modelName.includes("kimi");
+  return modelName.includes("deepseek") || modelName.includes("kimi") || modelName.includes("mimo");
 }
 
 function clampModelCardValues(modelCard: ApiModelConfigItem) {

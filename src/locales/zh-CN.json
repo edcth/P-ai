@@ -112,7 +112,7 @@
       "noModelFound": "未找到匹配模型",
       "refreshModels": "刷新模型列表",
       "temperature": "温度",
-      "deepSeekKimiProtocolHint": "模型名包含 DeepSeek/Kimi，建议使用 DeepSeek / Kimi 协议。",
+      "deepSeekKimiMimoProtocolHint": "模型名包含 DeepSeek/Kimi/Mimo，建议使用 DeepSeek / Kimi / Mimo 协议。",
       "useCustomTemperature": "自定义温度",
       "contextWindow": "上下文窗口",
       "maxOutputTokens": "最大输出",

@@ -3986,3 +3986,16 @@
         assert_eq!(decoded.width(), CHAT_UPLOAD_IMAGE_MAX_EDGE);
         assert_eq!(decoded.height(), 640);
     }
+
+    #[test]
+    fn request_format_should_accept_deepseek_kimi_alias_and_serialize_stable_value() {
+        assert_eq!(
+            RequestFormat::from_str("deepseek/kimi"),
+            Some(RequestFormat::DeepSeekKimi)
+        );
+        assert_eq!(
+            RequestFormat::from_str("deepseek/kimi/mimo"),
+            Some(RequestFormat::DeepSeekKimi)
+        );
+        assert_eq!(RequestFormat::DeepSeekKimi.as_str(), "deepseek/kimi");
+    }
