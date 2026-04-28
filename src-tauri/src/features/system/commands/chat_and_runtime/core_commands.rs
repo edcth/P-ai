@@ -1490,3 +1490,27 @@ async fn get_main_session_state_snapshot(
 ) -> Result<MainSessionState, String> {
     get_main_session_state(state.inner())
 }
+
+#[tauri::command]
+async fn get_conversation_runtime_snapshot(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<ConversationRuntimeSnapshot, String> {
+    let normalized_conversation_id = conversation_id.trim();
+    if normalized_conversation_id.is_empty() {
+        return Err("conversationId 不能为空".to_string());
+    }
+    let snapshot = read_conversation_runtime_snapshot(state.inner(), normalized_conversation_id)?;
+    runtime_log_info(format!(
+        "[聊天运行态恢复] 完成，任务=读取会话运行态快照，conversation_id={}，runtime_state={:?}，is_processing={}，pending_queue_count={}，has_visible_progress={}，assistant_text_len={}，reasoning_standard_len={}，reasoning_inline_len={}",
+        snapshot.conversation_id,
+        snapshot.runtime_state,
+        snapshot.is_processing,
+        snapshot.pending_queue_count,
+        snapshot.stream_cache.has_visible_progress,
+        snapshot.stream_cache.assistant_text.chars().count(),
+        snapshot.stream_cache.reasoning_standard.chars().count(),
+        snapshot.stream_cache.reasoning_inline.chars().count()
+    ));
+    Ok(snapshot)
+}

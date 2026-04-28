@@ -153,9 +153,34 @@ struct Conversation {
 struct ConversationRuntimeSlot {
     state: MainSessionState,
     pending_queue: std::collections::VecDeque<ChatPendingEvent>,
+    stream_cache: ConversationStreamRuntimeCache,
     active_remote_im_activation_sources: Vec<RemoteImActivationSource>,
     plan_mode_enabled: bool,
     last_activity_at: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ConversationStreamRuntimeCache {
+    activation_id: String,
+    request_id: String,
+    assistant_text: String,
+    reasoning_standard: String,
+    reasoning_inline: String,
+    tool_status_text: String,
+    tool_status_state: String,
+    stream_tool_calls: Vec<ConversationStreamToolCallRuntimeCache>,
+    stream_tool_call_count: usize,
+    stream_last_tool_name: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConversationStreamToolCallRuntimeCache {
+    name: String,
+    args_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
 }
 
 impl Default for ConversationRuntimeSlot {
@@ -163,6 +188,7 @@ impl Default for ConversationRuntimeSlot {
         Self {
             state: MainSessionState::Idle,
             pending_queue: std::collections::VecDeque::new(),
+            stream_cache: ConversationStreamRuntimeCache::default(),
             active_remote_im_activation_sources: Vec::new(),
             plan_mode_enabled: false,
             last_activity_at: String::new(),

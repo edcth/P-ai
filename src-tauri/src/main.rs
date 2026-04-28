@@ -660,6 +660,7 @@ fn main() {
              mark_chat_queue_event_guided,
              interrupt_conversation_runtime,
              get_main_session_state_snapshot,
+             get_conversation_runtime_snapshot,
             read_local_binary_file,
             queue_local_file_attachment,
             queue_inline_file_attachment,

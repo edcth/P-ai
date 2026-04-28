@@ -152,6 +152,34 @@ struct ChatQueueSnapshotPush {
     session_state: MainSessionState,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConversationRuntimeSnapshot {
+    pub conversation_id: String,
+    pub runtime_state: MainSessionState,
+    pub is_processing: bool,
+    pub has_pending_queue: bool,
+    pub pending_queue_count: usize,
+    pub stream_cache: ConversationStreamRuntimeCacheSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConversationStreamRuntimeCacheSnapshot {
+    pub activation_id: String,
+    pub request_id: String,
+    pub assistant_text: String,
+    pub reasoning_standard: String,
+    pub reasoning_inline: String,
+    pub tool_status_text: String,
+    pub tool_status_state: String,
+    pub stream_tool_calls: Vec<ConversationStreamToolCallRuntimeCache>,
+    pub stream_tool_call_count: usize,
+    pub stream_last_tool_name: String,
+    pub updated_at: String,
+    pub has_visible_progress: bool,
+}
+
 const CHAT_QUEUE_SNAPSHOT_EVENT: &str = "easy-call:chat-queue-snapshot";
 const CHAT_HISTORY_FLUSHED_EVENT: &str = "easy-call:history-flushed";
 const CHAT_ROUND_STARTED_EVENT: &str = "easy-call:round-started";
@@ -668,6 +696,122 @@ fn is_visible_stream_progress_event(event: &AssistantDeltaEvent) -> bool {
     )
 }
 
+fn stream_cache_has_visible_progress(cache: &ConversationStreamRuntimeCache) -> bool {
+    !cache.assistant_text.trim().is_empty()
+        || !cache.reasoning_standard.trim().is_empty()
+        || !cache.reasoning_inline.trim().is_empty()
+        || !cache.tool_status_text.trim().is_empty()
+        || !cache.tool_status_state.trim().is_empty()
+        || !cache.stream_tool_calls.is_empty()
+}
+
+fn reset_conversation_stream_runtime_cache(
+    state: &AppState,
+    conversation_id: &str,
+    activation_id: &str,
+    request_id: &str,
+) -> Result<(), String> {
+    let mut slots = lock_conversation_runtime_slots(state)?;
+    let slot = conversation_slot_mut(&mut slots, conversation_id);
+    slot.stream_cache = ConversationStreamRuntimeCache {
+        activation_id: activation_id.trim().to_string(),
+        request_id: request_id.trim().to_string(),
+        updated_at: now_iso(),
+        ..ConversationStreamRuntimeCache::default()
+    };
+    Ok(())
+}
+
+fn clear_conversation_stream_runtime_cache(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<(), String> {
+    let mut slots = lock_conversation_runtime_slots(state)?;
+    if let Some(slot) = slots.get_mut(conversation_id.trim()) {
+        slot.stream_cache = ConversationStreamRuntimeCache::default();
+    }
+    Ok(())
+}
+
+fn update_conversation_stream_runtime_cache(
+    state: &AppState,
+    conversation_id: &str,
+    event: &AssistantDeltaEvent,
+) -> Result<(), String> {
+    let cid = conversation_id.trim();
+    if cid.is_empty() {
+        return Ok(());
+    }
+    if event.kind.as_deref() == Some("round_completed")
+        || event.kind.as_deref() == Some("round_failed")
+        || event.kind.as_deref() == Some("history_flushed")
+        || event.kind.as_deref() == Some("stream_rebind_required")
+    {
+        return Ok(());
+    }
+    let has_progress = is_visible_stream_progress_event(event)
+        || event.kind.as_deref() == Some("tool_status");
+    if !has_progress {
+        return Ok(());
+    }
+
+    let mut slots = lock_conversation_runtime_slots(state)?;
+    let slot = conversation_slot_mut(&mut slots, cid);
+    let cache = &mut slot.stream_cache;
+    if let Some(value) = event
+        .activation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        cache.activation_id = value.to_string();
+    }
+    if let Some(value) = event
+        .request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        cache.request_id = value.to_string();
+    }
+    match event.kind.as_deref() {
+        Some("tool_status") => {
+            let tool_name = event.tool_name.as_deref().map(str::trim).unwrap_or("");
+            if event.tool_status.as_deref() == Some("running") && !tool_name.is_empty() {
+                cache.stream_tool_call_count += 1;
+                cache.stream_last_tool_name = tool_name.to_string();
+                if let Some(last) = cache.stream_tool_calls.last_mut() {
+                    if last.status.as_deref() != Some("done") {
+                        last.status = Some("done".to_string());
+                    }
+                }
+                cache.stream_tool_calls.push(ConversationStreamToolCallRuntimeCache {
+                    name: tool_name.to_string(),
+                    args_text: event.tool_args.clone().unwrap_or_default(),
+                    status: Some("doing".to_string()),
+                });
+            }
+            cache.tool_status_text = event.message.clone().unwrap_or_default();
+            let status = event.tool_status.as_deref().unwrap_or("").trim();
+            cache.tool_status_state = match status {
+                "running" | "done" | "failed" => status.to_string(),
+                _ => String::new(),
+            };
+        }
+        Some("reasoning_standard") => {
+            cache.reasoning_standard.push_str(&event.delta);
+        }
+        Some("reasoning_inline") => {
+            cache.reasoning_inline.push_str(&event.delta);
+        }
+        _ => {
+            cache.assistant_text.push_str(&event.delta);
+        }
+    }
+    cache.updated_at = now_iso();
+    Ok(())
+}
+
 fn dispatch_assistant_delta_to_active_view(
     state: &AppState,
     conversation_id: &str,
@@ -978,6 +1122,56 @@ pub(crate) fn get_conversation_runtime_state(
         .get(conversation_id)
         .map(|slot| slot.state.clone())
         .unwrap_or(MainSessionState::Idle))
+}
+
+pub(crate) fn read_conversation_runtime_snapshot(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<ConversationRuntimeSnapshot, String> {
+    let cid = conversation_id.trim();
+    let claims = lock_conversation_processing_claims(state)?;
+    let is_processing = claims.contains(cid);
+    drop(claims);
+    let slots = lock_conversation_runtime_slots(state)?;
+    let (runtime_state, pending_queue_count, stream_cache) = slots
+        .get(cid)
+        .map(|slot| {
+            (
+                slot.state.clone(),
+                slot.pending_queue.len(),
+                slot.stream_cache.clone(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                MainSessionState::Idle,
+                0,
+                ConversationStreamRuntimeCache::default(),
+            )
+        });
+    let has_visible_progress = stream_cache_has_visible_progress(&stream_cache);
+    let stream_cache = ConversationStreamRuntimeCacheSnapshot {
+        activation_id: stream_cache.activation_id,
+        request_id: stream_cache.request_id,
+        assistant_text: stream_cache.assistant_text,
+        reasoning_standard: stream_cache.reasoning_standard,
+        reasoning_inline: stream_cache.reasoning_inline,
+        tool_status_text: stream_cache.tool_status_text,
+        tool_status_state: stream_cache.tool_status_state,
+        stream_tool_calls: stream_cache.stream_tool_calls,
+        stream_tool_call_count: stream_cache.stream_tool_call_count,
+        stream_last_tool_name: stream_cache.stream_last_tool_name,
+        updated_at: stream_cache.updated_at,
+        has_visible_progress,
+    };
+    Ok(ConversationRuntimeSnapshot {
+        conversation_id: cid.to_string(),
+        runtime_state,
+        is_processing,
+        has_pending_queue: pending_queue_count > 0,
+        pending_queue_count,
+        stream_cache,
+    })
 }
 
 /// 设置会话状态并记录日志
@@ -1689,6 +1883,12 @@ async fn activate_main_assistant(
     }
     let activation_id = trace_id.clone();
     let activation_reason = resolve_activation_reason(&runtime_context);
+    reset_conversation_stream_runtime_cache(
+        state,
+        conversation_id,
+        activation_id.as_str(),
+        trace_id.as_str(),
+    )?;
     emit_round_started_event(
         state,
         conversation_id,
@@ -1796,6 +1996,18 @@ async fn activate_main_assistant(
                 }
             };
             if let Some(event) = parsed_event {
+                if let Err(err) = update_conversation_stream_runtime_cache(
+                    &state_for_delta,
+                    &conversation_id_for_emit,
+                    &event,
+                ) {
+                    runtime_log_warn(format!(
+                        "[聊天流式缓存] 更新失败，conversation_id={}，kind={}，error={}",
+                        conversation_id_for_emit.trim(),
+                        event.kind.as_deref().unwrap_or("delta"),
+                        err
+                    ));
+                }
                 let mut stream_start_rebind_guard =
                     stream_start_rebind_emitted_for_channel.lock().ok();
                 if event.kind.as_deref() == Some("stream_rebind_required") {
@@ -1883,6 +2095,12 @@ async fn activate_main_assistant(
         MainSessionState::Idle
     };
     set_conversation_runtime_state(state, conversation_id, next_state)?;
+    if let Err(err) = clear_conversation_stream_runtime_cache(state, conversation_id) {
+        runtime_log_warn(format!(
+            "[聊天流式缓存] 清理失败，conversation_id={}，error={}",
+            conversation_id, err
+        ));
+    }
 
     result.map(|result| ActivatedAssistantResult {
         result,

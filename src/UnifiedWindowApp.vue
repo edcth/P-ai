@@ -445,7 +445,7 @@ import { useMemoryViewer } from "./features/memory/composables/use-memory-viewer
 import { useAppWatchers } from "./features/shell/composables/use-app-watchers";
 import { useRecordHotkey } from "./features/chat/composables/use-record-hotkey";
 import { useSpeechRecording } from "./features/chat/composables/use-speech-recording";
-import { useChatFlow } from "./features/chat/composables/use-chat-flow";
+import { useChatFlow, type ConversationRuntimeStreamCacheSnapshot } from "./features/chat/composables/use-chat-flow";
 import {
   extractMessageImages,
   messageText,
@@ -1492,6 +1492,7 @@ let pendingConversationScrollToBottomConversationId = "";
 let pendingConversationScrollToBottomTimer = 0;
 let pendingManualScrollToBottomConversationId = "";
 let pendingManualScrollToBottomRequestId = "";
+let foregroundRuntimeResumeSeq = 0;
 
 type SwitchConversationSnapshot = {
   conversationId: string;
@@ -1501,6 +1502,15 @@ type SwitchConversationSnapshot = {
   currentTodo?: string;
   currentTodos?: ChatTodoItem[];
   unarchivedConversations?: UnarchivedConversationSummary[];
+};
+
+type ConversationRuntimeSnapshot = {
+  conversationId: string;
+  runtimeState: "idle" | "assistant_streaming" | "organizing_context";
+  isProcessing?: boolean;
+  hasPendingQueue?: boolean;
+  pendingQueueCount?: number;
+  streamCache?: ConversationRuntimeStreamCacheSnapshot;
 };
 
 type ChatConversationKind = "local_unarchived" | "remote_im_contact";
@@ -2442,6 +2452,7 @@ async function initializeDetachedChatWindow() {
     applyConversationSnapshot(snapshot);
     await nextTick();
     maybeResumeForegroundStreamingDraft(conversationId, "detached_window_init");
+    await resumeForegroundRuntimeFromBackend(conversationId, "detached_window_init");
   } catch (error) {
     setStatusError("status.loadMessagesFailed", error);
   }
@@ -2614,6 +2625,59 @@ function maybeResumeForegroundStreamingDraft(conversationId?: string | null, rea
     currentMessageCount: allMessages.value.length,
   });
   chatFlow.resumeForegroundStreamingRound();
+}
+
+function conversationRuntimeSnapshotIsBusy(snapshot?: ConversationRuntimeSnapshot | null): boolean {
+  if (!snapshot) return false;
+  return snapshot.runtimeState === "assistant_streaming"
+    || !!snapshot.isProcessing
+    || !!snapshot.hasPendingQueue
+    || Math.max(0, Number(snapshot.pendingQueueCount || 0)) > 0;
+}
+
+async function requestConversationRuntimeSnapshot(conversationId: string): Promise<ConversationRuntimeSnapshot> {
+  return invokeTauri<ConversationRuntimeSnapshot>("get_conversation_runtime_snapshot", {
+    conversationId,
+  });
+}
+
+async function resumeForegroundRuntimeFromBackend(conversationId?: string | null, reason = "unknown") {
+  const cid = String(conversationId || "").trim();
+  if (!cid || cid !== String(currentChatConversationId.value || "").trim()) return;
+  const resumeSeq = ++foregroundRuntimeResumeSeq;
+  try {
+    const snapshot = await requestConversationRuntimeSnapshot(cid);
+    if (resumeSeq !== foregroundRuntimeResumeSeq) return;
+    if (cid !== String(currentChatConversationId.value || "").trim()) return;
+    const busy = conversationRuntimeSnapshotIsBusy(snapshot);
+    console.info("[聊天运行态恢复] 后端快照", {
+      conversationId: cid,
+      reason,
+      runtimeState: snapshot.runtimeState,
+      isProcessing: !!snapshot.isProcessing,
+      pendingQueueCount: Math.max(0, Number(snapshot.pendingQueueCount || 0)),
+      hasVisibleProgress: !!snapshot.streamCache?.hasVisibleProgress,
+      assistantTextLength: String(snapshot.streamCache?.assistantText || "").length,
+      reasoningStandardLength: String(snapshot.streamCache?.reasoningStandard || "").length,
+      reasoningInlineLength: String(snapshot.streamCache?.reasoningInline || "").length,
+    });
+    if (!busy) return;
+    await chatFlow.bindActiveConversationStream(cid, true);
+    if (resumeSeq !== foregroundRuntimeResumeSeq) return;
+    if (cid !== String(currentChatConversationId.value || "").trim()) return;
+    chatFlow.resumeForegroundRuntimeRound({
+      conversationId: cid,
+      streamCache: snapshot.streamCache || null,
+      statusText: t("chat.statusWaitingReply"),
+      reason,
+    });
+  } catch (error) {
+    console.warn("[聊天运行态恢复] 后端快照读取失败", {
+      conversationId: cid,
+      reason,
+      error,
+    });
+  }
 }
 
 function areMessagesEquivalent(left: ChatMessage[], right: ChatMessage[]): boolean {
@@ -3094,6 +3158,7 @@ function applyConversationSnapshot(snapshot: SwitchConversationSnapshot) {
   }
   if (nextRuntimeState === "assistant_streaming") {
     maybeResumeForegroundStreamingDraft(nextConversationId, "apply_snapshot");
+    void resumeForegroundRuntimeFromBackend(nextConversationId, "apply_snapshot");
   }
   scheduleConversationScrollToBottomFallback(nextConversationId);
 }
@@ -3388,6 +3453,7 @@ async function switchUnarchivedConversation(conversationId: string) {
     hasMoreBackendHistory.value = inferHasMoreHistoryFromSnapshot(cachedDisplay);
     foregroundTailLatestReady.value = false;
     maybeResumeForegroundStreamingDraft(cid, "switch_cached_display");
+    void resumeForegroundRuntimeFromBackend(cid, "switch_cached_display");
     clearConversationBadge(cid);
     const trace = beginForegroundPaintTrace(cid);
     await nextTick();
@@ -3400,6 +3466,7 @@ async function switchUnarchivedConversation(conversationId: string) {
     });
     const snapshot = await requestConversationLightSnapshot(cid);
     applyConversationSnapshot(snapshot);
+    await resumeForegroundRuntimeFromBackend(cid, "switch_snapshot");
     await nextTick();
     logForegroundPaintTrace(trace, "前台轻量快照已接管最新消息", {
       conversationId: cid,
@@ -4595,6 +4662,7 @@ watch(
       try {
         await chatFlow.bindActiveConversationStream(conversationId);
         maybeResumeForegroundStreamingDraft(conversationId, "bind_active_stream");
+        await resumeForegroundRuntimeFromBackend(conversationId, "bind_active_stream");
       } catch (error) {
         console.warn("[聊天推送] 绑定前台流失败", {
           conversationId,
