@@ -544,7 +544,17 @@ pub(crate) fn ingress_chat_event(
     let mut slots = lock_conversation_runtime_slots(state)?;
     let running_count = claims.len();
     let slot = conversation_slot_mut(&mut slots, &event.conversation_id);
+    let previous_state = slot.state.clone();
+    let pending_before = slot.pending_queue.len();
     if pending_queue_has_same_request_id(slot, &event) {
+        runtime_log_info(format!(
+            "[聊天调度] ingress 判定=重复请求，conversation_id={}，event_id={}，running_count={}，pending_queue_count={}，state={:?}",
+            event.conversation_id,
+            event.id,
+            running_count,
+            pending_before,
+            previous_state
+        ));
         return Ok(ChatEventIngress::Duplicate { event_id: event.id });
     }
     let blocked = slot.state != MainSessionState::Idle
@@ -552,15 +562,45 @@ pub(crate) fn ingress_chat_event(
         || conversation_running_slot_count(&claims, &event.conversation_id) > 0
         || running_count >= CHAT_CONCURRENCY_LIMIT;
     if blocked && chat_pending_event_duplicates_existing_message(state, &event)? {
+        runtime_log_info(format!(
+            "[聊天调度] ingress 判定=重复消息，conversation_id={}，event_id={}，running_count={}，pending_queue_count={}，state={:?}",
+            event.conversation_id,
+            event.id,
+            running_count,
+            pending_before,
+            previous_state
+        ));
         return Ok(ChatEventIngress::Duplicate { event_id: event.id });
     }
     slot.last_activity_at = now_iso();
     if blocked {
         let event_id = event.id.clone();
         slot.pending_queue.push_back(event);
+        runtime_log_info(format!(
+            "[聊天调度] ingress 判定=入队，conversation_id={}，event_id={}，running_count={}，pending_queue_before={}，pending_queue_after={}，state={:?}",
+            slot
+                .pending_queue
+                .back()
+                .map(|item| item.conversation_id.as_str())
+                .unwrap_or(""),
+            event_id,
+            running_count,
+            pending_before,
+            slot.pending_queue.len(),
+            previous_state
+        ));
         return Ok(ChatEventIngress::Queued { event_id });
     }
     claims.insert(event.conversation_id.clone());
+    runtime_log_info(format!(
+        "[聊天调度] ingress 判定=直通，conversation_id={}，event_id={}，running_count_before={}，claim_count_after={}，pending_queue_count={}，state={:?}",
+        event.conversation_id,
+        event.id,
+        running_count,
+        claims.len(),
+        pending_before,
+        previous_state
+    ));
     Ok(ChatEventIngress::Direct(event))
 }
 
@@ -694,6 +734,66 @@ fn is_visible_stream_progress_event(event: &AssistantDeltaEvent) -> bool {
         event.kind.as_deref(),
         Some("reasoning_standard") | Some("reasoning_inline")
     )
+}
+
+#[cfg(test)]
+type TestMainAssistantActivationHook = std::sync::Arc<
+    dyn Fn(
+            String,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Option<Result<SendChatResult, String>>>
+                    + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
+#[cfg(test)]
+fn test_main_assistant_activation_hook_slot(
+) -> &'static std::sync::Mutex<Option<TestMainAssistantActivationHook>> {
+    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<TestMainAssistantActivationHook>>> =
+        std::sync::OnceLock::new();
+    HOOK.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+struct TestMainAssistantActivationHookGuard {
+    previous: Option<TestMainAssistantActivationHook>,
+}
+
+#[cfg(test)]
+impl Drop for TestMainAssistantActivationHookGuard {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = test_main_assistant_activation_hook_slot().lock() {
+            *slot = self.previous.take();
+        }
+    }
+}
+
+#[cfg(test)]
+fn install_test_main_assistant_activation_hook(
+    hook: TestMainAssistantActivationHook,
+) -> TestMainAssistantActivationHookGuard {
+    let previous = test_main_assistant_activation_hook_slot()
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.replace(hook));
+    TestMainAssistantActivationHookGuard { previous }
+}
+
+#[cfg(test)]
+async fn run_test_main_assistant_activation_hook(
+    conversation_id: &str,
+) -> Option<Result<SendChatResult, String>> {
+    let hook = test_main_assistant_activation_hook_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone());
+    match hook {
+        Some(hook) => hook(conversation_id.to_string()).await,
+        None => None,
+    }
 }
 
 fn stream_cache_has_visible_progress(cache: &ConversationStreamRuntimeCache) -> bool {
@@ -915,6 +1015,7 @@ pub(crate) fn clear_active_chat_view_stream_binding(
 }
 
 pub(crate) fn trigger_chat_queue_processing(state: &AppState) {
+    runtime_log_info("[聊天调度] 触发出队扫描".to_string());
     let state_clone = state.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = process_chat_queue(&state_clone).await {
@@ -943,6 +1044,10 @@ pub(crate) async fn process_chat_event_after_ingress(state: &AppState, ingress: 
     match ingress {
         ChatEventIngress::Direct(event) => {
             let conversation_id = event.conversation_id.clone();
+            runtime_log_info(format!(
+                "[聊天调度] ingress 后处理=直通执行，conversation_id={}，event_id={}",
+                conversation_id, event.id
+            ));
             if let Err(err) =
                 process_claimed_conversation_batch(state, &conversation_id, vec![event]).await
             {
@@ -950,9 +1055,17 @@ pub(crate) async fn process_chat_event_after_ingress(state: &AppState, ingress: 
             }
         }
         ChatEventIngress::Queued { event_id } => {
+            runtime_log_info(format!(
+                "[聊天调度] ingress 后处理=尝试出队，event_id={}",
+                event_id
+            ));
             process_chat_queue_for_event(state, &event_id).await;
         }
         ChatEventIngress::Duplicate { event_id } => {
+            runtime_log_info(format!(
+                "[聊天调度] ingress 后处理=重复忽略，event_id={}",
+                event_id
+            ));
             let _ = complete_pending_chat_events_with_error(
                 state,
                 &[event_id],
@@ -975,12 +1088,22 @@ async fn process_claimed_conversation_batch(
     conversation_id: &str,
     events: Vec<ChatPendingEvent>,
 ) -> Result<(), String> {
+    runtime_log_info(format!(
+        "[聊天调度] 开始处理 claim 批次，conversation_id={}，event_count={}",
+        conversation_id,
+        events.len()
+    ));
     let result = process_conversation_batch(state, conversation_id, events).await;
     if let Err(release_err) = release_conversation_processing_claim(state, conversation_id) {
         eprintln!(
             "[聊天调度] 释放会话处理声明失败: conversation_id={}, error={}",
             conversation_id, release_err
         );
+    } else {
+        runtime_log_info(format!(
+            "[聊天调度] 已释放会话 claim，conversation_id={}",
+            conversation_id
+        ));
     }
     emit_chat_queue_snapshot(state);
     if conversation_has_guided_queue_events(state, conversation_id).unwrap_or(false) {
@@ -1323,6 +1446,11 @@ fn release_conversation_processing_claim(
 ) -> Result<(), String> {
     let mut claims = lock_conversation_processing_claims(state)?;
     claims.remove(conversation_id.trim());
+    runtime_log_info(format!(
+        "[聊天调度] claim 释放完成，conversation_id={}，remaining_claim_count={}",
+        conversation_id.trim(),
+        claims.len()
+    ));
     Ok(())
 }
 
@@ -1335,6 +1463,11 @@ fn claim_queued_conversation_batches(
         .map_err(|_| "Failed to lock dequeue lock".to_string())?;
     let mut claims = lock_conversation_processing_claims(state)?;
     if claims.len() >= CHAT_CONCURRENCY_LIMIT {
+        runtime_log_info(format!(
+            "[聊天调度] 出队扫描跳过：并发已满，claim_count={}，limit={}",
+            claims.len(),
+            CHAT_CONCURRENCY_LIMIT
+        ));
         return Ok(Vec::new());
     }
     let available_slots = CHAT_CONCURRENCY_LIMIT.saturating_sub(claims.len());
@@ -1371,6 +1504,12 @@ fn claim_queued_conversation_batches(
         }
         slot.last_activity_at = now_iso();
         claims.insert(conversation_id.clone());
+        runtime_log_info(format!(
+            "[聊天调度] 出队 claim 成功，conversation_id={}，event_count={}，claim_count_after={}",
+            conversation_id,
+            batch.len(),
+            claims.len()
+        ));
         claimed_batches.push((conversation_id, batch));
     }
     Ok(claimed_batches)
@@ -1388,8 +1527,13 @@ fn claim_queued_conversation_batches(
 pub(crate) async fn process_chat_queue(state: &AppState) -> Result<(), String> {
     let claimed_batches = claim_queued_conversation_batches(state)?;
     if claimed_batches.is_empty() {
+        runtime_log_info("[聊天调度] 出队扫描完成：无可执行会话".to_string());
         return Ok(());
     }
+    runtime_log_info(format!(
+        "[聊天调度] 出队扫描完成：claimed_conversation_count={}",
+        claimed_batches.len()
+    ));
     emit_chat_queue_snapshot(state);
     for (conversation_id, events) in claimed_batches {
         let state_clone = state.clone();
@@ -1417,6 +1561,11 @@ async fn process_conversation_batch(
     conversation_id: &str,
     events: Vec<ChatPendingEvent>,
 ) -> Result<(), String> {
+    runtime_log_info(format!(
+        "[聊天调度] 开始处理会话批次，conversation_id={}，event_count={}",
+        conversation_id,
+        events.len()
+    ));
     let event_ids = events
         .iter()
         .map(|event| event.id.clone())
@@ -1585,6 +1734,12 @@ async fn process_conversation_batch(
     )?;
     let persisted_batch_messages = commit_result.persisted_batch_messages;
     let event_activate_flags = commit_result.event_activate_flags;
+    runtime_log_info(format!(
+        "[聊天调度] 历史落库完成，conversation_id={}，persisted_message_count={}，event_count={}",
+        conversation_id,
+        persisted_batch_messages.len(),
+        event_ids.len()
+    ));
 
     // 2. 判断是否需要激活主助理。
     // 这一步故意放在“写历史之后”，避免出现前端先开流式、
@@ -1592,6 +1747,12 @@ async fn process_conversation_batch(
     let activated_remote_im_sources =
         collect_activated_remote_im_sources(&events, &event_activate_flags);
     let should_activate = event_activate_flags.iter().copied().any(|v| v);
+    runtime_log_info(format!(
+        "[聊天调度] 激活判定完成，conversation_id={}，should_activate={}，activated_event_count={}",
+        conversation_id,
+        should_activate,
+        event_activate_flags.iter().filter(|flag| **flag).count()
+    ));
     let guided_event_ids = events
         .iter()
         .filter(|event| event.queue_mode == ChatQueueMode::Guided)
@@ -1657,6 +1818,12 @@ async fn process_conversation_batch(
             .await
             {
                 Ok(activated) => {
+                    runtime_log_info(format!(
+                        "[聊天调度] 主助理激活完成，conversation_id={}，activation_id={}，request_id={}",
+                        conversation_id,
+                        activated.activation_id,
+                        activated.request_id
+                    ));
                     let result = activated.result;
                     let mut follow_up_sources = match remote_im_finalize_round_completion(
                         state,
@@ -1767,6 +1934,12 @@ async fn process_conversation_batch(
                     }
                 }
                 Err(err) => {
+                    runtime_log_warn(format!(
+                        "[聊天调度] 主助理激活失败，conversation_id={}，request_id={}，error={}",
+                        conversation_id,
+                        main_request_id,
+                        err
+                    ));
                     if err == CHAT_ABORTED_BY_USER_ERROR {
                         complete_pending_chat_events_with_error(state, &event_ids, &err)?;
                         if let Err(finalize_err) = remote_im_finalize_round_completion(
@@ -1810,6 +1983,11 @@ async fn process_conversation_batch(
             }
         }
     } else {
+        runtime_log_info(format!(
+            "[聊天调度] 本批仅落历史不激活，conversation_id={}，event_count={}",
+            conversation_id,
+            event_ids.len()
+        ));
         set_conversation_remote_im_activation_sources(state, conversation_id, Vec::new())?;
         // 不激活时，本批消息依然已经是正式历史的一部分。
         // 这里只回传一个“已落地但未开启新轮次”的结果，前端应刷新历史，
@@ -1856,6 +2034,12 @@ async fn activate_main_assistant(
     remote_im_activation_sources: Vec<RemoteImActivationSource>,
     oldest_queue_created_at: &str,
 ) -> Result<ActivatedAssistantResult, String> {
+    runtime_log_info(format!(
+        "[聊天调度] 开始激活主助理，conversation_id={}，activation_bound={}，guided_event_count={}",
+        conversation_id,
+        activation.is_some(),
+        guided_event_ids.map(|items| items.len()).unwrap_or(0)
+    ));
     let mut runtime_context = runtime_context.unwrap_or_default();
     if runtime_context.bound_remote_im_activation_source.is_none() {
         runtime_context.bound_remote_im_activation_source =
@@ -1980,99 +2164,107 @@ async fn activate_main_assistant(
         runtime_context: Some(runtime_context),
     };
 
-    // 使用 emit 作为远程激活轮次的流式主通道，避免前端窗口重绑定造成 channel 失联。
-    let state_for_delta = state.clone();
-    let conversation_id_for_emit = conversation_id.to_string();
-    let stream_start_rebind_emitted = std::sync::Arc::new(std::sync::Mutex::new(false));
-    let stream_start_rebind_emitted_for_channel = stream_start_rebind_emitted.clone();
-    let active_channel: tauri::ipc::Channel<AssistantDeltaEvent> = tauri::ipc::Channel::new(
-        move |body| {
-            let parsed_event = match body {
-                tauri::ipc::InvokeResponseBody::Json(json) => {
-                    serde_json::from_str::<AssistantDeltaEvent>(&json).ok()
-                }
-                tauri::ipc::InvokeResponseBody::Raw(bytes) => {
-                    serde_json::from_slice::<AssistantDeltaEvent>(&bytes).ok()
-                }
-            };
-            if let Some(event) = parsed_event {
-                if let Err(err) = update_conversation_stream_runtime_cache(
-                    &state_for_delta,
-                    &conversation_id_for_emit,
-                    &event,
-                ) {
-                    runtime_log_warn(format!(
-                        "[聊天流式缓存] 更新失败，conversation_id={}，kind={}，error={}",
-                        conversation_id_for_emit.trim(),
-                        event.kind.as_deref().unwrap_or("delta"),
-                        err
-                    ));
-                }
-                let mut stream_start_rebind_guard =
-                    stream_start_rebind_emitted_for_channel.lock().ok();
-                if event.kind.as_deref() == Some("stream_rebind_required") {
-                    if let Some(flag) = stream_start_rebind_guard.as_mut() {
-                        **flag = false;
+    #[cfg(test)]
+    let test_activation_result = run_test_main_assistant_activation_hook(conversation_id).await;
+    #[cfg(not(test))]
+    let test_activation_result: Option<Result<SendChatResult, String>> = None;
+
+    let result = if let Some(result) = test_activation_result {
+        result
+    } else {
+        // 使用 emit 作为远程激活轮次的流式主通道，避免前端窗口重绑定造成 channel 失联。
+        let state_for_delta = state.clone();
+        let conversation_id_for_emit = conversation_id.to_string();
+        let stream_start_rebind_emitted = std::sync::Arc::new(std::sync::Mutex::new(false));
+        let stream_start_rebind_emitted_for_channel = stream_start_rebind_emitted.clone();
+        let active_channel: tauri::ipc::Channel<AssistantDeltaEvent> =
+            tauri::ipc::Channel::new(move |body| {
+                let parsed_event = match body {
+                    tauri::ipc::InvokeResponseBody::Json(json) => {
+                        serde_json::from_str::<AssistantDeltaEvent>(&json).ok()
                     }
-                } else if stream_start_rebind_guard
-                    .as_ref()
-                    .map(|flag| !**flag)
-                    .unwrap_or(true)
-                    && is_visible_stream_progress_event(&event)
-                {
-                    runtime_log_info(format!(
-                        "[聊天流式重绑] 检测到首个可见流式包 conversation_id={} kind={} delta_len={}",
-                        conversation_id_for_emit.trim(),
-                        event.kind.as_deref().unwrap_or("delta"),
-                        event.delta.chars().count(),
-                    ));
-                    emit_stream_rebind_required_event(
+                    tauri::ipc::InvokeResponseBody::Raw(bytes) => {
+                        serde_json::from_slice::<AssistantDeltaEvent>(&bytes).ok()
+                    }
+                };
+                if let Some(event) = parsed_event {
+                    if let Err(err) = update_conversation_stream_runtime_cache(
                         &state_for_delta,
                         &conversation_id_for_emit,
-                        event.request_id.as_deref(),
-                        event.phase_id.as_deref(),
-                        "stream_start",
-                    );
-                    runtime_log_info(format!(
-                        "[聊天流式重绑] 首个可见流式包触发重绑事件 conversation_id={} kind={} delta_len={}",
-                        conversation_id_for_emit.trim(),
-                        event.kind.as_deref().unwrap_or("delta"),
-                        event.delta.chars().count(),
-                    ));
-                    if let Some(flag) = stream_start_rebind_guard.as_mut() {
-                        **flag = true;
+                        &event,
+                    ) {
+                        runtime_log_warn(format!(
+                            "[聊天流式缓存] 更新失败，conversation_id={}，kind={}，error={}",
+                            conversation_id_for_emit.trim(),
+                            event.kind.as_deref().unwrap_or("delta"),
+                            err
+                        ));
                     }
-                }
-                if should_emit_assistant_delta_via_app_event_only(&event) {
+                    let mut stream_start_rebind_guard =
+                        stream_start_rebind_emitted_for_channel.lock().ok();
                     if event.kind.as_deref() == Some("stream_rebind_required") {
+                        if let Some(flag) = stream_start_rebind_guard.as_mut() {
+                            **flag = false;
+                        }
+                    } else if stream_start_rebind_guard
+                        .as_ref()
+                        .map(|flag| !**flag)
+                        .unwrap_or(true)
+                        && is_visible_stream_progress_event(&event)
+                    {
+                        runtime_log_info(format!(
+                            "[聊天流式重绑] 检测到首个可见流式包 conversation_id={} kind={} delta_len={}",
+                            conversation_id_for_emit.trim(),
+                            event.kind.as_deref().unwrap_or("delta"),
+                            event.delta.chars().count(),
+                        ));
                         emit_stream_rebind_required_event(
                             &state_for_delta,
                             &conversation_id_for_emit,
                             event.request_id.as_deref(),
                             event.phase_id.as_deref(),
-                            event.reason.as_deref().unwrap_or("tool_start"),
+                            "stream_start",
                         );
+                        runtime_log_info(format!(
+                            "[聊天流式重绑] 首个可见流式包触发重绑事件 conversation_id={} kind={} delta_len={}",
+                            conversation_id_for_emit.trim(),
+                            event.kind.as_deref().unwrap_or("delta"),
+                            event.delta.chars().count(),
+                        ));
+                        if let Some(flag) = stream_start_rebind_guard.as_mut() {
+                            **flag = true;
+                        }
+                    }
+                    if should_emit_assistant_delta_via_app_event_only(&event) {
+                        if event.kind.as_deref() == Some("stream_rebind_required") {
+                            emit_stream_rebind_required_event(
+                                &state_for_delta,
+                                &conversation_id_for_emit,
+                                event.request_id.as_deref(),
+                                event.phase_id.as_deref(),
+                                event.reason.as_deref().unwrap_or("tool_start"),
+                            );
+                        } else {
+                            emit_assistant_delta_app_event(
+                                &state_for_delta,
+                                &conversation_id_for_emit,
+                                &event,
+                            );
+                        }
                     } else {
-                        emit_assistant_delta_app_event(
+                        dispatch_assistant_delta_to_active_view(
                             &state_for_delta,
                             &conversation_id_for_emit,
                             &event,
                         );
                     }
-                } else {
-                    dispatch_assistant_delta_to_active_view(
-                        &state_for_delta,
-                        &conversation_id_for_emit,
-                        &event,
-                    );
                 }
-            }
-            Ok(())
-        },
-    );
+                Ok(())
+            });
 
-    // 调用 send_chat_message_inner
-    let result = send_chat_message_inner(request, state, &active_channel).await;
+        // 调用 send_chat_message_inner
+        send_chat_message_inner(request, state, &active_channel).await
+    };
 
     // WeixinOc 渠道：回复结束后停止 typing
     for (ch_id, contact_id, _) in &weixin_oc_typing_sources {

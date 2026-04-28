@@ -477,6 +477,12 @@ async fn call_model_openai_stream_internal(
     on_delta: Option<&tauri::ipc::Channel<AssistantDeltaEvent>>,
     app_state: Option<&AppState>,
 ) -> Result<ModelReply, String> {
+    runtime_log_info(format!(
+        "[聊天模型] 普通流式请求准备开始: model={} kind={:?} base_url={}",
+        model_name,
+        kind,
+        api_config.base_url
+    ));
     let api_config = resolve_request_api_config(api_config).await?;
     let _provider_serial_guard =
         maybe_acquire_provider_serial_guard(app_state, &api_config, model_name).await?;
@@ -519,6 +525,14 @@ async fn call_model_openai_stream_internal(
         options = options.with_max_tokens(max_output_tokens);
     }
 
+    runtime_log_info(format!(
+        "[聊天模型] 普通流式请求发起: model={} adapter={:?} protocol={:?} history_message_count={} base_url={}",
+        model_name,
+        adapter_kind,
+        protocol_family,
+        prepared.history_messages.len(),
+        api_config.base_url
+    ));
     let mut stream = client
         .exec_chat_stream(service_target, request, Some(&options))
         .await

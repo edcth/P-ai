@@ -2409,6 +2409,156 @@
     }
 
     #[test]
+    fn scheduler_should_run_eight_conversations_concurrently() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(16)
+            .enable_all()
+            .build()
+            .expect("build multi thread runtime");
+
+        runtime.block_on(async {
+            let state = test_chat_runtime_state();
+            write_config(&state.config_path, &AppConfig::default()).expect("write config");
+            write_agents_shard(&state.data_path, &[default_agent(), default_user_persona()])
+                .expect("write agents");
+
+            let now = now_iso();
+            let mut chat_index = ChatIndexFile::default();
+            for idx in 0..8 {
+                let conversation_id = format!("concurrent-conversation-{idx}");
+                let conversation = test_chat_conversation(&conversation_id, "active", &now);
+                write_conversation_shard(&state.data_path, &conversation)
+                    .unwrap_or_else(|_| panic!("write {conversation_id}"));
+                chat_index
+                    .conversations
+                    .push(build_chat_index_item(&conversation));
+            }
+            write_chat_index_shard(&state.data_path, &chat_index).expect("write chat index");
+
+            let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+            let current_running =
+                std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let max_running = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let entered = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let hook: TestMainAssistantActivationHook = std::sync::Arc::new({
+                let barrier = barrier.clone();
+                let current_running = current_running.clone();
+                let max_running = max_running.clone();
+                let entered = entered.clone();
+                move |conversation_id: String| {
+                    let barrier = barrier.clone();
+                    let current_running = current_running.clone();
+                    let max_running = max_running.clone();
+                    let entered = entered.clone();
+                    Box::pin(async move {
+                        if !conversation_id.starts_with("concurrent-conversation-") {
+                            return None;
+                        }
+                        let running = current_running
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                            + 1;
+                        entered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let mut observed_max =
+                            max_running.load(std::sync::atomic::Ordering::SeqCst);
+                        while running > observed_max {
+                            match max_running.compare_exchange(
+                                observed_max,
+                                running,
+                                std::sync::atomic::Ordering::SeqCst,
+                                std::sync::atomic::Ordering::SeqCst,
+                            ) {
+                                Ok(_) => break,
+                                Err(next) => observed_max = next,
+                            }
+                        }
+                        barrier.wait().await;
+                        current_running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        Some(Ok(SendChatResult {
+                            conversation_id: conversation_id.clone(),
+                            latest_user_text: String::new(),
+                            assistant_text: format!("ok {conversation_id}"),
+                            final_response_text: format!("ok {conversation_id}"),
+                            reasoning_standard: String::new(),
+                            reasoning_inline: String::new(),
+                            archived_before_send: false,
+                            assistant_message: None,
+                            provider_prompt_tokens: None,
+                            estimated_prompt_tokens: None,
+                            effective_prompt_tokens: None,
+                            effective_prompt_source: None,
+                            context_window_tokens: None,
+                            max_output_tokens: None,
+                            context_usage_percent: None,
+                            remote_im_reply_decision: None,
+                            remote_im_reply_target: None,
+                        }))
+                    })
+                }
+            });
+            let _hook_guard = install_test_main_assistant_activation_hook(hook);
+
+            let mut ingresses = Vec::new();
+            for idx in 0..8 {
+                let conversation_id = format!("concurrent-conversation-{idx}");
+                let ingress = ingress_chat_event(&state, test_pending_event(&conversation_id))
+                    .unwrap_or_else(|_| panic!("ingress {conversation_id}"));
+                assert!(
+                    matches!(ingress, ChatEventIngress::Direct(_)),
+                    "expected direct ingress for {conversation_id}"
+                );
+                ingresses.push(ingress);
+            }
+
+            let mut handles = Vec::new();
+            for ingress in ingresses {
+                let state = state.clone();
+                handles.push(tokio::spawn(async move {
+                    process_chat_event_after_ingress(&state, ingress).await;
+                }));
+            }
+
+            let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                for handle in handles {
+                    handle.await.expect("join scheduler task");
+                }
+            })
+            .await;
+            assert!(
+                completed.is_ok(),
+                "scheduler did not reach 8 concurrent activations before timeout; entered={}, max_running={}",
+                entered.load(std::sync::atomic::Ordering::SeqCst),
+                max_running.load(std::sync::atomic::Ordering::SeqCst)
+            );
+            assert_eq!(
+                entered.load(std::sync::atomic::Ordering::SeqCst),
+                8,
+                "all 8 conversations should reach assistant activation"
+            );
+            assert_eq!(
+                max_running.load(std::sync::atomic::Ordering::SeqCst),
+                8,
+                "all 8 conversations should be active at the same time"
+            );
+            assert_eq!(total_queue_len(&state).expect("queue len"), 0);
+            let claims = state
+                .conversation_processing_claims
+                .lock()
+                .expect("lock claims");
+            assert!(claims.is_empty(), "claims should be released: {claims:?}");
+            drop(claims);
+            for idx in 0..8 {
+                let conversation_id = format!("concurrent-conversation-{idx}");
+                assert_eq!(
+                    get_conversation_runtime_state(&state, &conversation_id)
+                        .expect("runtime state"),
+                    MainSessionState::Idle,
+                    "{conversation_id} should return to idle"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn compaction_state_should_only_block_its_own_conversation() {
         let state = test_chat_runtime_state();
         set_conversation_runtime_state(&state, "conversation-a", MainSessionState::OrganizingContext)

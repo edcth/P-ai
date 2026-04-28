@@ -208,6 +208,13 @@ async fn prepare_openai_style_tool_assembly(
     if !selected_api.enable_tools {
         return Ok(None);
     }
+    runtime_log_info(format!(
+        "[聊天模型] 工具装配开始: session={} provider={} model={} agent_id={}",
+        chat_session_key,
+        selected_api.name,
+        selected_api.model,
+        agent.id
+    ));
     let tool_assembly = assemble_runtime_tools(
         app_config,
         selected_api,
@@ -221,6 +228,14 @@ async fn prepare_openai_style_tool_assembly(
         &tool_assembly.unavailable_tool_notices,
     );
     *tool_manifest_for_log = Some(Value::Array(tool_assembly.tool_manifest.clone()));
+    runtime_log_info(format!(
+        "[聊天模型] 工具装配完成: session={} provider={} model={} tool_count={} unavailable_notice_count={}",
+        chat_session_key,
+        selected_api.name,
+        selected_api.model,
+        tool_assembly.tools.len(),
+        tool_assembly.unavailable_tool_notices.len()
+    ));
     Ok(Some(tool_assembly))
 }
 
