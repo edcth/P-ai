@@ -243,7 +243,7 @@ fn upsert_weixin_oc_contact(
         activation_keywords: Vec::new(),
         patience_seconds: default_remote_im_contact_patience_seconds(),
         activation_cooldown_seconds: 0,
-        route_mode: "main_session".to_string(),
+        route_mode: "dedicated_contact_conversation".to_string(),
         bound_department_id: None,
         bound_conversation_id: None,
         processing_mode: "continuous".to_string(),
@@ -251,6 +251,7 @@ fn upsert_weixin_oc_contact(
         last_message_at: None,
         dingtalk_session_webhook: None,
         dingtalk_session_webhook_expired_time: None,
+        shell_workspaces: Vec::new(),
     });
     (contact_id, true)
 }
@@ -437,5 +438,4 @@ async fn remote_im_weixin_oc_sync_contacts(
         },
     })
 }
-
 

@@ -86,7 +86,7 @@
     }
 
     #[test]
-    fn resolve_conversation_id_should_route_remote_im_to_main_conversation() {
+    fn resolve_conversation_id_should_route_remote_im_to_contact_conversation() {
         let state = remote_im_test_state();
         let mut runtime = RuntimeStateFile::default();
         runtime.main_conversation_id = Some("conversation-main".to_string());
@@ -196,7 +196,7 @@
             activation_keywords: Vec::new(),
             patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
-            route_mode: "main_session".to_string(),
+            route_mode: "dedicated_contact_conversation".to_string(),
             bound_department_id: None,
             bound_conversation_id: None,
             processing_mode: "continuous".to_string(),
@@ -204,6 +204,7 @@
             last_message_at: None,
             dingtalk_session_webhook: None,
             dingtalk_session_webhook_expired_time: None,
+            shell_workspaces: Vec::new(),
         };
         state_write_runtime_state_cached(&state, &runtime).expect("write runtime state");
         for conversation in &conversations {
@@ -215,12 +216,13 @@
             resolve_contact_session_target(&state, &config, &mut runtime, &mut contact)
                 .expect("resolve route");
 
-        assert_eq!(conversation_id, "conversation-main");
+        assert_ne!(conversation_id, "conversation-main");
+        assert_eq!(contact.bound_conversation_id.as_deref(), Some(conversation_id.as_str()));
         let _ = std::fs::remove_dir_all(app_root_from_data_path(&state.data_path));
     }
 
     #[test]
-    fn remote_im_should_still_route_to_main_after_user_switches_to_sub_conversation() {
+    fn remote_im_should_still_route_to_contact_conversation_after_user_switches() {
         let state = remote_im_test_state();
         let mut runtime = RuntimeStateFile::default();
         runtime.main_conversation_id = Some("conversation-main".to_string());
@@ -330,7 +332,7 @@
             activation_keywords: Vec::new(),
             patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
-            route_mode: "main_session".to_string(),
+            route_mode: "dedicated_contact_conversation".to_string(),
             bound_department_id: None,
             bound_conversation_id: None,
             processing_mode: "continuous".to_string(),
@@ -338,6 +340,7 @@
             last_message_at: None,
             dingtalk_session_webhook: None,
             dingtalk_session_webhook_expired_time: None,
+            shell_workspaces: Vec::new(),
         };
         state_write_runtime_state_cached(&state, &runtime).expect("write runtime state");
         for conversation in &conversations {
@@ -349,7 +352,8 @@
             resolve_contact_session_target(&state, &config, &mut runtime, &mut contact)
                 .expect("resolve route");
 
-        assert_eq!(conversation_id, "conversation-main");
+        assert_ne!(conversation_id, "conversation-main");
+        assert_eq!(contact.bound_conversation_id.as_deref(), Some(conversation_id.as_str()));
         assert_eq!(runtime.main_conversation_id.as_deref(), Some("conversation-main"));
         assert_eq!(
             conversations
@@ -764,6 +768,7 @@
             last_message_at: None,
             dingtalk_session_webhook: None,
             dingtalk_session_webhook_expired_time: None,
+            shell_workspaces: Vec::new(),
         }
     }
 

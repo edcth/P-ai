@@ -550,6 +550,33 @@ fn terminal_config_allowed_workspaces_canonical(
     Ok(out)
 }
 
+/// 从联系人配置中解析该联系人会话对应的工作区列表。
+/// 通过 conversation.id 反查 bound_conversation_id == conversation.id 的联系人。
+fn resolve_contact_workspaces_for_conversation(
+    state: &AppState,
+    conversation: &Conversation,
+) -> Vec<ShellWorkspaceConfig> {
+    let Ok(runtime) = state_read_runtime_state_cached(state) else {
+        return Vec::new();
+    };
+    let conversation_id = conversation.id.trim();
+    if conversation_id.is_empty() {
+        return Vec::new();
+    }
+    runtime
+        .remote_im_contacts
+        .iter()
+        .find(|contact| {
+            contact
+                .bound_conversation_id
+                .as_deref()
+                .map(str::trim)
+                == Some(conversation_id)
+        })
+        .map(|contact| contact.shell_workspaces.clone())
+        .unwrap_or_default()
+}
+
 fn terminal_allowed_workspaces_for_conversation_canonical(
     state: &AppState,
     conversation: Option<&Conversation>,
@@ -562,36 +589,83 @@ fn terminal_allowed_workspaces_for_conversation_canonical(
         .or_else(|| config_workspaces.first().cloned())
         .ok_or_else(|| "No assistant private workspace available".to_string())?;
 
-    let mut out = vec![system_workspace];
-    let mut seen_paths = std::collections::HashSet::<String>::new();
-    seen_paths.insert(normalize_terminal_path_for_compare(&out[0].path));
+    // 判断是否为联系人会话，若是则使用联系人配置的工作区，系统目录降为 read_only
+    let is_contact_conversation = conversation
+        .map(|c| c.conversation_kind.trim() == CONVERSATION_KIND_REMOTE_IM_CONTACT)
+        .unwrap_or(false);
 
-    if let Some(conversation) = conversation {
-        for raw in normalize_conversation_shell_workspaces(state, &conversation.shell_workspaces) {
-            let canonical = match PathBuf::from(raw.path.trim()).canonicalize() {
-                Ok(value) if value.is_dir() => value,
-                _ => continue,
-            };
-            let key = normalize_terminal_path_for_compare(&canonical);
-            if !seen_paths.insert(key.clone()) {
-                continue;
+    let mut out = Vec::<TerminalWorkspaceResolved>::new();
+    let mut seen_paths = std::collections::HashSet::<String>::new();
+
+    if is_contact_conversation {
+        // 联系人会话：系统目录强制 read_only
+        let mut forced_system = system_workspace.clone();
+        forced_system.access = SHELL_WORKSPACE_ACCESS_READ_ONLY.to_string();
+        out.push(forced_system);
+        seen_paths.insert(normalize_terminal_path_for_compare(&out[0].path));
+
+        // 从联系人配置中加载工作区
+        if let Some(conversation) = conversation {
+            let contact_workspaces = resolve_contact_workspaces_for_conversation(state, conversation);
+            for raw in normalize_conversation_shell_workspaces(state, &contact_workspaces) {
+                let canonical = match PathBuf::from(raw.path.trim()).canonicalize() {
+                    Ok(value) if value.is_dir() => value,
+                    _ => continue,
+                };
+                let key = normalize_terminal_path_for_compare(&canonical);
+                if !seen_paths.insert(key.clone()) {
+                    continue;
+                }
+                let mut name = raw.name.trim().to_string();
+                if name.is_empty() {
+                    name = shell_workspace_display_name_fallback(&canonical);
+                }
+                out.push(TerminalWorkspaceResolved {
+                    id: if raw.id.trim().is_empty() {
+                        format!("contact-{}", key)
+                    } else {
+                        raw.id.trim().to_string()
+                    },
+                    name,
+                    level: raw.level.trim().to_string(),
+                    access: raw.access.trim().to_string(),
+                    built_in: false,
+                    path: canonical,
+                });
             }
-            let mut name = raw.name.trim().to_string();
-            if name.is_empty() {
-                name = shell_workspace_display_name_fallback(&canonical);
+        }
+    } else {
+        // 普通会话：原有逻辑
+        out.push(system_workspace);
+        seen_paths.insert(normalize_terminal_path_for_compare(&out[0].path));
+
+        if let Some(conversation) = conversation {
+            for raw in normalize_conversation_shell_workspaces(state, &conversation.shell_workspaces) {
+                let canonical = match PathBuf::from(raw.path.trim()).canonicalize() {
+                    Ok(value) if value.is_dir() => value,
+                    _ => continue,
+                };
+                let key = normalize_terminal_path_for_compare(&canonical);
+                if !seen_paths.insert(key.clone()) {
+                    continue;
+                }
+                let mut name = raw.name.trim().to_string();
+                if name.is_empty() {
+                    name = shell_workspace_display_name_fallback(&canonical);
+                }
+                out.push(TerminalWorkspaceResolved {
+                    id: if raw.id.trim().is_empty() {
+                        format!("conversation-{}", key)
+                    } else {
+                        raw.id.trim().to_string()
+                    },
+                    name,
+                    level: raw.level.trim().to_string(),
+                    access: raw.access.trim().to_string(),
+                    built_in: false,
+                    path: canonical,
+                });
             }
-            out.push(TerminalWorkspaceResolved {
-                id: if raw.id.trim().is_empty() {
-                    format!("conversation-{}", key)
-                } else {
-                    raw.id.trim().to_string()
-                },
-                name,
-                level: raw.level.trim().to_string(),
-                access: raw.access.trim().to_string(),
-                built_in: false,
-                path: canonical,
-            });
         }
     }
 

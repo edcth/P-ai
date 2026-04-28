@@ -197,6 +197,8 @@ struct RemoteImContact {
     dingtalk_session_webhook: Option<String>,
     #[serde(default)]
     dingtalk_session_webhook_expired_time: Option<i64>,
+    #[serde(default)]
+    shell_workspaces: Vec<ShellWorkspaceConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

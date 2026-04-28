@@ -1,7 +1,7 @@
 <template>
   <div class="flex flex-wrap items-start gap-4 min-h-0 h-full pr-1">
     <!-- 左侧：渠道列表 -->
-    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 min-w-[22rem] flex-1 basis-[26rem] flex flex-col overflow-hidden">
+    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 min-w-88 flex-1 basis-104 flex flex-col overflow-hidden">
       <div class="flex items-center justify-between px-3 py-2 shrink-0">
         <span class="font-semibold text-sm">{{ t("config.remoteIm.title") }}</span>
         <div class="flex gap-1">
@@ -18,7 +18,7 @@
           <div
             v-for="ch in channels"
             :key="ch.id"
-            class="w-[12rem] max-w-full shrink-0 rounded-box border transition-colors"
+            class="w-48 max-w-full shrink-0 rounded-box border transition-colors"
             :class="selectedChannelId === ch.id ? 'border-primary bg-primary/8' : 'border-base-300 bg-base-200 hover:border-base-content/20'"
             @click="selectedChannelId = ch.id"
           >
@@ -57,7 +57,7 @@
     </div>
 
     <!-- 右侧：联系人列表 -->
-    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 min-w-[22rem] flex-1 basis-[28rem] flex flex-col overflow-hidden">
+    <div class="self-start h-auto bg-base-100 rounded-box border border-base-300 min-w-88 flex-1 basis-md flex flex-col overflow-hidden">
       <div class="flex items-center justify-between px-3 py-2 shrink-0">
         <span class="flex items-center gap-2 font-semibold text-sm">
           {{ t("config.remoteIm.contactsTitle") }}
@@ -505,8 +505,88 @@
                 />
               </li>
             </ul>
+
+              <!-- 工作目录配置 -->
+              <li class="list-row flex flex-col gap-2 pt-3 mt-2 border-t border-base-300">
+                <div class="flex items-center justify-between">
+                  <div class="font-medium">工作目录</div>
+                  <span class="text-[11px] opacity-50">系统目录始终存在且只读</span>
+                </div>
+                <div
+                  v-if="contactDraft.shellWorkspaces.length === 0"
+                  class="rounded-box border border-dashed border-base-300 bg-base-200/20 px-3 py-4 text-center text-xs opacity-60"
+                >
+                  未配置自定义工作目录，联系人会话仅有系统目录（只读）
+                </div>
+                <div v-else class="divide-y divide-base-300">
+                  <div
+                    v-for="ws in contactDraft.shellWorkspaces"
+                    :key="ws.id"
+                    class="py-2 text-left"
+                    :title="ws.path"
+                  >
+                    <div class="flex items-center gap-3">
+                      <div class="min-w-0 flex-1 text-left">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="inline-block w-40 truncate font-medium align-middle" :title="ws.path">{{ ws.name }}</span>
+                          <span class="badge" :class="ws.level === 'main' ? 'badge-primary' : 'badge-secondary'">
+                            {{ ws.level === 'main' ? t("config.tools.workspaceLevelMain") : t("config.tools.workspaceLevelSecondary") }}
+                          </span>
+                          <span class="badge" :class="ws.access === 'full_access' ? 'badge-success' : ws.access === 'approval' ? 'badge-warning' : 'badge-ghost'">
+                            {{ ws.access === 'full_access' ? t("config.tools.workspaceAccessFullAccess") : ws.access === 'approval' ? t("config.tools.workspaceAccessApproval") : t("config.tools.workspaceAccessReadOnly") }}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                        <button
+                          v-if="ws.level !== 'main'"
+                          class="btn btn-xs btn-ghost"
+                          type="button"
+                          :title="t('config.tools.setWorkspaceAsMain')"
+                          @click="setContactWorkspaceMain(ws.id)"
+                        >
+                          <ArrowUpDown class="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          v-else
+                          class="btn btn-xs btn-primary pointer-events-none opacity-100"
+                          type="button"
+                          aria-disabled="true"
+                          tabindex="-1"
+                          :title="t('config.tools.currentMainWorkspace')"
+                        >
+                          <House class="h-3.5 w-3.5" />
+                        </button>
+                        <select
+                          class="select select-sm select-bordered w-32"
+                          :value="ws.access"
+                          @change="updateContactWorkspaceAccess(ws.id, ($event.target as HTMLSelectElement).value as ShellWorkspace['access'])"
+                        >
+                          <option value="full_access">{{ t("config.tools.workspaceAccessFullAccess") }}</option>
+                          <option value="approval">{{ t("config.tools.workspaceAccessApproval") }}</option>
+                          <option value="read_only">{{ t("config.tools.workspaceAccessReadOnly") }}</option>
+                        </select>
+                        <button
+                          class="btn btn-sm btn-ghost text-error"
+                          type="button"
+                          :title="t('config.tools.delete')"
+                          @click="removeContactWorkspace(ws.id)"
+                        >
+                          <Trash2 class="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="flex justify-end">
+                  <button class="btn btn-sm" type="button" @click="addContactWorkspace">
+                    {{ t("config.tools.addWorkspace") }}
+                  </button>
+                </div>
+              </li>
+
           <div class="mt-2 text-[11px] opacity-60 leading-5">
-            主部门固定进入主会话；非主部门固定进入该联系人的独占联系人会话。切换处理部门不会清空联系人原有联系人会话历史。
+            联系人消息始终进入该联系人的独立会话；处理部门只决定后台处理消息的部门与模型。
           </div>
           </div>
           <div class="mt-3 pt-3 border-t border-base-300 flex items-center justify-end gap-2 shrink-0">
@@ -529,9 +609,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-vue-next";
+import { ArrowUpDown, House, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-vue-next";
 import { invokeTauri } from "../../../../services/tauri-api";
-import type { AppConfig, RemoteImChannelConfig, RemoteImContact, RemoteImPlatform } from "../../../../types/app";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { AppConfig, RemoteImChannelConfig, RemoteImContact, RemoteImPlatform, ShellWorkspace } from "../../../../types/app";
 import type { ChannelConnectionStatus, ChannelLogEntry, WeixinLoginStatus } from "./remote-im/types";
 import {
   contactActivationHint,
@@ -571,6 +652,7 @@ const weixinCredentials = ref({
 });
 const showDingtalkSecret = ref(false);
 const suppressCredentialSync = ref(false);
+const newWorkspacePath = ref("");
 const selectedChannelId = ref<string>("");
 const channels = computed(() => props.config.remoteImChannels || []);
 const channelStatus = ref<ChannelConnectionStatus | null>(null);
@@ -719,6 +801,7 @@ type ContactEditDraft = {
   allowReceive: boolean;
   allowSend: boolean;
   allowSendFiles: boolean;
+  shellWorkspaces: ShellWorkspace[];
 };
 const contactDraft = ref<ContactEditDraft | null>(null);
 const contactDraftSnapshot = ref("");
@@ -765,6 +848,15 @@ function buildContactDraftFromContact(item: RemoteImContact): ContactEditDraft {
     allowReceive: !!item.allowReceive,
     allowSend: !!item.allowSend,
     allowSendFiles: !!item.allowSendFiles,
+    shellWorkspaces: (item as any).shellWorkspaces
+      ? (item as any).shellWorkspaces.filter((ws: any) => ws.level !== "system").map((ws: any) => ({
+          id: ws.id || crypto.randomUUID(),
+          name: ws.name || "",
+          path: ws.path || "",
+          level: ws.level || "secondary",
+          access: ws.access || "full_access",
+        }))
+      : [],
   };
 }
 
@@ -1123,9 +1215,7 @@ async function onContactDepartmentChange(
         departmentId: nextDepartmentId || null,
       },
     });
-    if (nextDepartmentId) {
-      props.setStatusAction("非主部门联系人将自动使用独占联系人会话。");
-    }
+    props.setStatusAction("联系人消息将继续使用该联系人的独立会话。");
     await refreshContacts();
   } catch (error) {
     item.boundDepartmentId = oldValue;
@@ -1158,6 +1248,55 @@ function onContactActivationKeywordsBlur(item: RemoteImContact) {
   const keywords = parseActivationKeywords(raw);
   contactKeywordDrafts.value[item.id] = keywords.join(", ");
   void saveContactActivation(item, { activationKeywords: keywords });
+}
+
+async function addContactWorkspace() {
+  if (!contactDraft.value) return;
+  try {
+    const picked = await open({
+      directory: true,
+      multiple: false,
+    });
+    if (!picked || Array.isArray(picked)) return;
+    const path = String(picked || "").trim();
+    if (!path) return;
+
+    const existed = contactDraft.value.shellWorkspaces.some(
+      (ws) => ws.path.toLowerCase() === path.toLowerCase(),
+    );
+    if (existed) return;
+
+    const hasMain = contactDraft.value.shellWorkspaces.some((ws) => ws.level === "main");
+    const name = path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
+    contactDraft.value.shellWorkspaces.push({
+      id: crypto.randomUUID(),
+      name,
+      path,
+      level: hasMain ? "secondary" : "main",
+      access: hasMain ? "read_only" : "approval",
+    });
+  } catch {
+    // 用户取消选择
+  }
+}
+
+function removeContactWorkspace(id: string) {
+  if (!contactDraft.value) return;
+  const idx = contactDraft.value.shellWorkspaces.findIndex((ws) => ws.id === id);
+  if (idx >= 0) contactDraft.value.shellWorkspaces.splice(idx, 1);
+}
+
+function setContactWorkspaceMain(id: string) {
+  if (!contactDraft.value) return;
+  for (const ws of contactDraft.value.shellWorkspaces) {
+    ws.level = ws.id === id ? "main" : "secondary";
+  }
+}
+
+function updateContactWorkspaceAccess(id: string, access: ShellWorkspace["access"]) {
+  if (!contactDraft.value) return;
+  const ws = contactDraft.value.shellWorkspaces.find((w) => w.id === id);
+  if (ws) ws.access = access;
 }
 
 function resetContactDraft() {
@@ -1204,6 +1343,26 @@ async function saveContactDraft() {
     }
     if (!!draft.allowSendFiles !== !!item.allowSendFiles) {
       await toggleContactAllowSendFiles(item, !!draft.allowSendFiles);
+    }
+    // 保存联系人工作区配置
+    try {
+      await invokeTauri<RemoteImContact>("remote_im_update_contact_workspace", {
+        input: {
+          contactId: item.id,
+          shellWorkspaces: (draft.shellWorkspaces || []).map((ws) => ({
+            id: ws.id,
+            name: ws.name,
+            path: ws.path,
+            level: ws.level,
+            access: ws.access,
+            builtIn: false,
+          })),
+        },
+      });
+    } catch (e) {
+      console.error("[联系人工作区保存失败]", e);
+      props.setStatusAction(t("status.saveConfigFailed", { err: String(e) }));
+      return;
     }
     await refreshContacts();
     syncSelectedContactDraft();

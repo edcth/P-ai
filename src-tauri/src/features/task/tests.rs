@@ -208,6 +208,7 @@
             last_message_at: None,
             dingtalk_session_webhook: None,
             dingtalk_session_webhook_expired_time: None,
+            shell_workspaces: Vec::new(),
         });
         write_task_test_snapshot(&state, &mut runtime, &[main]);
 

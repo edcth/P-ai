@@ -1734,7 +1734,7 @@
             activation_keywords: Vec::new(),
             patience_seconds: default_remote_im_contact_patience_seconds(),
             activation_cooldown_seconds: 0,
-            route_mode: "main_session".to_string(),
+            route_mode: "dedicated_contact_conversation".to_string(),
             bound_department_id: None,
             bound_conversation_id: Some(conversation_id.clone()),
             processing_mode: "continuous".to_string(),
@@ -1742,6 +1742,7 @@
             last_message_at: None,
             dingtalk_session_webhook: None,
             dingtalk_session_webhook_expired_time: None,
+            shell_workspaces: Vec::new(),
         });
         state_write_app_data_cached(&state, &data).expect("write app data");
 
@@ -2948,6 +2949,7 @@
             last_message_at: None,
             dingtalk_session_webhook: None,
             dingtalk_session_webhook_expired_time: None,
+            shell_workspaces: Vec::new(),
         });
         state_write_app_data_cached(&state, &data).expect("write app data");
         let task = TaskRecordStored {

@@ -195,6 +195,24 @@ fn build_user_profile_memory_board(
 }
 
 fn conversation_user_main_workspace_root(conversation: &Conversation, state: &AppState) -> Option<PathBuf> {
+    // 联系人会话：从联系人配置中查找 main workspace
+    if conversation.conversation_kind.trim() == CONVERSATION_KIND_REMOTE_IM_CONTACT {
+        if let Ok(runtime) = state_read_runtime_state_cached(state) {
+            let conversation_id = conversation.id.trim();
+            if let Some(contact) = runtime.remote_im_contacts.iter().find(|c| {
+                c.bound_conversation_id.as_deref().map(str::trim) == Some(conversation_id)
+            }) {
+                if let Some(ws) = contact.shell_workspaces.iter().find(|workspace| {
+                    !workspace.built_in
+                        && normalize_shell_workspace_level_text(&workspace.level) == SHELL_WORKSPACE_LEVEL_MAIN
+                }) {
+                    return shell_workspace_resolve_path_candidate(state, ws);
+                }
+            }
+        }
+        return None;
+    }
+
     conversation
         .shell_workspaces
         .iter()

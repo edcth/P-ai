@@ -698,6 +698,7 @@ fn main() {
             remote_im_update_contact_route_mode,
             remote_im_update_contact_department_binding,
             remote_im_update_contact_processing_mode,
+            remote_im_update_contact_workspace,
             remote_im_delete_contact,
             remote_im_clear_contact_conversation,
             remote_im_enqueue_message,

@@ -256,6 +256,7 @@ export type RemoteImContact = {
   lastMessageAt?: string;
   dingtalkSessionWebhook?: string;
   dingtalkSessionWebhookExpiredTime?: number;
+  shellWorkspaces?: ShellWorkspace[];
 };
 
 export type RemoteImContactConversationSummary = {

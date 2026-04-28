@@ -18,14 +18,12 @@ export function normalizeProcessingMode(value?: string): "qa" | "continuous" {
   return value === "qa" ? "qa" : "continuous";
 }
 
-export function contactRouteLabel(item: RemoteImContact): string {
-  return !String(item.boundDepartmentId || "").trim() ? "主会话" : "联系人独占会话";
+export function contactRouteLabel(_item: RemoteImContact): string {
+  return "联系人独立会话";
 }
 
-export function contactRoutingHint(item: RemoteImContact): string {
-  return !String(item.boundDepartmentId || "").trim()
-    ? "部门将在前台处理消息"
-    : "部门将在后台处理消息";
+export function contactRoutingHint(_item: RemoteImContact): string {
+  return "部门将在该联系人的独立会话中处理消息";
 }
 
 export function processingModeHint(item: RemoteImContact): string {

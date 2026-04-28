@@ -152,6 +152,14 @@ struct RemoteImContactDeleteInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RemoteImContactWorkspaceUpdateInput {
+    contact_id: String,
+    #[serde(default)]
+    shell_workspaces: Vec<ShellWorkspaceConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RemoteImContactConversationSummary {
     contact_id: String,
     conversation_id: String,
@@ -241,7 +249,7 @@ fn remote_im_upsert_contact_for_inbound(
         activation_keywords: Vec::new(),
         patience_seconds: default_remote_im_contact_patience_seconds(),
         activation_cooldown_seconds: 0,
-        route_mode: "main_session".to_string(),
+        route_mode: "dedicated_contact_conversation".to_string(),
         bound_department_id: Some(REMOTE_CUSTOMER_SERVICE_DEPARTMENT_ID.to_string()),
         bound_conversation_id: None,
         processing_mode: "continuous".to_string(),
@@ -258,6 +266,7 @@ fn remote_im_upsert_contact_for_inbound(
         } else {
             None
         },
+        shell_workspaces: Vec::new(),
     });
     contact_id
 }
@@ -288,7 +297,7 @@ fn normalize_contact_activation_keywords(values: &[String]) -> Vec<String> {
 fn normalize_contact_route_mode(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
         "dedicated_contact_conversation" => "dedicated_contact_conversation".to_string(),
-        _ => "main_session".to_string(),
+        _ => "dedicated_contact_conversation".to_string(),
     }
 }
 
@@ -1001,30 +1010,11 @@ fn remote_im_contact_display_name(contact: &RemoteImContact) -> String {
     contact.remote_contact_id.trim().to_string()
 }
 
-fn remote_im_contact_is_main_department(config: &AppConfig, contact: &RemoteImContact) -> bool {
-    let Some(bound_department_id) = contact
-        .bound_department_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return true;
-    };
-    bound_department_id == ASSISTANT_DEPARTMENT_ID
-        || assistant_department(config)
-            .map(|dept| dept.id.trim() == bound_department_id)
-            .unwrap_or(false)
-}
-
 fn remote_im_resolve_effective_route_mode(
-    config: &AppConfig,
-    contact: &RemoteImContact,
+    _config: &AppConfig,
+    _contact: &RemoteImContact,
 ) -> String {
-    if remote_im_contact_is_main_department(config, contact) {
-        "main_session".to_string()
-    } else {
-        "dedicated_contact_conversation".to_string()
-    }
+    "dedicated_contact_conversation".to_string()
 }
 
 fn remote_im_contact_conversation_title(contact: &RemoteImContact) -> String {
@@ -1298,45 +1288,6 @@ fn validate_enqueue_input(
     })
 }
 
-fn ensure_remote_im_main_conversation_id(
-    state: &AppState,
-    runtime: &mut RuntimeStateFile,
-    api_config_id: &str,
-    agent_id: &str,
-) -> Result<String, String> {
-    if let Some(conversation_id) = runtime
-        .main_conversation_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|conversation_id| {
-            state_read_conversation_cached(state, conversation_id)
-                .ok()
-                .filter(|conversation| {
-                    conversation.summary.trim().is_empty()
-                        && conversation_visible_in_foreground_lists(conversation)
-                })
-                .map(|conversation| conversation.id)
-        })
-    {
-        return Ok(conversation_id);
-    }
-
-    let conversation = build_conversation_record(
-        api_config_id,
-        agent_id,
-        ASSISTANT_DEPARTMENT_ID,
-        "",
-        CONVERSATION_KIND_CHAT,
-        None,
-        None,
-    );
-    let conversation_id = conversation.id.clone();
-    state_schedule_conversation_persist(state, &conversation, true)?;
-    runtime.main_conversation_id = Some(conversation_id.clone());
-    Ok(conversation_id)
-}
-
 fn ensure_remote_im_contact_conversation_id(
     state: &AppState,
     contact: &mut RemoteImContact,
@@ -1396,21 +1347,11 @@ fn ensure_remote_im_contact_conversation_id(
 fn resolve_contact_session_target(
     state: &AppState,
     config: &AppConfig,
-    runtime: &mut RuntimeStateFile,
+    _runtime: &mut RuntimeStateFile,
     contact: &mut RemoteImContact,
 ) -> Result<(String, String, String), String> {
     let effective_route_mode = remote_im_resolve_effective_route_mode(config, contact);
     contact.route_mode = effective_route_mode.clone();
-    if effective_route_mode == "main_session" {
-        let (department_id, agent_id) = resolve_department_agent_pair(
-            Some(ASSISTANT_DEPARTMENT_ID),
-            assistant_department_agent_id(config).as_deref(),
-            config,
-        )?;
-        let conversation_id =
-            ensure_remote_im_main_conversation_id(state, runtime, "", &agent_id)?;
-        return Ok((department_id, agent_id, conversation_id));
-    }
 
     let (department_id, agent_id) = resolve_department_agent_pair(
         contact.bound_department_id.as_deref(),
@@ -1665,11 +1606,7 @@ fn remote_im_update_contact_route_mode(
         .find(|item| item.id == input.contact_id)
         .ok_or_else(|| format!("未找到远程联系人：{}", input.contact_id))?;
     let requested_mode = normalize_contact_route_mode(&input.route_mode);
-    let final_mode = if remote_im_contact_is_main_department(&config, contact) {
-        "main_session".to_string()
-    } else {
-        "dedicated_contact_conversation".to_string()
-    };
+    let final_mode = remote_im_resolve_effective_route_mode(&config, contact);
     if requested_mode != final_mode {
         eprintln!(
             "[远程IM] 联系人路由模式已被约束修正: contact_id={}, requested={}, final={}",
@@ -1727,6 +1664,23 @@ fn remote_im_update_contact_processing_mode(
         .find(|item| item.id == input.contact_id)
         .ok_or_else(|| format!("未找到远程联系人：{}", input.contact_id))?;
     contact.processing_mode = normalize_contact_processing_mode(&input.processing_mode);
+    let output = contact.clone();
+    state_write_runtime_state_cached(&state, &runtime)?;
+    Ok(output)
+}
+
+#[tauri::command]
+fn remote_im_update_contact_workspace(
+    input: RemoteImContactWorkspaceUpdateInput,
+    state: State<'_, AppState>,
+) -> Result<RemoteImContact, String> {
+    let mut runtime = state_read_runtime_state_cached(&state)?;
+    let contact = runtime
+        .remote_im_contacts
+        .iter_mut()
+        .find(|item| item.id == input.contact_id)
+        .ok_or_else(|| format!("未找到远程联系人：{}", input.contact_id))?;
+    contact.shell_workspaces = input.shell_workspaces;
     let output = contact.clone();
     state_write_runtime_state_cached(&state, &runtime)?;
     Ok(output)
