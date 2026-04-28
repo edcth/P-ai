@@ -29,7 +29,7 @@ P-ai 不是另一个 AI 聊天客户端。
 
 ## 如果你很久没看这个项目
 
-最容易低估的是：它已经不是一个"聊天框 + 几个工具"了。
+最容易低估的是：它已经不是一个"聊天框 + 几个工具"了。它已经拥有极其强大而且精细的审查功能，支持单应用多窗口模式、并发稳定运行和独立工作目录。
 
 从 0.8 往后，连续做出了几条重型能力跃迁：
 
@@ -37,7 +37,7 @@ P-ai 不是另一个 AI 聊天客户端。
 
 它不是"能调工具"，而是有完整的工具审查链：终端命令审批、`apply_patch` 补丁审查、可配置的审查专用模型、单工具评估、批次评估、最终审查报告。工具调用结果可追溯、可回看、可审核。AI 不仅执行，还要接受评审。
 
-这种"让 AI 审查 AI 的工具使用"的机制，在桌面 AI 领域几乎没有第二家做到。
+这种"让 AI 审查 AI 的工具使用"的机制，已经从简单权限弹窗推进到可追溯、可复核、可生成报告的工程化审查链路。
 
 ### 多部门委派架构 — 让 AI 像组织一样工作
 
@@ -264,7 +264,7 @@ chmod +x install-with-yay.sh
 
 ## 致谢
 
-这个项目能走到今天，依赖这些优秀的上游项目：[Tauri](https://tauri.app/) · [Vue 3](https://vuejs.org/) · [DaisyUI](https://daisyui.com/) · [Tailwind CSS](https://tailwindcss.com/) · [rust-genai](https://github.com/jeremychone/rust-genai) · [rmcp](https://github.com/modelcontextprotocol/rust-sdk) · [Shiki](https://shiki.style/) · [Mermaid](https://mermaid.js.org/) · [KaTeX](https://katex.org/) · [markstream-vue](https://www.npmjs.com/package/markstream-vue) · [tokio](https://tokio.rs/) · [reqwest](https://github.com/seanmonstar/reqwest) · [rusqlite](https://github.com/rusqlite/rusqlite) · [tantivy](https://github.com/quickwit-oss/tantivy)
+这个项目能走到今天，依赖这些优秀的上游项目与社区：[Tauri](https://tauri.app/) · [Vue 3](https://vuejs.org/) · [DaisyUI](https://daisyui.com/) · [Tailwind CSS](https://tailwindcss.com/) · [rust-genai](https://github.com/jeremychone/rust-genai) · [rmcp](https://github.com/modelcontextprotocol/rust-sdk) · [Shiki](https://shiki.style/) · [Mermaid](https://mermaid.js.org/) · [KaTeX](https://katex.org/) · [markstream-vue](https://www.npmjs.com/package/markstream-vue) · [tokio](https://tokio.rs/) · [reqwest](https://github.com/seanmonstar/reqwest) · [rusqlite](https://github.com/rusqlite/rusqlite) · [tantivy](https://github.com/quickwit-oss/tantivy) · [Linux.do](https://linux.do/)
 
 也感谢所有为本项目贡献想法、测试、反馈和代码的人。
 
