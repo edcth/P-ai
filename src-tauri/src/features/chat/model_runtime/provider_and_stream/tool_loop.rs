@@ -750,13 +750,6 @@ async fn run_genai_tool_loop(
     tool_abort_state: Option<&AppState>,
     chat_session_key: &str,
 ) -> Result<ModelReply, String> {
-    runtime_log_info(format!(
-        "[聊天模型] 工具循环准备开始: session={} model={} adapter={:?} protocol={:?}",
-        chat_session_key,
-        model_name,
-        adapter_kind,
-        protocol_family
-    ));
     let api_config = resolve_request_api_config(api_config).await?;
     let request_api_key = consume_api_key_for_request(&api_config);
     let client = genai::Client::builder().build();
@@ -795,14 +788,6 @@ async fn run_genai_tool_loop(
         matches!(adapter_kind, genai::adapter::AdapterKind::DeepSeek),
         "run_genai_tool_loop.stream",
     )?;
-    runtime_log_info(format!(
-        "[聊天模型] 工具循环准备完成: session={} model={} tool_count={} history_message_count={} has_system_prompt={}",
-        chat_session_key,
-        model_name,
-        genai_tools.len(),
-        messages.len(),
-        system_prompt.as_deref().map(str::trim).map(|value| !value.is_empty()).unwrap_or(false)
-    ));
 
     let mut auto_compaction_applied = false;
     let mut tool_repeat_guard = ToolRepeatGuard::default();
@@ -828,14 +813,6 @@ async fn run_genai_tool_loop(
                 model_name,
             )
             .await?;
-            runtime_log_info(format!(
-                "[聊天模型] 工具循环发起流式请求: session={} model={} round_index={} message_count={} tool_count={}",
-                chat_session_key,
-                model_name,
-                round_index + 1,
-                messages.len(),
-                genai_tools.len()
-            ));
             let mut turn_text = String::new();
             let mut turn_reasoning = String::new();
             let mut turn_tool_calls = Vec::<genai::chat::ToolCall>::new();
@@ -853,18 +830,6 @@ async fn run_genai_tool_loop(
                 if !genai_tools.is_empty() {
                     request = request.with_tools(genai_tools.clone());
                 }
-                runtime_log_info(format!(
-                    "[聊天模型] 工具循环 exec_chat_stream 开始: session={} model={} round_index={} has_system_prompt={} tool_count={}",
-                    chat_session_key,
-                    model_name,
-                    round_index + 1,
-                    system_prompt
-                        .as_deref()
-                        .map(str::trim)
-                        .map(|value| !value.is_empty())
-                        .unwrap_or(false),
-                    genai_tools.len()
-                ));
                 client
                     .exec_chat_stream(service_target.clone(), request, Some(&options))
                     .await

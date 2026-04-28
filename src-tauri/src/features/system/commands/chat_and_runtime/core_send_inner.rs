@@ -2940,22 +2940,11 @@ async fn send_chat_message_inner(
     };
 
     let result = futures_util::future::Abortable::new(run, abort_registration).await;
-    let aborted_by_user = matches!(result, Err(_));
     emit_conversation_work_status(match &result {
         Ok(Ok(_)) | Err(_) => "completed",
         Ok(Err(_)) => "error",
     });
-    flush_chat_timeline(if aborted_by_user {
-        "send_chat_message_inner.aborted"
-    } else {
-        "send_chat_message_inner.finish"
-    });
-    if aborted_by_user {
-        runtime_log_warn(format!(
-            "[聊天] 当前调度已中止，保留阶段日志: session={}",
-            chat_key
-        ));
-    }
+    flush_chat_timeline("send_chat_message_inner.finish");
     {
         let mut inflight = state
             .inflight_chat_abort_handles
