@@ -2,6 +2,7 @@
 
 ## 进行中
 
+- 修复（tools-no-session-id-and-apply-patch-diagnostics）：工具对外返回不再暴露 `sessionId`；统一 apply_patch 格式口径，补强补丁 header、hunk 前缀、上下文不匹配与上下文多处命中的诊断反馈，并拒绝不唯一上下文以避免误改。
 - 修复（tool-review-copy-finding-location）：复制工具审查报告中的选中意见时补齐文件路径与行号，避免只复制标题和正文后缺少定位信息。
 
 ## 发布：v0.9.54

@@ -705,7 +705,6 @@ async fn builtin_shell_exec(
                 "No supported terminal was detected on Windows. Install Git and use Git Bash: https://git-scm.com/downloads",
             ),
             "toolReview": review,
-            "sessionId": normalize_terminal_tool_session_id(session_id),
             "command": cmd
         }));
     }
@@ -724,7 +723,6 @@ async fn builtin_shell_exec(
         return Ok(serde_json::json!({
             "ok": true,
             "action": "close",
-            "sessionId": normalized_session,
             "closed": closed,
         }));
     }
@@ -747,7 +745,6 @@ async fn builtin_shell_exec(
                 "This command was blocked by local rules because it has a clearly identified risk and does not go to AI review.",
             ),
             "toolReview": review,
-            "sessionId": normalized_session,
             "command": cmd,
         }));
     }
@@ -771,7 +768,6 @@ async fn builtin_shell_exec(
                 "blockedReason": "path_not_granted",
                 "message": err,
                 "toolReview": review,
-                "sessionId": normalized_session,
                 "rootPath": session_root_text,
                 "workspacePath": workspace_path_text,
                 "allowedProjectRoots": allowed_project_roots,
@@ -842,7 +838,6 @@ async fn builtin_shell_exec(
                 "blockedReason": "relative_path_outside_workspace",
                 "message": "相对路径不能脱离当前工作目录，请改用当前目录内相对路径或显式绝对路径。",
                 "toolReview": review,
-                "sessionId": normalized_session,
                 "rootPath": session_root_text,
                 "workspacePath": workspace_path_text,
                 "allowedProjectRoots": allowed_project_roots,
@@ -868,7 +863,6 @@ async fn builtin_shell_exec(
                 "blockedReason": "absolute_path_not_granted",
                 "message": "非读取类命令不能访问未纳管的绝对路径，请改用已授权工作目录内路径。",
                 "toolReview": review,
-                "sessionId": normalized_session,
                 "rootPath": session_root_text,
                 "workspacePath": workspace_path_text,
                 "allowedProjectRoots": allowed_project_roots,
@@ -891,7 +885,6 @@ async fn builtin_shell_exec(
                 "blockedReason": "python_requires_full_access",
                 "message": "python/py 命令默认不走审批；当前目录不是完全访问，请改用 apply_patch 或明确的文件修改命令。",
                 "toolReview": review,
-                "sessionId": normalized_session,
                 "rootPath": session_root_text,
                 "workspacePath": workspace_path_text,
                 "allowedProjectRoots": allowed_project_roots,
@@ -910,7 +903,6 @@ async fn builtin_shell_exec(
             "blockedReason": "read_only_workspace",
             "message": "当前目录权限为只读，仅允许读取类白名单命令。",
             "toolReview": review,
-            "sessionId": normalized_session,
             "rootPath": session_root_text,
             "workspacePath": workspace_path_text,
             "allowedProjectRoots": allowed_project_roots,
@@ -942,7 +934,6 @@ async fn builtin_shell_exec(
                 "blockedReason": "write_path_not_granted",
                 "message": "写入类命令只能作用于已配置工作目录；未纳管绝对路径仅允许读取。",
                 "toolReview": review,
-                "sessionId": normalized_session,
                 "rootPath": session_root_text,
                 "workspacePath": workspace_path_text,
                 "allowedProjectRoots": allowed_project_roots,
@@ -963,7 +954,6 @@ async fn builtin_shell_exec(
                 "blockedReason": "read_only_workspace",
                 "message": "当前目录权限为只读，禁止执行写入类终端命令。",
                 "toolReview": review,
-                "sessionId": normalized_session,
                 "rootPath": session_root_text,
                 "workspacePath": workspace_path_text,
                 "allowedProjectRoots": allowed_project_roots,
@@ -1029,7 +1019,6 @@ async fn builtin_shell_exec(
                             "blockedReason": "delegate_denied_ai_review_raw_json_command",
                             "message": "子代理工具调用被自动拒绝（智能审查返回了不符合约定的结果）。",
                             "toolReview": smart_review_history.clone(),
-                            "sessionId": normalized_session,
                             "rootPath": session_root_text,
                             "workspacePath": workspace_path_text,
                             "cwd": terminal_path_for_user(&cwd),
@@ -1068,7 +1057,6 @@ async fn builtin_shell_exec(
                             "blockedReason": "user_denied_ai_review_raw_json_command",
                             "message": "用户拒绝了查看原始审查结果后的终端命令。",
                             "toolReview": smart_review_history.clone(),
-                            "sessionId": normalized_session,
                             "rootPath": session_root_text,
                             "workspacePath": workspace_path_text,
                             "cwd": terminal_path_for_user(&cwd),
@@ -1117,7 +1105,6 @@ async fn builtin_shell_exec(
                     "blockedReason": "delegate_denied_ai_reviewed_command",
                     "message": "子代理工具调用被自动拒绝（智能审查不通过）。",
                     "toolReview": smart_review_history.clone(),
-                    "sessionId": normalized_session,
                     "rootPath": session_root_text,
                     "workspacePath": workspace_path_text,
                     "cwd": terminal_path_for_user(&cwd),
@@ -1156,7 +1143,6 @@ async fn builtin_shell_exec(
                     "blockedReason": "user_denied_ai_reviewed_command",
                     "message": "用户拒绝了智能审查后的终端命令。",
                     "toolReview": smart_review_history.clone(),
-                    "sessionId": normalized_session,
                     "rootPath": session_root_text,
                     "workspacePath": workspace_path_text,
                     "cwd": terminal_path_for_user(&cwd),
@@ -1206,7 +1192,6 @@ async fn builtin_shell_exec(
                             "approved": false,
                             "blockedReason": "delegate_denied_write_risk_command",
                             "message": "子代理工具调用被自动拒绝（存在写入风险且无审查模型）。",
-                            "sessionId": normalized_session,
                             "rootPath": session_root_text,
                             "workspacePath": workspace_path_text,
                             "cwd": terminal_path_for_user(&cwd),
@@ -1242,7 +1227,6 @@ async fn builtin_shell_exec(
                             "approved": false,
                             "blockedReason": "user_denied_new_file_change",
                             "message": "用户拒绝了本次写入类终端命令。",
-                            "sessionId": normalized_session,
                             "rootPath": session_root_text,
                             "workspacePath": workspace_path_text,
                             "cwd": terminal_path_for_user(&cwd),
@@ -1281,7 +1265,6 @@ async fn builtin_shell_exec(
                             "approved": false,
                             "blockedReason": "delegate_denied_write_risk_command",
                             "message": "子代理工具调用被自动拒绝（存在写入风险）。",
-                            "sessionId": normalized_session,
                             "rootPath": session_root_text,
                             "workspacePath": workspace_path_text,
                             "cwd": terminal_path_for_user(&cwd),
@@ -1317,7 +1300,6 @@ async fn builtin_shell_exec(
                             "approved": false,
                             "blockedReason": "user_denied_existing_file_change",
                             "message": "用户拒绝了本次写入类终端命令。",
-                            "sessionId": normalized_session,
                             "rootPath": session_root_text,
                             "workspacePath": workspace_path_text,
                             "cwd": terminal_path_for_user(&cwd),
@@ -1344,7 +1326,6 @@ async fn builtin_shell_exec(
                                 .unwrap_or_default()
                         ),
                         "toolReview": review,
-                        "sessionId": normalized_session,
                         "rootPath": session_root_text,
                         "workspacePath": workspace_path_text,
                         "cwd": terminal_path_for_user(&cwd),
@@ -2100,5 +2081,36 @@ mod terminal_exec_tests {
             Some(false)
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn shell_exec_result_should_not_expose_session_id() -> Result<(), String> {
+        let Some(shell) = shell_candidate_by_kind("git-bash") else {
+            eprintln!("[TEST] skip shell kind=git-bash: not available on this machine");
+            return Ok(());
+        };
+        let root = std::env::temp_dir().join(format!("eca-terminal-no-session-id-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).map_err(|err| format!("create temp root failed: {err}"))?;
+        let state = build_test_state(shell, root.clone());
+
+        let run_result = builtin_shell_exec(&state, "no-session-id", "run", "echo ok", Some(8_000)).await?;
+        assert!(run_result.get("sessionId").is_none(), "run result leaked sessionId: {run_result}");
+
+        let list_result = builtin_shell_exec(&state, "no-session-id", "list", "", Some(8_000)).await?;
+        assert!(list_result.get("sessionId").is_none(), "list result leaked sessionId: {list_result}");
+        for session in list_result
+            .get("sessions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            assert!(session.get("sessionId").is_none(), "listed session leaked sessionId: {session}");
+        }
+
+        let close_result = builtin_shell_exec(&state, "no-session-id", "close", "", Some(8_000)).await?;
+        assert!(close_result.get("sessionId").is_none(), "close result leaked sessionId: {close_result}");
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
     }
 }

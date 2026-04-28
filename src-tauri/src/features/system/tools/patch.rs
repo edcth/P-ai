@@ -457,6 +457,12 @@ fn apply_patch_parse(input: &str) -> Result<Vec<ApplyPatchOp>, String> {
         return Err("补丁为空。".to_string());
     }
     if lines.first().map(|v| v.trim()) != Some("*** Begin Patch") {
+        let first_line = lines.first().map(|line| line.trim()).unwrap_or("");
+        if first_line.starts_with("diff --git") {
+            return Err(format!(
+                "补丁头非法，第 1 行：`{first_line}`。apply_patch 必须以 `*** Begin Patch` 开始；文件操作只允许 `*** Add File:`、`*** Delete File:` 或 `*** Update File:`。"
+            ));
+        }
         return Err("补丁必须以 `*** Begin Patch` 开始。".to_string());
     }
     let mut idx = 1usize;
@@ -525,6 +531,14 @@ fn apply_patch_parse(input: &str) -> Result<Vec<ApplyPatchOp>, String> {
                     break;
                 }
                 if !current.starts_with("@@") {
+                    let trimmed = current.trim_start();
+                    if trimmed.starts_with("--- ") || trimmed.starts_with("+++ ") || trimmed.starts_with("diff --git") {
+                        return Err(format!(
+                            "Update File `{from}` hunk 头非法，第 {} 行：`{}`。Update File 的每个 hunk 必须先写一行 `@@` 头；文件操作只允许 `*** Add File:`、`*** Delete File:` 或 `*** Update File:`。",
+                            idx + 1,
+                            current
+                        ));
+                    }
                     return Err(format!(
                         "Update File `{from}` hunk 头非法，第 {} 行：`{}`",
                         idx + 1,
@@ -560,7 +574,7 @@ fn apply_patch_parse(input: &str) -> Result<Vec<ApplyPatchOp>, String> {
                         '+' => hunk_lines.push(ApplyPatchLine::Add(payload)),
                         _ => {
                             return Err(format!(
-                                "hunk 行前缀必须是空格/+/-，第 {} 行：`{}`",
+                                "hunk 行前缀必须是空格/+/-，第 {} 行：`{}`。如果这是上下文行，请在行首补一个空格；如果是删除/新增行，请使用 `-` 或 `+` 前缀。",
                                 idx + 1,
                                 hunk_line
                             ));
@@ -578,6 +592,15 @@ fn apply_patch_parse(input: &str) -> Result<Vec<ApplyPatchOp>, String> {
             }
             ops.push(ApplyPatchOp::Update(ApplyPatchUpdate { from, to, hunks }));
             continue;
+        }
+        if line.starts_with("diff --git")
+            || line.starts_with("--- ")
+            || line.starts_with("+++ ")
+            || line.starts_with("index ")
+        {
+            return Err(format!(
+                "未知补丁头：`{line}`。文件操作只允许 `*** Add File:`、`*** Delete File:` 或 `*** Update File:`。"
+            ));
         }
         return Err(format!("未知补丁头：`{line}`"));
     }
@@ -772,12 +795,23 @@ fn apply_patch_build_preview(ops: &[ApplyPatchResolvedOp]) -> Result<String, Str
                 }
                 for hunk in hunks {
                     let (old_seq, new_seq, old_count, new_count) = apply_patch_hunk_sequences(hunk);
-                    let Some(start_current) = apply_patch_find_subsequence(&current_lines, &old_seq) else {
-                        return Err(format!(
-                            "Update File 预检失败，hunk 上下文不匹配：{}",
-                            terminal_path_for_user(from)
-                        ));
-                    };
+                    let start_current = apply_patch_find_unique_subsequence(&current_lines, &old_seq)
+                        .map_err(|match_count| {
+                            if match_count == 0 {
+                                format!(
+                                    "Update File 预检失败，hunk 上下文不匹配：{}\n未匹配片段：\n{}\n请重新读取目标文件相关内容后，基于当前内容重新生成补丁。",
+                                    terminal_path_for_user(from),
+                                    apply_patch_context_preview(&old_seq)
+                                )
+                            } else {
+                                format!(
+                                    "Update File 预检失败，hunk 上下文不唯一：{}\n命中 {} 处，无法判断应修改哪一处。请扩大 hunk 上下文，至少包含目标代码前后有区分度的内容。\n重复片段：\n{}",
+                                    terminal_path_for_user(from),
+                                    match_count,
+                                    apply_patch_context_preview(&old_seq)
+                                )
+                            }
+                        })?;
                     let new_start = start_current + 1;
                     let old_start = ((start_current as isize) - cumulative_delta + 1).max(0) as usize;
                     out.push(format!(
@@ -872,13 +906,30 @@ fn apply_patch_split_file_lines(content: &str) -> (Vec<String>, bool) {
     (lines, trailing_newline)
 }
 
-fn apply_patch_find_subsequence(source: &[String], needle: &[String]) -> Option<usize> {
+fn apply_patch_find_unique_subsequence(source: &[String], needle: &[String]) -> Result<usize, usize> {
     if needle.is_empty() {
-        return Some(source.len());
+        return Ok(source.len());
     }
-    source
+    let matches = source
         .windows(needle.len())
-        .position(|window| window.iter().zip(needle).all(|(a, b)| a == b))
+        .enumerate()
+        .filter_map(|(index, window)| {
+            window.iter().zip(needle).all(|(a, b)| a == b).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if matches.len() == 1 {
+        Ok(matches[0])
+    } else {
+        Err(matches.len())
+    }
+}
+
+fn apply_patch_context_preview(seq: &[String]) -> String {
+    let mut lines = seq.iter().take(6).cloned().collect::<Vec<_>>();
+    if seq.len() > lines.len() {
+        lines.push("...".to_string());
+    }
+    lines.join("\n")
 }
 
 fn apply_patch_render_lines(lines: &[String], trailing_newline: bool) -> String {
@@ -907,9 +958,20 @@ fn apply_patch_apply_hunks(content: &str, hunks: &[ApplyPatchHunk]) -> Result<St
                 ApplyPatchLine::Add(v) => new_seq.push(v.clone()),
             }
         }
-        let Some(start) = apply_patch_find_subsequence(&lines, &old_seq) else {
-            return Err("hunk 上下文不匹配，无法应用补丁。".to_string());
-        };
+        let start = apply_patch_find_unique_subsequence(&lines, &old_seq).map_err(|match_count| {
+            if match_count == 0 {
+                format!(
+                    "hunk 上下文不匹配，无法应用补丁。\n未匹配片段：\n{}\n请重新读取目标文件相关内容后，基于当前内容重新生成补丁。",
+                    apply_patch_context_preview(&old_seq)
+                )
+            } else {
+                format!(
+                    "hunk 上下文不唯一，无法应用补丁。命中 {} 处，请扩大 hunk 上下文后重试。\n重复片段：\n{}",
+                    match_count,
+                    apply_patch_context_preview(&old_seq)
+                )
+            }
+        })?;
         let end = start + old_seq.len();
         lines.splice(start..end, new_seq);
         if hunk.end_of_file {
@@ -1057,7 +1119,6 @@ async fn builtin_apply_patch(
                                 "blockedReason": "delegate_denied_ai_reviewed_patch",
                                 "message": "子代理工具调用被自动拒绝（智能审查不通过）。",
                                 "toolReview": smart_review_history.clone(),
-                                "sessionId": normalized_session,
                                 "cwd": terminal_path_for_user(&cwd),
                             }));
                         }
@@ -1091,7 +1152,6 @@ async fn builtin_apply_patch(
                                 "blockedReason": "user_denied_ai_reviewed_patch",
                                 "message": "用户拒绝了智能审查后的补丁执行。",
                                 "toolReview": smart_review_history.clone(),
-                                "sessionId": normalized_session,
                                 "cwd": terminal_path_for_user(&cwd),
                             }));
                         }
@@ -1123,7 +1183,6 @@ async fn builtin_apply_patch(
                             "blockedReason": "delegate_denied_ai_review_raw_patch",
                             "message": "子代理工具调用被自动拒绝（智能审查返回了不符合约定的结果）。",
                             "toolReview": smart_review_history.clone(),
-                            "sessionId": normalized_session,
                             "cwd": terminal_path_for_user(&cwd),
                         }));
                     }
@@ -1157,7 +1216,6 @@ async fn builtin_apply_patch(
                             "blockedReason": "user_denied_ai_review_raw_patch",
                             "message": "用户拒绝了查看原始审查结果后的补丁执行。",
                             "toolReview": smart_review_history.clone(),
-                            "sessionId": normalized_session,
                             "cwd": terminal_path_for_user(&cwd),
                         }));
                     }
@@ -1183,7 +1241,6 @@ async fn builtin_apply_patch(
                     "approved": false,
                     "blockedReason": "rejected",
                     "message": reason,
-                    "sessionId": normalized_session,
                     "cwd": terminal_path_for_user(&cwd),
                 }));
             }
@@ -1215,7 +1272,6 @@ async fn builtin_apply_patch(
                         "approved": false,
                         "blockedReason": "delegate_denied_apply_patch",
                         "message": "子代理工具调用被自动拒绝（补丁执行需要审批）。",
-                        "sessionId": normalized_session,
                         "cwd": terminal_path_for_user(&cwd),
                     }));
                 }
@@ -1250,7 +1306,6 @@ async fn builtin_apply_patch(
                         "approved": false,
                         "blockedReason": "user_denied_apply_patch",
                         "message": "用户拒绝了本次补丁执行。",
-                        "sessionId": normalized_session,
                         "cwd": terminal_path_for_user(&cwd),
                     }));
                 }
@@ -1268,7 +1323,6 @@ async fn builtin_apply_patch(
                             "approved": false,
                             "blockedReason": "delegate_denied_apply_patch_after_review_fallback",
                             "message": "子代理工具调用被自动拒绝（审查模型不可用，降级后仍需审批）。",
-                            "sessionId": normalized_session,
                             "cwd": terminal_path_for_user(&cwd),
                         }));
                     }
@@ -1301,7 +1355,6 @@ async fn builtin_apply_patch(
                             "approved": false,
                             "blockedReason": "user_denied_apply_patch_after_review_fallback",
                             "message": "用户拒绝了降级后的补丁执行。",
-                            "sessionId": normalized_session,
                             "cwd": terminal_path_for_user(&cwd),
                         }));
                     }
@@ -1344,7 +1397,6 @@ async fn builtin_apply_patch(
         "ok": true,
         "approved": true,
         "toolReview": smart_review_history,
-        "sessionId": normalized_session,
         "cwd": terminal_path_for_user(&cwd),
         "changed": changed,
         "changedCount": changed.len(),
@@ -1400,6 +1452,40 @@ mod apply_patch_tool_tests {
     }
 
     #[test]
+    fn parse_should_explain_invalid_top_level_patch_header() {
+        let err = apply_patch_parse(
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@\n-old\n+new",
+        )
+        .expect_err("invalid top-level header should be rejected");
+
+        assert!(err.contains("补丁头非法"));
+        assert!(err.contains("*** Begin Patch"));
+        assert!(err.contains("文件操作只允许"));
+    }
+
+    #[test]
+    fn parse_should_explain_invalid_hunk_header_inside_update() {
+        let err = apply_patch_parse(
+            "*** Begin Patch\n*** Update File: a.txt\n--- a/a.txt\n+++ b/a.txt\n@@\n-old\n+new\n*** End Patch",
+        )
+        .expect_err("invalid hunk header should be rejected inside update");
+
+        assert!(err.contains("hunk 头非法"));
+        assert!(err.contains("必须先写一行 `@@`"));
+    }
+
+    #[test]
+    fn parse_should_explain_invalid_hunk_line_prefix() {
+        let err = apply_patch_parse(
+            "*** Begin Patch\n*** Update File: a.txt\n@@\nold\n+new\n*** End Patch",
+        )
+        .expect_err("unprefixed hunk line should be rejected");
+
+        assert!(err.contains("hunk 行前缀必须是空格/+/-"));
+        assert!(err.contains("如果这是上下文行"));
+    }
+
+    #[test]
     fn apply_hunks_should_replace_lines() {
         let content = "a\nb\nc\n";
         let hunks = vec![ApplyPatchHunk {
@@ -1413,6 +1499,39 @@ mod apply_patch_tool_tests {
         }];
         let updated = apply_patch_apply_hunks(content, &hunks).expect("apply");
         assert_eq!(updated, "a\nB\nc\n");
+    }
+
+    #[test]
+    fn apply_hunks_should_explain_context_not_found() {
+        let content = "a\nb\nc\n";
+        let hunks = vec![ApplyPatchHunk {
+            lines: vec![
+                ApplyPatchLine::Context("a".to_string()),
+                ApplyPatchLine::Remove("missing".to_string()),
+            ],
+            end_of_file: false,
+        }];
+
+        let err = apply_patch_apply_hunks(content, &hunks).expect_err("missing context should fail");
+
+        assert!(err.contains("hunk 上下文不匹配"));
+        assert!(err.contains("未匹配片段"));
+        assert!(err.contains("missing"));
+    }
+
+    #[test]
+    fn apply_hunks_should_reject_non_unique_context() {
+        let content = "target\nkeep\ntarget\nkeep\n";
+        let hunks = vec![ApplyPatchHunk {
+            lines: vec![ApplyPatchLine::Remove("target".to_string())],
+            end_of_file: false,
+        }];
+
+        let err = apply_patch_apply_hunks(content, &hunks).expect_err("ambiguous context should fail");
+
+        assert!(err.contains("hunk 上下文不唯一"));
+        assert!(err.contains("命中 2 处"));
+        assert!(err.contains("扩大 hunk 上下文"));
     }
 
     #[test]

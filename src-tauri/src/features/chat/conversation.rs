@@ -1731,12 +1731,17 @@ fn build_builtin_tool_rule_block(tool_id: &str) -> Option<String> {
         "apply_patch" => (
             "apply_patch tool rule",
             "何时必须用：当需要新增文件、删除文件、修改文件或重命名文件时，默认使用 apply_patch。\n\
-             核心规则：apply_patch 只接受严格补丁语法；新增文件时每一行正文都必须以前缀 `+` 开头；修改文件时只能在 `*** Update File:` 下写带 `+`、`-`、空格前缀的变更行；不要把普通正文直接塞进补丁。\n\
-             路径规则：相对路径会按当前工作目录解析，显式绝对路径会按目标工作目录权限判断；若工具报路径或工作区错误，先修正路径与工作区，再继续用 apply_patch，不要改用 exec 写文件。\n\
+             格式口径：apply_patch 使用自定义补丁 envelope，不接受完整标准 git diff。固定以 `*** Begin Patch` 开始，以 `*** End Patch` 结束。\n\
+             文件操作：只支持 `*** Add File:`、`*** Delete File:`、`*** Update File:`；`*** Move to:` 只允许紧跟在 `*** Update File:` 后，用于移动或重命名该文件。\n\
+             Add File 规则：新增文件正文每一行都必须以前缀 `+` 开头，不要把普通正文直接塞进补丁。\n\
+             Update File 规则：每个 hunk 必须先写一行 `@@` 头；`@@ -x,y +x,y @@` 这类行号只作分隔/展示，不参与定位。hunk 内容行必须以空格、`-`、`+` 开头：空格=上下文，`-`=删除，`+`=新增。\n\
+             定位规则：Update File 通过 hunk 内的上下文行和删除行在当前文件中连续匹配定位，不按 `@@` 行号定位；上下文应足够具体，避免短片段命中错误位置。\n\
+             路径规则：路径可以是绝对路径，也可以是相对当前工作目录的路径；最终仍受工作区权限校验。若工具报路径或工作区错误，先修正路径与工作区，再继续用 apply_patch，不要改用 exec 写文件。\n\
+             禁止格式：不要包含 `diff --git`、`index`、`---`、`+++` 等标准 git diff 文件头；只允许使用 apply_patch 文件头。\n\
              正确示例一：新增代码文件\n\
              ```\n\
              *** Begin Patch\n\
-             *** Add File: E:\\project\\src\\utils\\math.ts\n\
+             *** Add File: src/utils/math.ts\n\
              +export function add(a: number, b: number): number {\n\
              +  return a + b;\n\
              +}\n\
@@ -1745,7 +1750,7 @@ fn build_builtin_tool_rule_block(tool_id: &str) -> Option<String> {
              正确示例二：修改代码文件\n\
              ```\n\
              *** Begin Patch\n\
-             *** Update File: E:\\project\\src\\utils\\math.ts\n\
+             *** Update File: src/utils/math.ts\n\
              @@\n\
              -export function add(a: number, b: number): number {\n\
              -  return a + b;\n\
@@ -1757,7 +1762,7 @@ fn build_builtin_tool_rule_block(tool_id: &str) -> Option<String> {
              +}\n\
              *** End Patch\n\
              ```\n\
-             错误示例：新增文件时直接写正文，未给每一行加 `+`；或 apply_patch 失败后改用 exec 执行 `cat > file <<EOF`、`echo text > file` 之类命令写文件。\n\
+             错误示例：使用 `diff --git` / `---` / `+++` 的完整 git diff；新增文件时直接写正文，未给每一行加 `+`；或 apply_patch 失败后改用 exec 执行 `cat > file <<EOF`、`echo text > file` 之类命令写文件。\n\
              失败后的正确处理：若报 `Add File 仅允许 + 行`，说明新增文件补丁格式错误，应修正补丁后重试；若报路径、工作区或授权错误，应先修正这些前提，再继续 apply_patch。",
         ),
         "file_reference" => (

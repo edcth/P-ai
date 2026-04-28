@@ -40,7 +40,6 @@ use terminal_windows_command_ext::CommandExtUtf8Env;
 
 #[derive(Debug)]
 struct TerminalLiveShellSession {
-    session_id: String,
     shell_kind: String,
     shell_path: String,
     created_at: String,
@@ -147,7 +146,7 @@ fn terminal_live_compose_command(shell: &TerminalShellProfile, cwd: &Path, comma
 
 async fn terminal_live_create_session(
     state: &AppState,
-    session_id: &str,
+    _session_id: &str,
     cwd: &Path,
 ) -> Result<TerminalLiveShellSessionHandle, String> {
     let shell = terminal_shell_for_state(state);
@@ -207,7 +206,6 @@ async fn terminal_live_create_session(
         .ok_or_else(|| "capture live shell stderr failed".to_string())?;
 
     Ok(std::sync::Arc::new(TerminalLiveShellSession {
-        session_id: session_id.to_string(),
         shell_kind: shell.kind.clone(),
         shell_path: shell.path.clone(),
         created_at: now_iso(),
@@ -274,7 +272,6 @@ async fn terminal_live_list_sessions(state: &AppState) -> Vec<Value> {
     for handle in handles {
         let last_used_at = handle.last_used_at.lock().await.clone();
         out.push(serde_json::json!({
-            "sessionId": handle.session_id,
             "shellKind": handle.shell_kind,
             "shellPath": handle.shell_path,
             "createdAt": handle.created_at,

@@ -450,12 +450,14 @@ impl RuntimeToolMetadata for BuiltinApplyPatchTool {
             "apply_patch",
             [
                 "编辑文件的结构化补丁工具。",
-                "输入必须是固定补丁格式：以 *** Begin Patch 开始，以 *** End Patch 结束。",
-                "支持的文件头有：*** Add File:、*** Delete File:、*** Update File:，以及可选的 *** Move to:。",
-                "Update File 的每个 hunk 都必须先写一行 @@ 头。",
-                "在 @@ 头之后，hunk 中空格前缀表示上下文，- 表示删除，+ 表示新增。",
-                "文件路径必须是绝对路径。",
-                "不接受 git diff；不要使用 diff --git、---、+++ 等格式。",
+                "输入必须是 apply_patch 自定义补丁 envelope：以 *** Begin Patch 开始，以 *** End Patch 结束。",
+                "文件操作头只支持：*** Add File:、*** Delete File:、*** Update File:。",
+                "*** Move to: 只允许紧跟在 *** Update File: 后，用于移动或重命名该文件。",
+                "Add File 的正文每一行必须以 + 开头。",
+                "Update File 的每个 hunk 都必须先写一行 @@ 头；@@ 行号只作分隔/展示，不参与定位。",
+                "在 @@ 头之后，hunk 内容行必须以空格、- 或 + 开头：空格表示上下文，- 表示删除，+ 表示新增。",
+                "路径可以是绝对路径，也可以是相对当前工作目录的路径；最终仍受工作区权限校验。",
+                "不接受完整标准 git diff；不要包含 diff --git、index、---、+++ 等 git diff 文件头。Update File 内部 hunk 采用 unified diff 风格的 空格/-/+ 前缀。",
             ]
             .join("\n"),
             serde_json::json!({

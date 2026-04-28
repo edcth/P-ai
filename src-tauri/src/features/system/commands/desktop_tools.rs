@@ -243,7 +243,6 @@ async fn terminal_self_check(state: State<'_, AppState>) -> Result<Value, String
             "ok": false,
             "blockedReason": "missing_terminal_shell",
             "message": "No supported shell was detected on Windows. Install Git and use Git Bash: https://git-scm.com/downloads",
-            "sessionId": session_id,
             "shellKind": runtime_shell.kind,
             "shellPath": runtime_shell.path,
             "steps": []
@@ -307,7 +306,6 @@ async fn terminal_self_check(state: State<'_, AppState>) -> Result<Value, String
     let ok = results.iter().all(|item| item.ok);
     Ok(serde_json::json!({
         "ok": ok,
-        "sessionId": session_id,
         "rootPath": root_path.to_string_lossy().to_string(),
         "cwd": cwd.to_string_lossy().to_string(),
         "shellKind": runtime_shell.kind,
