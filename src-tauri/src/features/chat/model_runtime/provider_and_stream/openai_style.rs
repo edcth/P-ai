@@ -39,7 +39,6 @@ fn openai_style_adapter_kind_for_deepseek_kimi(
         || base_url.contains("moonshot")
         || model_name.contains("deepseek")
         || model_name.contains("kimi")
-        || model_name.contains("mimo")
     {
         genai::adapter::AdapterKind::DeepSeek
     } else {
