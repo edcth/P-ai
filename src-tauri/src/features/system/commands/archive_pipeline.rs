@@ -1066,7 +1066,7 @@ fn build_compaction_message(
         "[上下文整理]\n\n用户画像：\n{}\n\n摘要说明：\n{}\n\n摘要正文：\n{}\n\n保留对话：\n{}",
         user_profile_block,
         clean_text(summary_note.trim()),
-        clean_text(summary.trim()),
+        clean_compaction_summary_text(summary),
         preserved_dialogue_text
     );
     ChatMessage {
@@ -1095,6 +1095,19 @@ fn normalize_multiline_block(input: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn clean_compaction_summary_text(input: &str) -> String {
+    let trimmed = input.trim();
+    if let Some((summary, active_plans)) = trimmed.split_once("<active_plans>") {
+        let cleaned_summary = clean_text(summary.trim());
+        let cleaned_active_plans = normalize_multiline_block(&format!("<active_plans>{active_plans}"));
+        if cleaned_summary.is_empty() {
+            return cleaned_active_plans;
+        }
+        return format!("{}\n\n{}", cleaned_summary, cleaned_active_plans);
+    }
+    clean_text(trimmed)
 }
 
 fn build_initial_summary_context_message(
@@ -1686,8 +1699,10 @@ async fn run_context_compaction_pipeline_inner(
         &state.data_path,
         &source.id,
     )? {
-        Some(plan_block) if summary_draft.summary.trim().is_empty() => plan_block,
-        Some(plan_block) => format!("{}\n\n{}", summary_draft.summary.trim(), plan_block),
+        Some(plan_block) if summary_draft.summary.trim().is_empty() => {
+            format!("\n{}", plan_block.trim())
+        }
+        Some(plan_block) => format!("{}\n\n{}", summary_draft.summary.trim(), plan_block.trim()),
         None => summary_draft.summary.clone(),
     };
     let user_profile_snapshot =

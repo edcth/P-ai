@@ -2,6 +2,7 @@
 
 ## 进行中
 
+- 修复（context-compaction-active-plans-spacing）：上下文压缩消息在摘要正文追加执行中计划时，保留计划块前的空行，避免 `<active_plans>` 与摘要正文挤在同一段。
 - 优化（chat-conversation-list-compact-mode）：会话列表新增详细/简约图标切换；简约模式将首行收口为标题与工作空间，第二行仅显示最新一条消息，并隐藏原双行预览。
 
 ## 发布：v0.9.53

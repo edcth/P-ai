@@ -274,6 +274,27 @@
     }
 
     #[test]
+    fn build_compaction_message_should_keep_blank_line_before_active_plans() {
+        let message = build_compaction_message(
+            "这里是压缩摘要\n\n<active_plans>\n<active_plan index=\"1\">\n执行计划\n</active_plan>\n</active_plans>",
+            "manual",
+            None,
+            None,
+            None,
+        );
+        let text = message
+            .parts
+            .iter()
+            .find_map(|part| match part {
+                MessagePart::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("compaction text");
+
+        assert!(text.contains("这里是压缩摘要\n\n<active_plans>"));
+    }
+
+    #[test]
     fn build_compaction_preserved_dialogue_block_should_use_token_budget_and_skip_compaction() {
         let now = now_iso();
         let long_middle = "中间消息".repeat(200);
