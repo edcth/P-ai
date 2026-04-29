@@ -15,7 +15,9 @@ enum ApplyPatchUndoResolvedOp {
     Update {
         from: PathBuf,
         to: Option<PathBuf>,
-        hunks: Vec<ApplyPatchHunk>,
+        old_string: String,
+        new_string: String,
+        replace_all: bool,
     },
 }
 
@@ -26,11 +28,6 @@ fn parse_apply_patch_tool_args(raw_args: &str) -> Option<ApplyPatchToolArgs> {
     }
     if trimmed.starts_with('{') {
         return serde_json::from_str::<ApplyPatchToolArgs>(trimmed).ok();
-    }
-    if trimmed.starts_with("*** Begin Patch") {
-        return Some(ApplyPatchToolArgs {
-            input: trimmed.to_string(),
-        });
     }
     None
 }
@@ -84,10 +81,13 @@ fn collect_rewind_apply_patch_records(removed_messages: &[ChatMessage]) -> Vec<R
                     let Some(args) = parse_apply_patch_tool_args(raw_args) else {
                         continue;
                     };
-                    if args.input.trim().is_empty() {
+                    if args.operations.is_empty() {
                         continue;
                     }
-                    pending.insert(call_id, args.input);
+                    let Ok(input) = serde_json::to_string(&args) else {
+                        continue;
+                    };
+                    pending.insert(call_id, input);
                 }
                 continue;
             }
@@ -123,25 +123,6 @@ fn collect_rewind_apply_patch_records(removed_messages: &[ChatMessage]) -> Vec<R
     out
 }
 
-fn invert_apply_patch_hunks(hunks: &[ApplyPatchHunk]) -> Vec<ApplyPatchHunk> {
-    let mut out = Vec::<ApplyPatchHunk>::new();
-    for hunk in hunks {
-        let mut lines = Vec::<ApplyPatchLine>::new();
-        for line in &hunk.lines {
-            match line {
-                ApplyPatchLine::Context(value) => lines.push(ApplyPatchLine::Context(value.clone())),
-                ApplyPatchLine::Remove(value) => lines.push(ApplyPatchLine::Add(value.clone())),
-                ApplyPatchLine::Add(value) => lines.push(ApplyPatchLine::Remove(value.clone())),
-            }
-        }
-        out.push(ApplyPatchHunk {
-            lines,
-            end_of_file: hunk.end_of_file,
-        });
-    }
-    out
-}
-
 fn build_inverse_apply_patch_ops(
     resolved: &[ApplyPatchResolvedOp],
 ) -> Result<Vec<ApplyPatchUndoResolvedOp>, String> {
@@ -160,12 +141,13 @@ fn build_inverse_apply_patch_ops(
                     terminal_path_for_user(path)
                 ));
             }
-            ApplyPatchResolvedOp::Update { from, to, hunks } => {
-                let inverse_hunks = invert_apply_patch_hunks(hunks);
+            ApplyPatchResolvedOp::Update { from, to, old_string, new_string, replace_all } => {
                 inverse.push(ApplyPatchUndoResolvedOp::Update {
                     from: to.clone().unwrap_or_else(|| from.clone()),
                     to: to.as_ref().map(|_| from.clone()),
-                    hunks: inverse_hunks,
+                    old_string: new_string.clone(),
+                    new_string: old_string.clone(),
+                    replace_all: *replace_all,
                 });
             }
         }
@@ -195,12 +177,12 @@ fn execute_inverse_apply_patch_ops(ops: &[ApplyPatchUndoResolvedOp]) -> Result<u
                 })?;
                 applied = applied.saturating_add(1);
             }
-            ApplyPatchUndoResolvedOp::Update { from, to, hunks } => {
+            ApplyPatchUndoResolvedOp::Update { from, to, old_string, new_string, replace_all } => {
                 let old_content = apply_patch_read_utf8_file(from)?;
-                let new_content = apply_patch_apply_hunks(&old_content, hunks).map_err(|err| {
-                    format!("撤回失败：反向补丁应用失败 {}: {err}", terminal_path_for_user(from))
+                let restored_content = apply_patch_apply_update(&old_content, old_string, new_string, *replace_all).map_err(|err| {
+                    format!("撤回失败：反向更新应用失败 {}: {err}", terminal_path_for_user(from))
                 })?;
-                std::fs::write(from, new_content.as_bytes()).map_err(|err| {
+                std::fs::write(from, restored_content.as_bytes()).map_err(|err| {
                     format!("撤回失败：写入文件失败 {}: {err}", terminal_path_for_user(from))
                 })?;
                 if let Some(dest) = to {
@@ -264,7 +246,7 @@ fn try_undo_apply_patch_from_removed_messages(
             undone_count = undone_count.saturating_add(restored);
             continue;
         }
-        let parsed = apply_patch_parse(&record.input).map_err(|err| {
+        let parsed = apply_patch_parse_json(&record.input).map_err(|err| {
             format!("撤回失败：解析原始补丁失败（tool_call_id={}）: {err}", record.tool_call_id)
         })?;
         let resolved = apply_patch_resolve_ops(&cwd, parsed).map_err(|err| {
@@ -318,7 +300,11 @@ mod rewind_apply_patch_tests {
         let base = make_temp_dir("rewind-collect");
         let add_path = base.join("a.txt");
         let args = json!({
-            "input": format!("*** Begin Patch\n*** Add File: {}\n+hello\n*** End Patch", add_path.to_string_lossy())
+            "input": serde_json::json!({
+                "operations": [
+                    {"action": "add", "path": add_path.to_string_lossy(), "content": "hello"}
+                ]
+            }).to_string()
         })
         .to_string();
         let events = vec![
@@ -409,17 +395,18 @@ mod rewind_apply_patch_tests {
         let base = make_temp_dir("rewind-legacy-update");
         let file = base.join("a.txt");
         std::fs::write(&file, "line1\nold\nline3\n").expect("seed file");
-        let patch = format!(
-            "*** Begin Patch\n*** Update File: {}\n@@\n line1\n-old\n+new\n line3\n*** End Patch",
-            absolute_user_path(&file)
-        );
-        let parsed = apply_patch_parse(&patch).expect("parse");
+        let input = serde_json::json!({
+            "operations": [
+                {"action": "update", "path": absolute_user_path(&file), "old_string": "old", "new_string": "new"}
+            ]
+        }).to_string();
+        let parsed = apply_patch_parse_json(&input).expect("parse");
         let resolved = apply_patch_resolve_ops(&base, parsed).expect("resolve");
-        let ApplyPatchResolvedOp::Update { hunks, .. } = &resolved[0] else {
+        let ApplyPatchResolvedOp::Update { old_string, new_string, replace_all, .. } = &resolved[0] else {
             panic!("expected update");
         };
         let old = std::fs::read_to_string(&file).expect("read old");
-        let updated = apply_patch_apply_hunks(&old, hunks).expect("apply forward");
+        let updated = apply_patch_apply_update(&old, old_string, new_string, *replace_all).expect("apply forward");
         std::fs::write(&file, updated).expect("write forward");
 
         let inverse = build_inverse_apply_patch_ops(&resolved).expect("inverse");
@@ -433,11 +420,12 @@ mod rewind_apply_patch_tests {
         let base = make_temp_dir("rewind-legacy-add-drift");
         let file = base.join("a.txt");
         std::fs::write(&file, "drift\n").expect("seed drift");
-        let patch = format!(
-            "*** Begin Patch\n*** Add File: {}\n+hello\n*** End Patch",
-            absolute_user_path(&file)
-        );
-        let parsed = apply_patch_parse(&patch).expect("parse");
+        let input = serde_json::json!({
+            "operations": [
+                {"action": "add", "path": absolute_user_path(&file), "content": "hello"}
+            ]
+        }).to_string();
+        let parsed = apply_patch_parse_json(&input).expect("parse");
         let resolved = apply_patch_resolve_ops(&base, parsed).expect("resolve");
         let inverse = build_inverse_apply_patch_ops(&resolved).expect("inverse");
         let err = execute_inverse_apply_patch_ops(&inverse).expect_err("should fail");

@@ -6,52 +6,39 @@ enum ApplyPatchSafetyCheck {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ApplyPatchToolArgs {
-    input: String,
+    operations: Vec<ApplyPatchToolOpArgs>,
 }
 
-#[derive(Debug, Clone)]
-struct ApplyPatchHunk {
-    lines: Vec<ApplyPatchLine>,
-    end_of_file: bool,
-}
-
-#[derive(Debug, Clone)]
-struct ApplyPatchUpdate {
-    from: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ApplyPatchToolOpArgs {
+    action: String,
+    path: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default, alias = "oldString")]
+    old_string: Option<String>,
+    #[serde(default, alias = "newString")]
+    new_string: Option<String>,
+    #[serde(default, alias = "replaceAll")]
+    replace_all: Option<bool>,
+    #[serde(default)]
     to: Option<String>,
-    hunks: Vec<ApplyPatchHunk>,
 }
 
 #[derive(Debug, Clone)]
 enum ApplyPatchOp {
-    Add { path: String, lines: Vec<String> },
+    Add { path: String, content: String },
     Delete { path: String },
-    Update(ApplyPatchUpdate),
-}
-
-#[derive(Debug, Clone)]
-enum ApplyPatchLine {
-    Context(String),
-    Remove(String),
-    Add(String),
+    Update { path: String, old_string: String, new_string: String, replace_all: bool },
+    Move { path: String, to: String },
 }
 
 #[derive(Debug, Clone)]
 enum ApplyPatchResolvedOp {
-    Add {
-        path: PathBuf,
-        content: String,
-    },
-    Delete {
-        path: PathBuf,
-    },
-    Update {
-        from: PathBuf,
-        to: Option<PathBuf>,
-        hunks: Vec<ApplyPatchHunk>,
-    },
+    Add { path: PathBuf, content: String },
+    Delete { path: PathBuf },
+    Update { from: PathBuf, to: Option<PathBuf>, old_string: String, new_string: String, replace_all: bool },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,14 +157,31 @@ fn apply_patch_prepare_backup_record(
                     backup_blob_file: Some(blob_file),
                 });
             }
-            ApplyPatchResolvedOp::Update { from, to, hunks } => {
+            ApplyPatchResolvedOp::Update { from, to, old_string, new_string, replace_all } => {
+                if old_string.is_empty() && new_string.is_empty() {
+                    let raw = std::fs::read(from).map_err(|_| {
+                        format!("Move 操作失败，文件不存在：{}", from.to_string_lossy())
+                    })?;
+                    let blob_file = format!("{}.bin", Uuid::new_v4());
+                    std::fs::write(apply_patch_blob_path(data_path, &blob_file), raw)
+                        .map_err(|err| format!("写入移动备份失败（{}）：{err}", from.to_string_lossy()))?;
+                    entries.push(ApplyPatchBackupEntry {
+                        kind: ApplyPatchBackupKind::MoveUpdate,
+                        path: to.as_ref().unwrap_or(from).to_string_lossy().to_string(),
+                        from_path: to.as_ref().map(|_| from.to_string_lossy().to_string()),
+                        to_path: to.as_ref().map(|dest| dest.to_string_lossy().to_string()),
+                        expected_current_content: Some(String::new()),
+                        backup_blob_file: Some(blob_file),
+                    });
+                    continue;
+                }
                 let raw = std::fs::read(from).map_err(|_| {
-                    format!("Update File 失败，文件不存在：{}", from.to_string_lossy())
+                    format!("Update 操作失败，文件不存在：{}", from.to_string_lossy())
                 })?;
                 let old_content = String::from_utf8(raw.clone()).map_err(|_| {
-                    format!("Update File 失败，文件不是 UTF-8 文本：{}", from.to_string_lossy())
+                    format!("Update 操作失败，文件不是 UTF-8 文本：{}", from.to_string_lossy())
                 })?;
-                let new_content = apply_patch_apply_hunks(&old_content, hunks)?;
+                let new_content = apply_patch_apply_update(&old_content, old_string, new_string, *replace_all)?;
                 let blob_file = format!("{}.bin", Uuid::new_v4());
                 std::fs::write(apply_patch_blob_path(data_path, &blob_file), raw)
                     .map_err(|err| format!("写入修改备份失败（{}）：{err}", from.to_string_lossy()))?;
@@ -444,170 +448,208 @@ fn clear_apply_patch_temp(data_path: &PathBuf) -> Result<(usize, usize), String>
     Ok((removed_records, removed_blobs))
 }
 
-fn apply_patch_split_lines(input: &str) -> Vec<String> {
-    input
-        .split('\n')
-        .map(|line| line.trim_end_matches('\r').to_string())
-        .collect()
+fn apply_patch_tool_args_to_raw_json(args: &ApplyPatchToolArgs) -> Result<String, String> {
+    serde_json::to_string(args).map_err(|err| format!("apply_patch 参数序列化失败：{err}"))
 }
 
-fn apply_patch_parse(input: &str) -> Result<Vec<ApplyPatchOp>, String> {
-    let lines = apply_patch_split_lines(input);
-    if lines.is_empty() {
-        return Err("补丁为空。".to_string());
+fn apply_patch_json_example() -> &'static str {
+    r#"{"operations":[{"action":"update","path":"src/example.ts","old_string":"before","new_string":"after"}]}"#
+}
+
+fn apply_patch_ops_from_tool_args(args: ApplyPatchToolArgs) -> Result<Vec<ApplyPatchOp>, String> {
+    if args.operations.is_empty() {
+        return Err(apply_patch_format_error(
+            "apply_patch 操作列表为空。至少需要一项操作。",
+        ));
     }
-    if lines.first().map(|v| v.trim()) != Some("*** Begin Patch") {
-        let first_line = lines.first().map(|line| line.trim()).unwrap_or("");
-        if first_line.starts_with("diff --git") {
-            return Err(format!(
-                "补丁头非法，第 1 行：`{first_line}`。apply_patch 必须以 `*** Begin Patch` 开始；文件操作只允许 `*** Add File:`、`*** Delete File:` 或 `*** Update File:`。"
-            ));
-        }
-        return Err("补丁必须以 `*** Begin Patch` 开始。".to_string());
-    }
-    let mut idx = 1usize;
     let mut ops = Vec::<ApplyPatchOp>::new();
-    while idx < lines.len() {
-        let line = lines[idx].trim_end();
-        if line == "*** End Patch" {
-            if idx + 1 != lines.len() && !lines[idx + 1..].iter().all(|v| v.trim().is_empty()) {
-                return Err("`*** End Patch` 后不允许有额外内容。".to_string());
-            }
-            return Ok(ops);
-        }
-        if line.is_empty() {
-            idx += 1;
-            continue;
-        }
-        if let Some(path) = line.strip_prefix("*** Add File: ") {
-            let path = path.trim().to_string();
-            idx += 1;
-            let mut add_lines = Vec::<String>::new();
-            while idx < lines.len() {
-                let current = lines[idx].as_str();
-                if current.starts_with("*** ") {
-                    break;
-                }
-                let Some(payload) = current.strip_prefix('+') else {
-                    return Err(format!("Add File 仅允许 `+` 行，第 {} 行非法。", idx + 1));
+    for (i, op) in args.operations.into_iter().enumerate() {
+        match op.action.as_str() {
+            "add" => {
+                let Some(content) = op.content else {
+                    return Err(apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (add) 缺少 "content" 字段。add 操作必须提供文件内容。\n最小 add 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("add")
+                    )));
                 };
-                add_lines.push(payload.to_string());
-                idx += 1;
+                ops.push(ApplyPatchOp::Add { path: op.path, content });
             }
-            if add_lines.is_empty() {
-                return Err(format!("Add File `{path}` 至少需要一行 `+` 内容。"));
-            }
-            ops.push(ApplyPatchOp::Add {
-                path,
-                lines: add_lines,
-            });
-            continue;
-        }
-        if let Some(path) = line.strip_prefix("*** Delete File: ") {
-            ops.push(ApplyPatchOp::Delete {
-                path: path.trim().to_string(),
-            });
-            idx += 1;
-            continue;
-        }
-        if let Some(path) = line.strip_prefix("*** Update File: ") {
-            let from = path.trim().to_string();
-            idx += 1;
-            let mut to = None::<String>;
-            if idx < lines.len() && lines[idx].starts_with("*** Move to: ") {
-                to = lines[idx]
-                    .strip_prefix("*** Move to: ")
-                    .map(|v| v.trim().to_string());
-                idx += 1;
-            }
-            let mut hunks = Vec::<ApplyPatchHunk>::new();
-            while idx < lines.len() {
-                let current = lines[idx].as_str();
-                if current == "*** End Patch"
-                    || current.starts_with("*** Add File: ")
-                    || current.starts_with("*** Delete File: ")
-                    || current.starts_with("*** Update File: ")
-                {
-                    break;
+            "delete" => ops.push(ApplyPatchOp::Delete { path: op.path }),
+            "update" => {
+                let Some(old_string) = op.old_string else {
+                    return Err(apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (update) 缺少 "old_string" 字段。\n最小 update 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("update")
+                    )));
+                };
+                let Some(new_string) = op.new_string else {
+                    return Err(apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (update) 缺少 "new_string" 字段。\n最小 update 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("update")
+                    )));
+                };
+                if old_string == new_string {
+                    return Err(apply_patch_format_error(format!(
+                        "apply_patch 操作[{}] (update) old_string 和 new_string 完全相同。update 必须真的修改内容。\n最小 update 示例：{}",
+                        i,
+                        apply_patch_operation_example("update")
+                    )));
                 }
-                if !current.starts_with("@@") {
-                    let trimmed = current.trim_start();
-                    if trimmed.starts_with("--- ") || trimmed.starts_with("+++ ") || trimmed.starts_with("diff --git") {
-                        return Err(format!(
-                            "Update File `{from}` hunk 头非法，第 {} 行：`{}`。Update File 的每个 hunk 必须先写一行 `@@` 头；文件操作只允许 `*** Add File:`、`*** Delete File:` 或 `*** Update File:`。",
-                            idx + 1,
-                            current
-                        ));
-                    }
-                    return Err(format!(
-                        "Update File `{from}` hunk 头非法，第 {} 行：`{}`",
-                        idx + 1,
-                        current
-                    ));
-                }
-                idx += 1;
-                let mut hunk_lines = Vec::<ApplyPatchLine>::new();
-                let mut end_of_file = false;
-                while idx < lines.len() {
-                    let hunk_line = lines[idx].as_str();
-                    if hunk_line == "*** End of File" {
-                        end_of_file = true;
-                        idx += 1;
-                        break;
-                    }
-                    if hunk_line.starts_with("@@")
-                        || hunk_line == "*** End Patch"
-                        || hunk_line.starts_with("*** Add File: ")
-                        || hunk_line.starts_with("*** Delete File: ")
-                        || hunk_line.starts_with("*** Update File: ")
-                    {
-                        break;
-                    }
-                    let mut chars = hunk_line.chars();
-                    let Some(prefix) = chars.next() else {
-                        return Err(format!("空 hunk 行非法（第 {} 行）。", idx + 1));
-                    };
-                    let payload = chars.collect::<String>();
-                    match prefix {
-                        ' ' => hunk_lines.push(ApplyPatchLine::Context(payload)),
-                        '-' => hunk_lines.push(ApplyPatchLine::Remove(payload)),
-                        '+' => hunk_lines.push(ApplyPatchLine::Add(payload)),
-                        _ => {
-                            return Err(format!(
-                                "hunk 行前缀必须是空格/+/-，第 {} 行：`{}`。如果这是上下文行，请在行首补一个空格；如果是删除/新增行，请使用 `-` 或 `+` 前缀。",
-                                idx + 1,
-                                hunk_line
-                            ));
-                        }
-                    }
-                    idx += 1;
-                }
-                if hunk_lines.is_empty() {
-                    return Err(format!("Update File `{from}` 存在空 hunk。"));
-                }
-                hunks.push(ApplyPatchHunk {
-                    lines: hunk_lines,
-                    end_of_file,
+                ops.push(ApplyPatchOp::Update {
+                    path: op.path,
+                    old_string,
+                    new_string,
+                    replace_all: op.replace_all.unwrap_or(false),
                 });
             }
-            ops.push(ApplyPatchOp::Update(ApplyPatchUpdate { from, to, hunks }));
-            continue;
+            "move" => {
+                let Some(to) = op.to else {
+                    return Err(apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (move) 缺少 "to" 字段。\n最小 move 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("move")
+                    )));
+                };
+                ops.push(ApplyPatchOp::Move { path: op.path, to });
+            }
+            other => {
+                return Err(apply_patch_format_error(format!(
+                    r#"apply_patch 操作[{}] 的 action "{}" 无效。必须是 "add"、"update"、"delete" 或 "move"。\n可参考最小 update 示例：{}"#,
+                    i,
+                    other,
+                    apply_patch_operation_example("update")
+                )));
+            }
         }
-        if line.starts_with("diff --git")
-            || line.starts_with("--- ")
-            || line.starts_with("+++ ")
-            || line.starts_with("index ")
-        {
-            return Err(format!(
-                "未知补丁头：`{line}`。文件操作只允许 `*** Add File:`、`*** Delete File:` 或 `*** Update File:`。"
-            ));
-        }
-        return Err(format!("未知补丁头：`{line}`"));
     }
-    Err("补丁缺少 `*** End Patch`。".to_string())
+    Ok(ops)
 }
 
-#[cfg(target_os = "windows")]
+fn apply_patch_operation_example(action: &str) -> &'static str {
+    match action {
+        "add" => r#"{"action":"add","path":"src/new.ts","content":"export const value = 1;\n"}"#,
+        "update" => r#"{"action":"update","path":"src/example.ts","old_string":"before","new_string":"after","replace_all":false}"#,
+        "delete" => r#"{"action":"delete","path":"src/old.ts"}"#,
+        "move" => r#"{"action":"move","path":"src/old.ts","to":"src/new.ts"}"#,
+        _ => r#"{"action":"update","path":"src/example.ts","old_string":"before","new_string":"after"}"#,
+    }
+}
+
+fn apply_patch_format_error(message: impl AsRef<str>) -> String {
+    format!(
+        "{}\n\napply_patch 只支持 JSON 格式，不支持标准 git diff / unified diff。\n顶层格式示例：\n{}",
+        message.as_ref(),
+        apply_patch_json_example()
+    )
+}
+
+fn apply_patch_preview_text(input: &str, max_chars: usize) -> String {
+    input.chars().take(max_chars).collect()
+}
+
+fn apply_patch_parse_json_value(value: &serde_json::Value) -> Result<Vec<ApplyPatchOp>, String> {
+    let operations = value
+        .get("operations")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| apply_patch_format_error(r#"apply_patch JSON 顶层缺少 "operations" 数组。顶层必须是 {"operations": [...]}。"#))?;
+    if operations.is_empty() {
+        return Err(apply_patch_format_error(
+            "apply_patch 操作列表为空。至少需要一项操作。",
+        ));
+    }
+    let mut ops = Vec::<ApplyPatchOp>::new();
+    for (i, op_value) in operations.iter().enumerate() {
+        let op = op_value.as_object().ok_or_else(|| {
+            apply_patch_format_error(format!(
+                r#"apply_patch 操作[{}] 不是 JSON 对象。每个操作必须是 {{"action": ..., ...}}。"#,
+                i
+            ))
+        })?;
+        let action = op.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
+            apply_patch_format_error(format!(
+                r#"apply_patch 操作[{}] 缺少 "action" 字段。必须是 "add"、"update"、"delete" 或 "move"。\n最小示例：{}"#,
+                i,
+                apply_patch_operation_example("update")
+            ))
+        })?;
+        let path = op.get("path").and_then(|v| v.as_str())
+            .ok_or_else(|| apply_patch_format_error(format!(
+                r#"apply_patch 操作[{}] 缺少 "path" 字段。\n对应 action 的最小示例：{}"#,
+                i,
+                apply_patch_operation_example(action)
+            )))?
+            .to_string();
+        match action {
+            "add" => {
+                let content_str = op.get("content").and_then(|v| v.as_str()).ok_or_else(|| {
+                    apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (add) 缺少 "content" 字段。add 操作必须提供文件内容。\n最小 add 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("add")
+                    ))
+                })?.to_string();
+                ops.push(ApplyPatchOp::Add { path, content: content_str });
+            }
+            "delete" => { ops.push(ApplyPatchOp::Delete { path }); }
+            "update" => {
+                let old_string = op.get("old_string").and_then(|v| v.as_str()).ok_or_else(|| {
+                    apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (update) 缺少 "old_string" 字段。\n最小 update 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("update")
+                    ))
+                })?.to_string();
+                let new_string = op.get("new_string").and_then(|v| v.as_str()).ok_or_else(|| {
+                    apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (update) 缺少 "new_string" 字段。\n最小 update 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("update")
+                    ))
+                })?.to_string();
+                if old_string == new_string {
+                    return Err(apply_patch_format_error(format!(
+                        "apply_patch 操作[{}] (update) old_string 和 new_string 完全相同。update 必须真的修改内容。\n最小 update 示例：{}",
+                        i,
+                        apply_patch_operation_example("update")
+                    )));
+                }
+                let replace_all = op.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+                ops.push(ApplyPatchOp::Update { path, old_string, new_string, replace_all });
+            }
+            "move" => {
+                let to = op.get("to").and_then(|v| v.as_str()).ok_or_else(|| {
+                    apply_patch_format_error(format!(
+                        r#"apply_patch 操作[{}] (move) 缺少 "to" 字段。\n最小 move 示例：{}"#,
+                        i,
+                        apply_patch_operation_example("move")
+                    ))
+                })?.to_string();
+                ops.push(ApplyPatchOp::Move { path, to });
+            }
+            other => return Err(apply_patch_format_error(format!(
+                r#"apply_patch 操作[{}] 的 action "{}" 无效。必须是 "add"、"update"、"delete" 或 "move"。\n可参考最小 update 示例：{}"#,
+                i,
+                other,
+                apply_patch_operation_example("update")
+            ))),
+        }
+    }
+    Ok(ops)
+}
+
+fn apply_patch_parse_json(input: &str) -> Result<Vec<ApplyPatchOp>, String> {
+    let value: serde_json::Value = serde_json::from_str(input).map_err(|err| {
+        apply_patch_format_error(format!(
+            "apply_patch 输入解析失败：不是有效的 JSON。\nJSON 解析错误: {err}"
+        ))
+    })?;
+    apply_patch_parse_json_value(&value)
+}
+
+
 fn apply_patch_has_windows_drive_prefix(path: &str) -> bool {
     terminal_has_windows_drive_prefix(path)
 }
@@ -635,29 +677,30 @@ fn apply_patch_resolve_ops(base: &Path, ops: Vec<ApplyPatchOp>) -> Result<Vec<Ap
     let mut out = Vec::<ApplyPatchResolvedOp>::new();
     for op in ops {
         match op {
-            ApplyPatchOp::Add { path, lines } => out.push(ApplyPatchResolvedOp::Add {
+            ApplyPatchOp::Add { path, content } => out.push(ApplyPatchResolvedOp::Add {
                 path: apply_patch_resolve_path(base, &path)?,
-                content: lines.join("\n"),
+                content,
             }),
             ApplyPatchOp::Delete { path } => out.push(ApplyPatchResolvedOp::Delete {
                 path: apply_patch_resolve_path(base, &path)?,
             }),
-            ApplyPatchOp::Update(update) => {
-                let from = apply_patch_resolve_path(base, &update.from)?;
-                let to = match update.to {
-                    Some(raw) => Some(apply_patch_resolve_path(base, &raw)?),
-                    None => None,
-                };
+            ApplyPatchOp::Update { path, old_string, new_string, replace_all } => {
+                let from = apply_patch_resolve_path(base, &path)?;
+                out.push(ApplyPatchResolvedOp::Update { from, to: None, old_string, new_string, replace_all });
+            }
+            ApplyPatchOp::Move { path, to } => {
+                let from = apply_patch_resolve_path(base, &path)?;
+                let dest = apply_patch_resolve_path(base, &to)?;
                 out.push(ApplyPatchResolvedOp::Update {
-                    from,
-                    to,
-                    hunks: update.hunks,
+                    from, to: Some(dest),
+                    old_string: String::new(), new_string: String::new(), replace_all: false,
                 });
             }
         }
     }
     Ok(out)
 }
+
 
 fn apply_patch_collect_existing_paths(ops: &[ApplyPatchResolvedOp]) -> Vec<PathBuf> {
     let mut out = Vec::<PathBuf>::new();
@@ -733,112 +776,6 @@ fn apply_patch_operation_summary(ops: &[ApplyPatchResolvedOp]) -> String {
     }
 }
 
-fn apply_patch_hunk_sequences(hunk: &ApplyPatchHunk) -> (Vec<String>, Vec<String>, usize, usize) {
-    let mut old_seq = Vec::<String>::new();
-    let mut new_seq = Vec::<String>::new();
-    let mut old_count = 0usize;
-    let mut new_count = 0usize;
-    for line in &hunk.lines {
-        match line {
-            ApplyPatchLine::Context(v) => {
-                old_seq.push(v.clone());
-                new_seq.push(v.clone());
-                old_count += 1;
-                new_count += 1;
-            }
-            ApplyPatchLine::Remove(v) => {
-                old_seq.push(v.clone());
-                old_count += 1;
-            }
-            ApplyPatchLine::Add(v) => {
-                new_seq.push(v.clone());
-                new_count += 1;
-            }
-        }
-    }
-    (old_seq, new_seq, old_count, new_count)
-}
-
-fn apply_patch_build_preview(ops: &[ApplyPatchResolvedOp]) -> Result<String, String> {
-    let mut out = Vec::<String>::new();
-    out.push("*** Begin Patch".to_string());
-    for op in ops {
-        match op {
-            ApplyPatchResolvedOp::Add { path, content } => {
-                let (lines, _trailing_newline) = apply_patch_split_file_lines(content);
-                out.push(format!("*** Add File: {}", terminal_path_for_user(path)));
-                out.push(format!("@@ -0,0 +1,{} @@", lines.len()));
-                for line in lines {
-                    out.push(format!("+{line}"));
-                }
-            }
-            ApplyPatchResolvedOp::Delete { path } => {
-                let content = apply_patch_read_utf8_file(path).map_err(|err| {
-                    format!("Delete File 预检失败：{err}")
-                })?;
-                let (lines, _trailing_newline) = apply_patch_split_file_lines(&content);
-                out.push(format!("*** Delete File: {}", terminal_path_for_user(path)));
-                out.push(format!("@@ -1,{} +0,0 @@", lines.len()));
-                for line in lines {
-                    out.push(format!("-{line}"));
-                }
-            }
-            ApplyPatchResolvedOp::Update { from, to, hunks } => {
-                let content = apply_patch_read_utf8_file(from).map_err(|err| {
-                    format!("Update File 预检失败：{err}")
-                })?;
-                let (mut current_lines, _trailing_newline) = apply_patch_split_file_lines(&content);
-                let mut cumulative_delta = 0isize;
-                out.push(format!("*** Update File: {}", terminal_path_for_user(from)));
-                if let Some(dest) = to {
-                    out.push(format!("*** Move to: {}", terminal_path_for_user(dest)));
-                }
-                for hunk in hunks {
-                    let (old_seq, new_seq, old_count, new_count) = apply_patch_hunk_sequences(hunk);
-                    let start_current = apply_patch_find_unique_subsequence(&current_lines, &old_seq)
-                        .map_err(|match_count| {
-                            if match_count == 0 {
-                                format!(
-                                    "Update File 预检失败，hunk 上下文不匹配：{}\n未匹配片段：\n{}\n请重新读取目标文件相关内容后，基于当前内容重新生成补丁。",
-                                    terminal_path_for_user(from),
-                                    apply_patch_context_preview(&old_seq)
-                                )
-                            } else {
-                                format!(
-                                    "Update File 预检失败，hunk 上下文不唯一：{}\n命中 {} 处，无法判断应修改哪一处。请扩大 hunk 上下文，至少包含目标代码前后有区分度的内容。\n重复片段：\n{}",
-                                    terminal_path_for_user(from),
-                                    match_count,
-                                    apply_patch_context_preview(&old_seq)
-                                )
-                            }
-                        })?;
-                    let new_start = start_current + 1;
-                    let old_start = ((start_current as isize) - cumulative_delta + 1).max(0) as usize;
-                    out.push(format!(
-                        "@@ -{},{} +{},{} @@",
-                        old_start, old_count, new_start, new_count
-                    ));
-                    for line in &hunk.lines {
-                        match line {
-                            ApplyPatchLine::Context(v) => out.push(format!(" {v}")),
-                            ApplyPatchLine::Remove(v) => out.push(format!("-{v}")),
-                            ApplyPatchLine::Add(v) => out.push(format!("+{v}")),
-                        }
-                    }
-                    let end = start_current + old_seq.len();
-                    current_lines.splice(start_current..end, new_seq);
-                    cumulative_delta += new_count as isize - old_count as isize;
-                    if hunk.end_of_file {
-                        out.push("*** End of File".to_string());
-                    }
-                }
-            }
-        }
-    }
-    out.push("*** End Patch".to_string());
-    Ok(out.join("\n"))
-}
-
 fn apply_patch_assess_safety(
     state: &AppState,
     _session_id: &str,
@@ -862,6 +799,12 @@ fn apply_patch_assess_safety(
                 }
             }
         }
+    }
+    let target_paths = terminal_dedup_paths(target_paths);
+    if target_paths.is_empty() {
+        return ApplyPatchSafetyCheck::Reject {
+            reason: "empty patch".to_string(),
+        };
     }
     let mut accesses = Vec::<String>::new();
     for path in terminal_dedup_paths(target_paths) {
@@ -894,91 +837,61 @@ fn apply_patch_assess_safety(
     ApplyPatchSafetyCheck::AutoApprove
 }
 
-fn apply_patch_split_file_lines(content: &str) -> (Vec<String>, bool) {
-    let trailing_newline = content.ends_with('\n');
-    let mut lines = content
-        .split('\n')
-        .map(|line| line.trim_end_matches('\r').to_string())
-        .collect::<Vec<_>>();
-    if trailing_newline && lines.last().map(|v| v.is_empty()).unwrap_or(false) {
-        let _ = lines.pop();
+fn apply_patch_apply_update(
+    content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<String, String> {
+    if old_string.is_empty() {
+        return Ok(new_string.to_string());
     }
-    (lines, trailing_newline)
-}
-
-fn apply_patch_find_unique_subsequence(source: &[String], needle: &[String]) -> Result<usize, usize> {
-    if needle.is_empty() {
-        return Ok(source.len());
+    let old_preview = apply_patch_preview_text(old_string, 300);
+    if !content.contains(old_string) {
+        return Err(format!(
+            "apply_patch update 失败：old_string 在文件中未找到。\n请先重新读取目标文件，直接复制文件中的原文作为 old_string。\n如果你原本想提交标准 git diff，请改成 JSON update 操作。\n最小 update 示例：{}\nold_string 预览（前 300 字符）：\n{}",
+            apply_patch_operation_example("update"),
+            old_preview
+        ));
     }
-    let matches = source
-        .windows(needle.len())
-        .enumerate()
-        .filter_map(|(index, window)| {
-            window.iter().zip(needle).all(|(a, b)| a == b).then_some(index)
-        })
-        .collect::<Vec<_>>();
-    if matches.len() == 1 {
-        Ok(matches[0])
+    if !replace_all {
+        let count = content.matches(old_string).count();
+        if count > 1 {
+            return Err(format!(
+                "apply_patch update 失败：old_string 在文件中出现了 {} 次，但 replace_all 为 false。\n请改用以下两种方式之一：\n1. 扩大 old_string，上下多带几行稳定上下文，使其只命中 1 处。\n2. 如果你确实要全部替换，再设置 replace_all: true。\n最小 update 示例：{}\nold_string 预览（前 300 字符）：\n{}",
+                count,
+                apply_patch_operation_example("update"),
+                old_preview
+            ));
+        }
+    }
+    let result = if replace_all {
+        content.replace(old_string, new_string)
     } else {
-        Err(matches.len())
+        content.replacen(old_string, new_string, 1)
+    };
+    if result == content {
+        return Err("apply_patch update 失败：替换后文件内容未变化。".to_string());
     }
+    Ok(result)
 }
 
-fn apply_patch_context_preview(seq: &[String]) -> String {
-    let mut lines = seq.iter().take(6).cloned().collect::<Vec<_>>();
-    if seq.len() > lines.len() {
-        lines.push("...".to_string());
-    }
-    lines.join("\n")
-}
-
-fn apply_patch_render_lines(lines: &[String], trailing_newline: bool) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
-    let mut out = lines.join("\n");
-    if trailing_newline {
-        out.push('\n');
-    }
-    out
-}
-
-fn apply_patch_apply_hunks(content: &str, hunks: &[ApplyPatchHunk]) -> Result<String, String> {
-    let (mut lines, mut trailing_newline) = apply_patch_split_file_lines(content);
-    for hunk in hunks {
-        let mut old_seq = Vec::<String>::new();
-        let mut new_seq = Vec::<String>::new();
-        for line in &hunk.lines {
-            match line {
-                ApplyPatchLine::Context(v) => {
-                    old_seq.push(v.clone());
-                    new_seq.push(v.clone());
+fn apply_patch_build_preview(ops: &[ApplyPatchResolvedOp]) -> Result<String, String> {
+    let mut lines = Vec::<String>::new();
+    for op in ops {
+        match op {
+            ApplyPatchResolvedOp::Add { path, .. } => lines.push(format!("  add    {}", terminal_path_for_user(path))),
+            ApplyPatchResolvedOp::Delete { path } => lines.push(format!("  delete {}", terminal_path_for_user(path))),
+            ApplyPatchResolvedOp::Update { from, to, .. } => {
+                if let Some(dest) = to {
+                    lines.push(format!("  move   {} -> {}", terminal_path_for_user(from), terminal_path_for_user(dest)));
+                } else {
+                    lines.push(format!("  update {}", terminal_path_for_user(from)));
                 }
-                ApplyPatchLine::Remove(v) => old_seq.push(v.clone()),
-                ApplyPatchLine::Add(v) => new_seq.push(v.clone()),
             }
-        }
-        let start = apply_patch_find_unique_subsequence(&lines, &old_seq).map_err(|match_count| {
-            if match_count == 0 {
-                format!(
-                    "hunk 上下文不匹配，无法应用补丁。\n未匹配片段：\n{}\n请重新读取目标文件相关内容后，基于当前内容重新生成补丁。",
-                    apply_patch_context_preview(&old_seq)
-                )
-            } else {
-                format!(
-                    "hunk 上下文不唯一，无法应用补丁。命中 {} 处，请扩大 hunk 上下文后重试。\n重复片段：\n{}",
-                    match_count,
-                    apply_patch_context_preview(&old_seq)
-                )
-            }
-        })?;
-        let end = start + old_seq.len();
-        lines.splice(start..end, new_seq);
-        if hunk.end_of_file {
-            trailing_newline = false;
         }
     }
-    Ok(apply_patch_render_lines(&lines, trailing_newline))
+    Ok(lines.join("\n"))
 }
 
 async fn apply_patch_execute_ops(ops: &[ApplyPatchResolvedOp]) -> Result<Vec<Value>, String> {
@@ -1017,42 +930,33 @@ async fn apply_patch_execute_ops(ops: &[ApplyPatchResolvedOp]) -> Result<Vec<Val
                     "path": terminal_path_for_user(path),
                 }));
             }
-            ApplyPatchResolvedOp::Update { from, to, hunks } => {
+            ApplyPatchResolvedOp::Update { from, to, old_string, new_string, replace_all } => {
+                if old_string.is_empty() && new_string.is_empty() {
+                    if let Some(dest) = to {
+                        let raw_move = tokio::fs::read(from).await
+                            .map_err(|_| format!("Move 操作失败，文件不存在：{}", from.to_string_lossy()))?;
+                        let _ = String::from_utf8(raw_move)
+                            .map_err(|_| format!("Move 操作失败，文件不是 UTF-8 文本：{}", from.to_string_lossy()))?;
+                        if let Some(p) = dest.parent() { tokio::fs::create_dir_all(p).await.map_err(|e| format!("{}", e))?; }
+                        if dest.exists() && terminal_normalize_for_access_check(dest) != terminal_normalize_for_access_check(from) {
+                            return Err(format!("重命名目标已存在：{}", dest.to_string_lossy()));
+                        }
+                        tokio::fs::rename(from, dest).await
+                            .map_err(|e| format!("重命名失败（{} -> {}）：{e}", from.to_string_lossy(), dest.to_string_lossy()))?;
+                        changed.push(serde_json::json!({ "op": "move", "from": terminal_path_for_user(from), "to": terminal_path_for_user(dest) }));
+                    }
+                    continue;
+                }
                 let raw = tokio::fs::read(from)
                     .await
-                    .map_err(|_| format!("Update File 失败，文件不存在：{}", from.to_string_lossy()))?;
+                    .map_err(|_| format!("Update 操作失败，文件不存在：{}", from.to_string_lossy()))?;
                 let old_content = String::from_utf8(raw)
-                    .map_err(|_| format!("Update File 失败，文件不是 UTF-8 文本：{}", from.to_string_lossy()))?;
-                let new_content = apply_patch_apply_hunks(&old_content, hunks)?;
+                    .map_err(|_| format!("Update 操作失败，文件不是 UTF-8 文本：{}", from.to_string_lossy()))?;
+                let new_content = apply_patch_apply_update(&old_content, old_string, new_string, *replace_all)?;
                 tokio::fs::write(from, new_content.as_bytes())
                     .await
                     .map_err(|err| format!("更新文件失败（{}）：{err}", from.to_string_lossy()))?;
-                if let Some(dest) = to {
-                    if let Some(parent) = dest.parent() {
-                        tokio::fs::create_dir_all(parent)
-                            .await
-                            .map_err(|err| format!("创建重命名目录失败（{}）：{err}", parent.to_string_lossy()))?;
-                    }
-                    if dest.exists()
-                        && terminal_normalize_for_access_check(dest)
-                            != terminal_normalize_for_access_check(from)
-                    {
-                        return Err(format!("重命名目标已存在：{}", dest.to_string_lossy()));
-                    }
-                    tokio::fs::rename(from, dest)
-                        .await
-                        .map_err(|err| format!("重命名失败（{} -> {}）：{err}", from.to_string_lossy(), dest.to_string_lossy()))?;
-                    changed.push(serde_json::json!({
-                        "op": "update_move",
-                        "from": terminal_path_for_user(from),
-                        "to": terminal_path_for_user(dest),
-                    }));
-                } else {
-                    changed.push(serde_json::json!({
-                        "op": "update",
-                        "path": terminal_path_for_user(from),
-                    }));
-                }
+                changed.push(serde_json::json!({ "op": "update", "path": terminal_path_for_user(from) }));
             }
         }
     }
@@ -1062,11 +966,12 @@ async fn apply_patch_execute_ops(ops: &[ApplyPatchResolvedOp]) -> Result<Vec<Val
 async fn builtin_apply_patch(
     state: &AppState,
     session_id: &str,
-    input: &str,
+    args: ApplyPatchToolArgs,
 ) -> Result<Value, String> {
     let normalized_session = normalize_terminal_tool_session_id(session_id);
     let cwd = resolve_terminal_cwd(state, &normalized_session, None)?;
-    let parsed = apply_patch_parse(input)?;
+    let raw_input = apply_patch_tool_args_to_raw_json(&args)?;
+    let parsed = apply_patch_ops_from_tool_args(args)?;
     let resolved = apply_patch_resolve_ops(&cwd, parsed)?;
     let preview = apply_patch_build_preview(&resolved)?;
     let target_paths = apply_patch_collect_target_paths(&resolved);
@@ -1367,7 +1272,7 @@ async fn builtin_apply_patch(
         &state.data_path,
         &normalized_session,
         &cwd,
-        input,
+        &raw_input,
         &resolved,
     )?;
     let started = std::time::Instant::now();
@@ -1425,113 +1330,217 @@ mod apply_patch_tool_tests {
     }
 
     #[test]
-    fn parse_should_support_add_delete_update_and_move() {
+    fn parse_json_should_support_add_delete_update_and_move() {
         let root = std::env::temp_dir().join(format!("eca-apply-patch-parse-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create temp root");
-        let add_path = root.join("a.txt");
-        let delete_path = root.join("b.txt");
-        let update_path = root.join("c.txt");
-        let move_path = root.join("d.txt");
-        let patch = format!(
-            "*** Begin Patch\n*** Add File: {}\n+hello\n*** Delete File: {}\n*** Update File: {}\n*** Move to: {}\n@@\n-old\n+new\n*** End Patch",
-            add_path.to_string_lossy(),
-            delete_path.to_string_lossy(),
-            update_path.to_string_lossy(),
-            move_path.to_string_lossy()
-        );
-        let ops = apply_patch_parse(&patch).expect("parse");
-        assert_eq!(ops.len(), 3);
-        match &ops[2] {
-            ApplyPatchOp::Update(update) => {
-                assert_eq!(update.from, update_path.to_string_lossy().to_string());
-                assert_eq!(update.to.as_deref(), Some(move_path.to_string_lossy().as_ref()));
-                assert_eq!(update.hunks.len(), 1);
+        let input = serde_json::json!({
+            "operations": [
+                {"action": "add", "path": root.join("a.txt").to_string_lossy(), "content": "hello"},
+                {"action": "delete", "path": root.join("b.txt").to_string_lossy()},
+                {"action": "update", "path": root.join("c.txt").to_string_lossy(), "old_string": "old", "new_string": "new"},
+                {"action": "move", "path": root.join("d.txt").to_string_lossy(), "to": root.join("e.txt").to_string_lossy()}
+            ]
+        })
+        .to_string();
+        let ops = apply_patch_parse_json(&input).expect("parse");
+        assert_eq!(ops.len(), 4);
+        let resolved = apply_patch_resolve_ops(&root, ops).expect("resolve");
+        match &resolved[3] {
+            ApplyPatchResolvedOp::Update { to, old_string, new_string, .. } => {
+                assert!(to.is_some());
+                assert!(old_string.is_empty());
+                assert!(new_string.is_empty());
             }
-            _ => panic!("expected update op"),
+            _ => panic!("expected move as update op"),
         }
     }
 
     #[test]
-    fn parse_should_explain_invalid_top_level_patch_header() {
-        let err = apply_patch_parse(
-            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@\n-old\n+new",
-        )
-        .expect_err("invalid top-level header should be rejected");
-
-        assert!(err.contains("补丁头非法"));
-        assert!(err.contains("*** Begin Patch"));
-        assert!(err.contains("文件操作只允许"));
+    fn parse_json_should_explain_invalid_json() {
+        let err = apply_patch_parse_json("not json").expect_err("invalid json should fail");
+        assert!(err.contains("不是有效的 JSON"));
     }
 
     #[test]
-    fn parse_should_explain_invalid_hunk_header_inside_update() {
-        let err = apply_patch_parse(
-            "*** Begin Patch\n*** Update File: a.txt\n--- a/a.txt\n+++ b/a.txt\n@@\n-old\n+new\n*** End Patch",
+    fn tool_args_should_accept_snake_case_update_fields() {
+        let args: ApplyPatchToolArgs = serde_json::from_str(
+            r#"{"operations":[{"action":"update","path":"a.txt","old_string":"before","new_string":"after","replace_all":true}]}"#,
         )
-        .expect_err("invalid hunk header should be rejected inside update");
-
-        assert!(err.contains("hunk 头非法"));
-        assert!(err.contains("必须先写一行 `@@`"));
+        .expect("parse snake case args");
+        let ops = apply_patch_ops_from_tool_args(args).expect("convert snake case args");
+        let ApplyPatchOp::Update { old_string, new_string, replace_all, .. } = &ops[0] else {
+            panic!("expected update op");
+        };
+        assert_eq!(old_string, "before");
+        assert_eq!(new_string, "after");
+        assert!(*replace_all);
     }
 
     #[test]
-    fn parse_should_explain_invalid_hunk_line_prefix() {
-        let err = apply_patch_parse(
-            "*** Begin Patch\n*** Update File: a.txt\n@@\nold\n+new\n*** End Patch",
+    fn tool_args_should_accept_camel_case_update_fields() {
+        let args: ApplyPatchToolArgs = serde_json::from_str(
+            r#"{"operations":[{"action":"update","path":"a.txt","oldString":"before","newString":"after","replaceAll":true}]}"#,
         )
-        .expect_err("unprefixed hunk line should be rejected");
-
-        assert!(err.contains("hunk 行前缀必须是空格/+/-"));
-        assert!(err.contains("如果这是上下文行"));
+        .expect("parse camel case args");
+        let ops = apply_patch_ops_from_tool_args(args).expect("convert camel case args");
+        let ApplyPatchOp::Update { old_string, new_string, replace_all, .. } = &ops[0] else {
+            panic!("expected update op");
+        };
+        assert_eq!(old_string, "before");
+        assert_eq!(new_string, "after");
+        assert!(*replace_all);
     }
 
     #[test]
-    fn apply_hunks_should_replace_lines() {
-        let content = "a\nb\nc\n";
-        let hunks = vec![ApplyPatchHunk {
-            lines: vec![
-                ApplyPatchLine::Context("a".to_string()),
-                ApplyPatchLine::Remove("b".to_string()),
-                ApplyPatchLine::Add("B".to_string()),
-                ApplyPatchLine::Context("c".to_string()),
-            ],
-            end_of_file: false,
-        }];
-        let updated = apply_patch_apply_hunks(content, &hunks).expect("apply");
+    fn parse_json_should_reject_git_diff_text_with_json_hint() {
+        let err = apply_patch_parse_json(
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@\n-old\n+new\n",
+        )
+        .expect_err("git diff text should fail");
+        assert!(err.contains("不是有效的 JSON"));
+        assert!(err.contains("只支持 JSON 格式"));
+        assert!(err.contains("不支持标准 git diff"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_non_object_operation() {
+        let err = apply_patch_parse_json("{\"operations\": [1]}")
+            .expect_err("non-object operation should fail");
+        assert!(err.contains("操作[0] 不是 JSON 对象"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_missing_action() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"path\": \"a.txt\"}]}")
+            .expect_err("missing action should fail");
+        assert!(err.contains("缺少 \"action\" 字段"));
+        assert!(err.contains("最小示例"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_missing_path() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"action\": \"delete\"}]}")
+            .expect_err("missing path should fail");
+        assert!(err.contains("缺少 \"path\" 字段"));
+        assert!(err.contains("对应 action 的最小示例"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_missing_operations() {
+        let err = apply_patch_parse_json("{}").expect_err("missing operations should fail");
+        assert!(err.contains("operations"));
+        assert!(err.contains("顶层格式示例"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_empty_operations() {
+        let err = apply_patch_parse_json("{\"operations\": []}").expect_err("empty operations should fail");
+        assert!(err.contains("操作列表为空"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_invalid_action() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"action\": \"rename\", \"path\": \"a.txt\"}]}")
+            .expect_err("invalid action should fail");
+        assert!(err.contains("无效"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_add_without_content() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"action\": \"add\", \"path\": \"a.txt\"}]}")
+            .expect_err("missing content should fail");
+        assert!(err.contains("content"));
+        assert!(err.contains("最小 add 示例"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_update_without_old_string() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"action\": \"update\", \"path\": \"a.txt\", \"new_string\": \"x\"}]}")
+            .expect_err("missing old_string should fail");
+        assert!(err.contains("old_string"));
+        assert!(err.contains("最小 update 示例"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_update_without_new_string() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"action\": \"update\", \"path\": \"a.txt\", \"old_string\": \"x\"}]}")
+            .expect_err("missing new_string should fail");
+        assert!(err.contains("new_string"));
+        assert!(err.contains("最小 update 示例"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_move_without_to() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"action\": \"move\", \"path\": \"a.txt\"}]}")
+            .expect_err("missing to should fail");
+        assert!(err.contains("to"));
+        assert!(err.contains("最小 move 示例"));
+    }
+
+    #[test]
+    fn parse_json_should_reject_same_old_and_new() {
+        let err = apply_patch_parse_json("{\"operations\": [{\"action\": \"update\", \"path\": \"a.txt\", \"old_string\": \"x\", \"new_string\": \"x\"}]}")
+            .expect_err("same old/new should fail");
+        assert!(err.contains("完全相同"));
+        assert!(err.contains("最小 update 示例"));
+    }
+
+    #[test]
+    fn apply_update_should_replace_single_occurrence() {
+        let updated = apply_patch_apply_update("a\nb\nc\n", "b", "B", false).expect("apply");
         assert_eq!(updated, "a\nB\nc\n");
     }
 
     #[test]
-    fn apply_hunks_should_explain_context_not_found() {
-        let content = "a\nb\nc\n";
-        let hunks = vec![ApplyPatchHunk {
-            lines: vec![
-                ApplyPatchLine::Context("a".to_string()),
-                ApplyPatchLine::Remove("missing".to_string()),
-            ],
-            end_of_file: false,
-        }];
-
-        let err = apply_patch_apply_hunks(content, &hunks).expect_err("missing context should fail");
-
-        assert!(err.contains("hunk 上下文不匹配"));
-        assert!(err.contains("未匹配片段"));
-        assert!(err.contains("missing"));
+    fn apply_update_should_return_new_string_when_old_string_is_empty() {
+        let updated = apply_patch_apply_update("ignored", "", "new content\n", false)
+            .expect("empty old_string should succeed");
+        assert_eq!(updated, "new content\n");
     }
 
     #[test]
-    fn apply_hunks_should_reject_non_unique_context() {
-        let content = "target\nkeep\ntarget\nkeep\n";
-        let hunks = vec![ApplyPatchHunk {
-            lines: vec![ApplyPatchLine::Remove("target".to_string())],
-            end_of_file: false,
-        }];
+    fn apply_update_should_explain_not_found() {
+        let err = apply_patch_apply_update("a\nb\nc\n", "missing", "x", false).expect_err("not found should fail");
+        assert!(err.contains("old_string 在文件中未找到"));
+        assert!(err.contains("missing"));
+        assert!(err.contains("先重新读取目标文件"));
+        assert!(err.contains("最小 update 示例"));
+    }
 
-        let err = apply_patch_apply_hunks(content, &hunks).expect_err("ambiguous context should fail");
+    #[test]
+    fn apply_update_should_still_fail_when_replace_all_true_but_old_string_missing() {
+        let err = apply_patch_apply_update("a\nb\nc\n", "missing", "x", true)
+            .expect_err("missing old_string should still fail");
+        assert!(err.contains("old_string 在文件中未找到"));
+    }
 
-        assert!(err.contains("hunk 上下文不唯一"));
-        assert!(err.contains("命中 2 处"));
-        assert!(err.contains("扩大 hunk 上下文"));
+    #[test]
+    fn apply_update_should_truncate_long_old_string_preview_in_error() {
+        let old_string = "x".repeat(400);
+        let err = apply_patch_apply_update("short", &old_string, "new", false)
+            .expect_err("long old_string preview should fail");
+        let preview = err
+            .split("old_string 预览（前 300 字符）：\n")
+            .nth(1)
+            .expect("preview should exist");
+        assert_eq!(preview.chars().count(), 300);
+    }
+
+    #[test]
+    fn apply_update_should_reject_non_unique_without_replace_all() {
+        let err = apply_patch_apply_update("target\nkeep\ntarget\nkeep\n", "target", "changed", false)
+            .expect_err("ambiguous match should fail");
+        assert!(err.contains("replace_all"));
+        assert!(err.contains("2 次"));
+        assert!(err.contains("扩大 old_string"));
+        assert!(err.contains("全部替换"));
+    }
+
+    #[test]
+    fn apply_update_should_replace_all() {
+        let updated = apply_patch_apply_update("target\nkeep\ntarget\nkeep\n", "target", "changed", true)
+            .expect("replace_all apply");
+        assert_eq!(updated, "changed\nkeep\nchanged\nkeep\n");
     }
 
     #[test]
@@ -1555,6 +1564,39 @@ mod apply_patch_tool_tests {
     }
 
     #[test]
+    fn resolve_ops_should_treat_move_as_rename_update_with_empty_strings() {
+        let cwd = std::env::temp_dir().join(format!("eca-apply-patch-move-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        let ops = vec![ApplyPatchOp::Move {
+            path: "from.txt".to_string(),
+            to: "nested/to.txt".to_string(),
+        }];
+        let resolved = apply_patch_resolve_ops(&cwd, ops).expect("resolve move");
+        match &resolved[0] {
+            ApplyPatchResolvedOp::Update {
+                from,
+                to,
+                old_string,
+                new_string,
+                replace_all,
+            } => {
+                assert_eq!(
+                    from,
+                    &terminal_normalize_for_access_check(&cwd.join("from.txt"))
+                );
+                assert_eq!(
+                    to.as_ref().expect("move should have target"),
+                    &terminal_normalize_for_access_check(&cwd.join("nested/to.txt"))
+                );
+                assert!(old_string.is_empty());
+                assert!(new_string.is_empty());
+                assert!(!replace_all);
+            }
+            _ => panic!("expected move to resolve as update op"),
+        }
+    }
+
+    #[test]
     fn backup_record_should_capture_delete_update_and_move() {
         let data_path = make_temp_data_path("apply-patch-backup");
         let cwd = app_root_from_data_path(&data_path).join("workspace");
@@ -1567,15 +1609,16 @@ mod apply_patch_tool_tests {
         let update_path = absolute_user_path(&cwd.join("update.txt"));
         let move_from_path = absolute_user_path(&cwd.join("move.txt"));
         let move_to_path = cwd.join("moved.txt").to_string_lossy().to_string();
-        let patch = format!(
-            "*** Begin Patch\n*** Delete File: {}\n*** Update File: {}\n@@\n-old\n+new\n*** Update File: {}\n*** Move to: {}\n@@\n before\n-old\n+new\n*** End Patch",
-            delete_path,
-            update_path,
-            move_from_path,
-            move_to_path
-        );
-        let ops = apply_patch_resolve_ops(&cwd, apply_patch_parse(&patch).expect("parse")).expect("resolve");
-        let record = apply_patch_prepare_backup_record(&data_path, "s1", &cwd, &patch, &ops)
+        let input = serde_json::json!({
+            "operations": [
+                {"action": "delete", "path": delete_path},
+                {"action": "update", "path": update_path, "old_string": "old", "new_string": "new"},
+                {"action": "move", "path": move_from_path, "to": move_to_path}
+            ]
+        })
+        .to_string();
+        let ops = apply_patch_resolve_ops(&cwd, apply_patch_parse_json(&input).expect("parse")).expect("resolve");
+        let record = apply_patch_prepare_backup_record(&data_path, "s1", &cwd, &input, &ops)
             .expect("prepare");
         assert_eq!(record.entries.len(), 3);
         assert!(record.entries.iter().any(|entry| entry.kind == ApplyPatchBackupKind::Delete));

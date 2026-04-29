@@ -449,23 +449,41 @@ impl RuntimeToolMetadata for BuiltinApplyPatchTool {
         ProviderToolDefinition::new(
             "apply_patch",
             [
-                "编辑文件的结构化补丁工具。",
-                "输入必须是 apply_patch 自定义补丁 envelope：以 *** Begin Patch 开始，以 *** End Patch 结束。",
-                "文件操作头只支持：*** Add File:、*** Delete File:、*** Update File:。",
-                "*** Move to: 只允许紧跟在 *** Update File: 后，用于移动或重命名该文件。",
-                "Add File 的正文每一行必须以 + 开头。",
-                "Update File 的每个 hunk 都必须先写一行 @@ 头；@@ 行号只作分隔/展示，不参与定位。",
-                "在 @@ 头之后，hunk 内容行必须以空格、- 或 + 开头：空格表示上下文，- 表示删除，+ 表示新增。",
+                "编辑文件的 JSON 结构化修改工具。",
+                "参数顶层固定为 {\"operations\": [...]}。",
+                "只支持四种 action：add、delete、update、move。",
+                "add 需要 path 和 content。",
+                "delete 需要 path。",
+                "update 需要 path、old_string、new_string；可选 replace_all。它通过 old_string 在原文件中做精确子串替换，不使用 diff hunk。",
+                "move 需要 path 和 to；语义是重命名或移动文件。",
                 "路径可以是绝对路径，也可以是相对当前工作目录的路径；最终仍受工作区权限校验。",
-                "不接受完整标准 git diff；不要包含 diff --git、index、---、+++ 等 git diff 文件头。Update File 内部 hunk 采用 unified diff 风格的 空格/-/+ 前缀。",
+                "如果 old_string 命中 0 处会失败；命中多处且 replace_all=false 也会失败。此时应扩大 old_string 上下文，或明确设置 replace_all=true。",
+                "最小示例：{\"operations\":[{\"action\":\"update\",\"path\":\"src/example.ts\",\"old_string\":\"before\",\"new_string\":\"after\"}]}",
             ]
             .join("\n"),
             serde_json::json!({
               "type": "object",
               "properties": {
-                "input": { "type": "string", "description": "完整补丁文本；必须以 *** Begin Patch 开始并以 *** End Patch 结束" },
+                "operations": {
+                  "type": "array",
+                  "description": "结构化修改操作列表",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "action": { "type": "string", "enum": ["add", "delete", "update", "move"] },
+                      "path": { "type": "string" },
+                      "content": { "type": "string" },
+                      "oldString": { "type": "string" },
+                      "newString": { "type": "string" },
+                      "replaceAll": { "type": "boolean" },
+                      "to": { "type": "string" }
+                    },
+                    "required": ["action", "path"],
+                    "additionalProperties": false
+                  }
+                },
               },
-              "required": ["input"],
+              "required": ["operations"],
               "additionalProperties": false
             }),
         )
@@ -484,7 +502,7 @@ impl RuntimeJsonTool for BuiltinApplyPatchTool {
             "[TOOL-DEBUG] execute_builtin_tool.start name=apply_patch args={}",
             debug_value_snippet(&args_json, 240)
         ));
-        let result = builtin_apply_patch(&self.app_state, &self.session_id, &args.input)
+        let result = builtin_apply_patch(&self.app_state, &self.session_id, args)
             .await
             .map_err(ToolInvokeError::from);
         match &result {
